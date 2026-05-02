@@ -1,0 +1,71 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  BuildAndTest:
+    name: macOS / Swift ${{ matrix.swift-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        swift-version: ["6.3.1"]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: SwiftyLab/setup-swift@v1
+        with:
+          swift-version: ${{ matrix.swift-version }}
+      - name: Build
+        run: swift build -c release -Xswiftc -strict-concurrency=complete
+      - name: Build tests
+        # -v captures compiler invocations for SwiftLint analyze; redirected
+        # to file to keep the CI log readable.
+        run: swift build --build-tests -v > build.log 2>&1
+      - name: Run tests
+        run: swift test --skip-build
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: SwiftLint unused imports
+        run: swiftlint analyze --strict --quiet --compiler-log-path build.log
+
+  StaticLinuxSDK:
+    name: Static Linux SDK (cross-compile to aarch64-musl)
+    runs-on: ubuntu-24.04
+    container:
+      image: swift:6.3.1-noble
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Static Linux SDK
+        run: swift sdk install https://download.swift.org/swift-6.3.1-release/static-sdk/swift-6.3.1-RELEASE/swift-6.3.1-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz --checksum fac05271c1f7d060bd203240ce5251d5ca902d30ac899f553765dbb3a88b97ad
+      - name: Cross-compile for ARM64 Linux
+        run: swift build -c release --swift-sdk aarch64-swift-linux-musl
+
+  SwiftLint:
+    name: SwiftLint version 3.2.1
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: GitHub Action for SwiftLint
+        uses: norio-nomura/action-swiftlint@3.2.1
+
+  SwiftFormat:
+    name: swift-format / Swift ${{ matrix.swift-version }}
+    strategy:
+      matrix:
+        swift-version: ["6.3"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: SwiftyLab/setup-swift@v1
+        with:
+          swift-version: ${{ matrix.swift-version }}
+      - name: Run swift-format
+        run: swift-format format --recursive --in-place .
+      - name: Check for formatting differences
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git diff --exit-code
