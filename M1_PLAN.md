@@ -17,14 +17,13 @@ The plan is **iterative**, not waterfall. Each iteration builds on the previous 
 The smallest end-to-end pipeline. Highest-risk integration first: if anything in the macro/build-plugin/bootstrap chain is fundamentally broken, you find out before building anything else.
 
 **Scope:**
-- `Resolver` protocol (interface only — concrete resolver is generated)
 - `BindingKey<T>` runtime type
 - `@Singleton` macro (single scope only — others come in iteration 4)
 - `@Inject` macro (synthesises constructor)
 - Build plugin: scan a single target's source, aggregate `@Singleton` types, emit a generated bootstrap (`_WireGraph.swift`) into the plugin work directory
-- Generated bootstrap constructs all `@Singleton`s in dependency order
+- Generated bootstrap constructs all `@Singleton`s in dependency order; bootstrap is a concrete struct with one stored property per binding, accessed directly (no `Resolver` protocol — see "Deferred decisions" below)
 
-**Out of scope:** `@Provides`, `@Container`, validation diagnostics beyond "it compiles," other scopes, lifecycle, multi-module.
+**Out of scope:** `@Provides`, `@Container`, validation diagnostics beyond "it compiles," other scopes, lifecycle, multi-module, the `Resolver` protocol.
 
 **Validation gate:** test app with two `@Singleton` types where one `@Inject`s the other; build plugin produces a working bootstrap; running the app constructs both and resolves the inner one through the outer.
 
@@ -68,7 +67,7 @@ The other two scopes plus the scope-crossing wrapper.
 **Scope:**
 - `@RequestScope` macro
 - `@JobScope` macro
-- `Provider<T>` runtime type
+- `Provider<T>` runtime type — likely a `@Sendable () async throws -> T` closure-backed wrapper that the build plugin populates with the appropriate scope-resolution logic. Decide whether `Provider<T>` needs the `Resolver` protocol (deferred from iteration 1) once we see what the closure-based version costs in practice.
 - Build plugin's check that refuses storing a `@RequestScope` value as a property on a `@Singleton` (compile error with a fix-it suggesting `Provider<...>`)
 
 **Validation gate:** test app with a `@Singleton` injecting `Provider<RequestLogger>`-style; calling `provider()` returns a fresh value each invocation; storing a `@RequestScope` directly on a `@Singleton` produces the expected compile error.
@@ -165,6 +164,21 @@ Each iteration grows the test suite; don't ship an iteration without its fixture
 ### Macro surface stays small
 
 Risk #1 ("swift-syntax tax") gets mitigated by keeping macros lean — most logic lives in the build plugin, which is more stable across Swift versions. When tempted to put logic in a macro, ask: "could this be done by the build plugin reading the macro's output instead?" If yes, do that.
+
+## Deferred decisions
+
+Decisions where the README describes a target shape, but iteration 1 / Step A intentionally doesn't commit to the implementation until a concrete iteration needs it.
+
+### `Resolver` protocol
+
+The README describes a public `Resolver` protocol surfacing in three places: `Provider<T>` lazily resolving into a request scope, runtime `introspect()` for ops/admin endpoints, and explicit escape-hatch resolution. None of these have a concrete iteration-1 use case, and the adapter-contract redesign (direct-injection `_wireRegister` parameters) removed adapters as a fourth user.
+
+The protocol is therefore deferred. Iteration 1's bootstrap is a concrete struct with one stored property per binding, accessed directly. Decisions to make later:
+
+- **Iteration 4** decides whether `Provider<T>` needs a `Resolver` protocol or works with a `@Sendable () async throws -> T` closure.
+- **M2** decides whether `introspect()` lives on the bootstrap struct directly or on a public `Resolver` protocol.
+
+If neither iteration ends up needing the protocol, it never lands. If one does, the resulting design is shaped by that real use case rather than M1-time speculation. The README's references to `Resolver` describe the *eventual* design and don't need to change at this point — they describe a target that will either be reached or revised once the use case clarifies.
 
 ## Estimating
 

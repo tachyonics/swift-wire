@@ -7,7 +7,41 @@ on:
     branches: [ main ]
 
 jobs:
-  BuildAndTest:
+  BuildAndTestLinux:
+    name: Linux ${{ matrix.os }} / Swift ${{ matrix.swift-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        swift-version: ["6.3.1"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: SwiftyLab/setup-swift@v1
+        with:
+          swift-version: ${{ matrix.swift-version }}
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev curl unzip
+      - name: Build
+        run: swift build -c release -Xswiftc -strict-concurrency=complete
+      - name: Build tests
+        # -v captures compiler invocations for SwiftLint analyze; redirected
+        # to file to keep the CI log readable.
+        run: swift build --build-tests -v > build.log 2>&1
+      - name: Run tests
+        run: swift test --skip-build
+      - name: Install SwiftLint
+        # SwiftLint's prebuilt Linux binary requires a GLIBC only present on 24.04+
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          curl -sL https://github.com/realm/SwiftLint/releases/download/0.63.2/swiftlint_linux_amd64.zip -o swiftlint.zip
+          unzip -o swiftlint.zip -d /usr/local/bin
+          chmod +x /usr/local/bin/swiftlint
+      - name: SwiftLint unused imports
+        if: matrix.os == 'ubuntu-24.04'
+        run: swiftlint analyze --strict --quiet --compiler-log-path build.log
+
+  BuildAndTestMacOS:
     name: macOS / Swift ${{ matrix.swift-version }}
     strategy:
       fail-fast: false
@@ -21,16 +55,8 @@ jobs:
           swift-version: ${{ matrix.swift-version }}
       - name: Build
         run: swift build -c release -Xswiftc -strict-concurrency=complete
-      - name: Build tests
-        # -v captures compiler invocations for SwiftLint analyze; redirected
-        # to file to keep the CI log readable.
-        run: swift build --build-tests -v > build.log 2>&1
       - name: Run tests
-        run: swift test --skip-build
-      - name: Install SwiftLint
-        run: brew install swiftlint
-      - name: SwiftLint unused imports
-        run: swiftlint analyze --strict --quiet --compiler-log-path build.log
+        run: swift test
 
   StaticLinuxSDK:
     name: Static Linux SDK (cross-compile to aarch64-musl)
@@ -69,3 +95,46 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git diff --exit-code
+
+  Coverage:
+    name: Coverage / Swift ${{ matrix.swift-version }}
+    strategy:
+      matrix:
+        swift-version: ["6.3.1"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: SwiftyLab/setup-swift@v1
+        with:
+          swift-version: ${{ matrix.swift-version }}
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y curl libssl-dev
+      - name: Run tests with coverage
+        run: swift test --enable-code-coverage --xunit-output test-results.xml
+      - name: Convert to LCOV
+        run: |
+          BIN_PATH=$(swift build --show-bin-path)
+          PROFDATA=$(find .build -name 'default.profdata' -path '*/codecov/*' | head -1)
+          XCTEST=$(find "$BIN_PATH" -name '*.xctest' -type f | head -1)
+          llvm-cov export \
+            -format=lcov \
+            -instr-profile="$PROFDATA" \
+            "$XCTEST" \
+            -ignore-filename-regex=".build|Tests" \
+            > coverage.lcov
+      - name: Upload coverage
+        uses: codecov/codecov-action@v6
+        with:
+          files: coverage.lcov
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload test results
+        uses: codecov/codecov-action@v6
+        if: always()
+        with:
+          files: test-results.xml
+          report_type: test_results
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
