@@ -107,10 +107,12 @@ public struct SingletonMacro: MemberMacro {
             for binding in varDecl.bindings {
                 guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
                 guard let typeAnnotation = binding.typeAnnotation else { continue }
-                points.append(InjectionPoint(
-                    name: pattern.identifier.text,
-                    type: typeAnnotation.type.trimmedDescription
-                ))
+                points.append(
+                    InjectionPoint(
+                        name: pattern.identifier.text,
+                        type: typeAnnotation.type.trimmedDescription
+                    )
+                )
             }
         }
 
@@ -154,13 +156,16 @@ public struct SingletonMacro: MemberMacro {
                     continue
                 }
 
-                let propName = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+                let propName =
+                    binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
                     ?? binding.pattern.trimmedDescription
 
-                context.diagnose(Diagnostic(
-                    node: Syntax(binding),
-                    message: WireDiagnostic.uninitialisedStoredProperty(name: propName)
-                ))
+                context.diagnose(
+                    Diagnostic(
+                        node: Syntax(binding),
+                        message: WireDiagnostic.uninitialisedStoredProperty(name: propName)
+                    )
+                )
             }
         }
     }
@@ -174,10 +179,12 @@ public struct SingletonMacro: MemberMacro {
                 """
         }
 
-        let params = injectionPoints
+        let params =
+            injectionPoints
             .map { "\($0.name): \($0.type)" }
             .joined(separator: ", ")
-        let assignments = injectionPoints
+        let assignments =
+            injectionPoints
             .map { "    self.\($0.name) = \($0.name)" }
             .joined(separator: "\n")
 
@@ -194,25 +201,25 @@ public struct SingletonMacro: MemberMacro {
 /// Captures the bits of the annotated declaration the macro needs.
 private struct HostTypeInfo {
     let nameWithGenerics: String
-    let accessPrefix: String   // e.g. "public " or "" — trailing space included when present
+    let accessPrefix: String  // e.g. "public " or "" — trailing space included when present
 
     init?(declaration: some DeclGroupSyntax) {
         let baseName: String
         let genericClause: GenericParameterClauseSyntax?
         let modifiers: DeclModifierListSyntax
 
-        if let s = declaration.as(StructDeclSyntax.self) {
-            baseName = s.name.text
-            genericClause = s.genericParameterClause
-            modifiers = s.modifiers
-        } else if let c = declaration.as(ClassDeclSyntax.self) {
-            baseName = c.name.text
-            genericClause = c.genericParameterClause
-            modifiers = c.modifiers
-        } else if let a = declaration.as(ActorDeclSyntax.self) {
-            baseName = a.name.text
-            genericClause = a.genericParameterClause
-            modifiers = a.modifiers
+        if let structDecl = declaration.as(StructDeclSyntax.self) {
+            baseName = structDecl.name.text
+            genericClause = structDecl.genericParameterClause
+            modifiers = structDecl.modifiers
+        } else if let classDecl = declaration.as(ClassDeclSyntax.self) {
+            baseName = classDecl.name.text
+            genericClause = classDecl.genericParameterClause
+            modifiers = classDecl.modifiers
+        } else if let actorDecl = declaration.as(ActorDeclSyntax.self) {
+            baseName = actorDecl.name.text
+            genericClause = actorDecl.genericParameterClause
+            modifiers = actorDecl.modifiers
         } else {
             return nil
         }

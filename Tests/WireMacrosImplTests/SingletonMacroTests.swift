@@ -20,14 +20,14 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
+                struct A {
 
-                init() {
+                    init() {
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -43,16 +43,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var b: B
+                struct A {
+                    var b: B
 
-                init(b: B) {
-                    self.b = b
+                    init(b: B) {
+                        self.b = b
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -70,20 +70,20 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var first: First
-                var second: Second
-                var third: Third
+                struct A {
+                    var first: First
+                    var second: Second
+                    var third: Third
 
-                init(first: First, second: Second, third: Third) {
-                    self.first = first
-                    self.second = second
-                    self.third = third
+                    init(first: First, second: Second, third: Third) {
+                        self.first = first
+                        self.second = second
+                        self.third = third
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -101,18 +101,18 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var injected: Dep
-                let plain: String = "hi"
-                var computed: Int { 42 }
+                struct A {
+                    var injected: Dep
+                    let plain: String = "hi"
+                    var computed: Int { 42 }
 
-                init(injected: Dep) {
-                    self.injected = injected
+                    init(injected: Dep) {
+                        self.injected = injected
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -128,16 +128,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct Repository<Model> {
-                var store: Store<Model>
+                struct Repository<Model> {
+                    var store: Store<Model>
 
-                init(store: Store<Model>) {
-                    self.store = store
+                    init(store: Store<Model>) {
+                        self.store = store
+                    }
+
+                    static let key = BindingKey<Repository<Model>>()
                 }
-
-                static let key = BindingKey<Repository<Model>>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -153,16 +153,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            public struct A {
-                var b: B
+                public struct A {
+                    var b: B
 
-                public init(b: B) {
-                    self.b = b
+                    public init(b: B) {
+                        self.b = b
+                    }
+
+                    public static let key = BindingKey<A>()
                 }
-
-                public static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -175,14 +175,14 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            package struct A {
+                package struct A {
 
-                package init() {
+                    package init() {
+                    }
+
+                    package static let key = BindingKey<A>()
                 }
-
-                package static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -198,16 +198,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            final class A {
-                var b: B
+                final class A {
+                    var b: B
 
-                init(b: B) {
-                    self.b = b
+                    init(b: B) {
+                        self.b = b
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -221,16 +221,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            actor A {
-                var b: B
+                actor A {
+                    var b: B
 
-                init(b: B) {
-                    self.b = b
+                    init(b: B) {
+                        self.b = b
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -247,20 +247,21 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var injected: Dep
-                let uninitialised: String
+                struct A {
+                    var injected: Dep
+                    let uninitialised: String
 
-                init(injected: Dep) {
-                    self.injected = injected
+                    init(injected: Dep) {
+                        self.injected = injected
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             diagnostics: [
                 DiagnosticSpec(
-                    message: "Stored property 'uninitialised' must have a default value, be a computed property, or be marked @Inject.",
+                    message:
+                        "Stored property 'uninitialised' must have a default value, be a computed property, or be marked @Inject.",
                     line: 4,
                     column: 9,
                     severity: .error
@@ -280,25 +281,27 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                let first: String
-                let second: Int
+                struct A {
+                    let first: String
+                    let second: Int
 
-                init() {
+                    init() {
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             diagnostics: [
                 DiagnosticSpec(
-                    message: "Stored property 'first' must have a default value, be a computed property, or be marked @Inject.",
+                    message:
+                        "Stored property 'first' must have a default value, be a computed property, or be marked @Inject.",
                     line: 3,
                     column: 9,
                     severity: .error
                 ),
                 DiagnosticSpec(
-                    message: "Stored property 'second' must have a default value, be a computed property, or be marked @Inject.",
+                    message:
+                        "Stored property 'second' must have a default value, be a computed property, or be marked @Inject.",
                     line: 4,
                     column: 9,
                     severity: .error
@@ -322,17 +325,17 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                static let shared: String = "hello"
-                var dep: Dep
+                struct A {
+                    static let shared: String = "hello"
+                    var dep: Dep
 
-                init(dep: Dep) {
-                    self.dep = dep
+                    init(dep: Dep) {
+                        self.dep = dep
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -351,18 +354,18 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var dep: Dep
-                let defaulted: String = "hi"
-                var computed: Int { 42 }
+                struct A {
+                    var dep: Dep
+                    let defaulted: String = "hi"
+                    var computed: Int { 42 }
 
-                init(dep: Dep) {
-                    self.dep = dep
+                    init(dep: Dep) {
+                        self.dep = dep
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -384,16 +387,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var b: B
+                struct A {
+                    var b: B
 
-                init(b: B) {
-                    self.b = b
+                    init(b: B) {
+                        self.b = b
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -411,16 +414,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var b: B
+                struct A {
+                    var b: B
 
-                static let key = BindingKey<A>("custom-id")
+                    static let key = BindingKey<A>("custom-id")
 
-                init(b: B) {
-                    self.b = b
+                    init(b: B) {
+                        self.b = b
+                    }
                 }
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -439,15 +442,15 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                var b: B
+                struct A {
+                    var b: B
 
-                init(b: B) {
-                    self.b = b
+                    init(b: B) {
+                        self.b = b
+                    }
+                    static let key = BindingKey<A>("custom-id")
                 }
-                static let key = BindingKey<A>("custom-id")
-            }
-            """,
+                """,
             macros: macros
         )
     }
@@ -469,16 +472,16 @@ final class SingletonMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
-            struct A {
-                let uninitialised: String
+                struct A {
+                    let uninitialised: String
 
-                init(value: String) {
-                    self.uninitialised = value
+                    init(value: String) {
+                        self.uninitialised = value
+                    }
+
+                    static let key = BindingKey<A>()
                 }
-
-                static let key = BindingKey<A>()
-            }
-            """,
+                """,
             macros: macros
         )
     }

@@ -1,6 +1,6 @@
+import CompilerPluginSupport
 // swift-tools-version: 6.0
 import PackageDescription
-import CompilerPluginSupport
 
 let package = Package(
     name: "swift-wire",
@@ -8,12 +8,12 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "Wire", targets: ["Wire"]),
+        .library(name: "Wire", targets: ["Wire"])
     ],
     dependencies: [
         // Pin from M0/Spike 4. Resolves to swift-syntax 601.0.1 on Swift 6.3.x.
         // Bumps to 602.x are deliberate per-Swift-release maintenance events.
-        .package(url: "https://github.com/swiftlang/swift-syntax", from: "601.0.0"),
+        .package(url: "https://github.com/swiftlang/swift-syntax", from: "601.0.0")
     ],
     targets: [
         .target(
