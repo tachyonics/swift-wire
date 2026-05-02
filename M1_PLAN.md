@@ -17,14 +17,13 @@ The plan is **iterative**, not waterfall. Each iteration builds on the previous 
 The smallest end-to-end pipeline. Highest-risk integration first: if anything in the macro/build-plugin/bootstrap chain is fundamentally broken, you find out before building anything else.
 
 **Scope:**
-- `Resolver` protocol (interface only — concrete resolver is generated)
 - `BindingKey<T>` runtime type
 - `@Singleton` macro (single scope only — others come in iteration 4)
 - `@Inject` macro (synthesises constructor)
 - Build plugin: scan a single target's source, aggregate `@Singleton` types, emit a generated bootstrap (`_WireGraph.swift`) into the plugin work directory
-- Generated bootstrap constructs all `@Singleton`s in dependency order
+- Generated bootstrap constructs all `@Singleton`s in dependency order; bootstrap is a concrete struct with one stored property per binding, accessed directly (no `Resolver` protocol — see "Deferred decisions" below)
 
-**Out of scope:** `@Provides`, `@Container`, validation diagnostics beyond "it compiles," other scopes, lifecycle, multi-module.
+**Out of scope:** `@Provides`, `@Container`, validation diagnostics beyond "it compiles," other scopes, lifecycle, multi-module, the `Resolver` protocol.
 
 **Validation gate:** test app with two `@Singleton` types where one `@Inject`s the other; build plugin produces a working bootstrap; running the app constructs both and resolves the inner one through the outer.
 
@@ -50,6 +49,7 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 - Ambiguity errors with explicit-key disambiguation (`@Inject(Foo.key)`)
 - Generic specialization (when one binding satisfies a generic constraint, specialise; when multiple do, the explicit-key rule applies)
 - Whitespace normalisation for type-expression matching (M0 finding from Spike 3 — `Router<X, Y>` and `Router<X,Y>` resolve to the same binding)
+- **Extension-init detection on `@Singleton` types.** The macro can't see extensions, so `@Inject` on an extension init is silently ignored and a non-`@Inject` extension init either collides with the macro-generated init (Swift redeclaration) or is silently shadowed by it. The build plugin's whole-file parse can detect both cases and emit Wire-specific diagnostics: "@Inject on an extension init is ignored; move it to the primary declaration of `Foo`" and "extension init conflicts with Wire's generated init for `Foo`; move it to the primary declaration and mark it @Inject if it should be the canonical one." Both diagnostics point at the extension init with the precise remedy, replacing Swift's confusing "invalid redeclaration" or the silent-shadow non-error.
 
 **Validation gate:** a "diagnostic gallery" test directory containing intentionally-broken graphs:
 - Missing binding for a primitive type
@@ -58,6 +58,8 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 - Three-type cycle (A → B → C → A)
 - Ambiguous binding requiring a key
 - Deep generic instantiation across multiple `@Singleton`s
+- `@Inject`-marked init in an extension of a `@Singleton` type
+- Non-marked init in an extension of a `@Singleton` type that Wire is auto-generating an init for
 
 Each broken graph produces a precise error pointing at the right source location with a fix-it where applicable. The diagnostic gallery becomes the regression suite for diagnostic quality from this point forward.
 
@@ -68,7 +70,7 @@ The other two scopes plus the scope-crossing wrapper.
 **Scope:**
 - `@RequestScope` macro
 - `@JobScope` macro
-- `Provider<T>` runtime type
+- `Provider<T>` runtime type — likely a `@Sendable () async throws -> T` closure-backed wrapper that the build plugin populates with the appropriate scope-resolution logic. Decide whether `Provider<T>` needs the `Resolver` protocol (deferred from iteration 1) once we see what the closure-based version costs in practice.
 - Build plugin's check that refuses storing a `@RequestScope` value as a property on a `@Singleton` (compile error with a fix-it suggesting `Provider<...>`)
 
 **Validation gate:** test app with a `@Singleton` injecting `Provider<RequestLogger>`-style; calling `provider()` returns a fresh value each invocation; storing a `@RequestScope` directly on a `@Singleton` produces the expected compile error.
@@ -165,6 +167,50 @@ Each iteration grows the test suite; don't ship an iteration without its fixture
 ### Macro surface stays small
 
 Risk #1 ("swift-syntax tax") gets mitigated by keeping macros lean — most logic lives in the build plugin, which is more stable across Swift versions. When tempted to put logic in a macro, ask: "could this be done by the build plugin reading the macro's output instead?" If yes, do that.
+
+## Deferred decisions
+
+Decisions where the README describes a target shape, but iteration 1 / Step A intentionally doesn't commit to the implementation until a concrete iteration needs it.
+
+### `Resolver` protocol
+
+The README describes a public `Resolver` protocol surfacing in three places: `Provider<T>` lazily resolving into a request scope, runtime `introspect()` for ops/admin endpoints, and explicit escape-hatch resolution. None of these have a concrete iteration-1 use case, and the adapter-contract redesign (direct-injection `_wireRegister` parameters) removed adapters as a fourth user.
+
+The protocol is therefore deferred. Iteration 1's bootstrap is a concrete struct with one stored property per binding, accessed directly. Decisions to make later:
+
+- **Iteration 4** decides whether `Provider<T>` needs a `Resolver` protocol or works with a `@Sendable () async throws -> T` closure.
+- **M2** decides whether `introspect()` lives on the bootstrap struct directly or on a public `Resolver` protocol.
+
+If neither iteration ends up needing the protocol, it never lands. If one does, the resulting design is shaped by that real use case rather than M1-time speculation. The README's references to `Resolver` describe the *eventual* design and don't need to change at this point — they describe a target that will either be reached or revised once the use case clarifies.
+
+### Library-binding override (`@Replaces`)
+
+The README's "What's not in scope" section excludes fine-grained binding override across containers — when you select a `@Container`, it's the whole graph for that run, not an overlay on the default. That stance still holds, but a narrower form of override has surfaced as a concrete future use case worth capturing now: replacing a single library-provided `@Singleton` with a consumer-provided `@Provides`.
+
+The shape we'd consider when the use case becomes concrete:
+
+```swift
+import WireSQS
+
+@Provides
+@Replaces(WireSQS.SQSClient.self)
+static func customSQSClient(config: CustomConfig) -> WireSQS.SQSClient {
+    SQSClient(specialConstructor: config)
+}
+```
+
+Build plugin behaviour:
+- Removes the library's `@Singleton SQSClient` binding from the graph.
+- Substitutes the consumer's `@Provides` as the binding for that type.
+- Validates: replacement type matches replaced type; consumer's target only (libraries can't replace each other's bindings); at most one `@Replaces` per replaced type per graph.
+
+Reasons to defer until a real use case appears:
+
+1. The all-or-nothing activation rule is the simplest committable model. `@Replaces` introduces the first crack; once we have one override mechanism, requests for others (override a `@Contributes` collection element, override an adapter annotation's effect) become harder to refuse without a principle to point at.
+2. Step B's "two bindings for the same type, both activated" diagnostic already gives users a path: disambiguate with a key. Less ergonomic than `@Replaces` but functional. Whether that pain is real has to be measured by external adopters hitting it, not anticipated.
+3. The exact validation rules — particularly around transitive consumers of the library binding inside the library itself — need shaping by a real example, not a hypothetical one.
+
+Decision point: when a concrete adopter (likely the user themselves, integrating a library binding they need to swap) hits the disambiguate-with-keys workaround and finds it insufficient, that's the demand signal to build `@Replaces`. Until then, document the design space here and move on.
 
 ## Estimating
 
