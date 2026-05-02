@@ -353,9 +353,11 @@ enum WireDiagnostic: DiagnosticMessage {
         case .multipleInjectInits:
             return "Only one initialiser can be marked @Inject. Remove @Inject from the others."
         case .unmarkedUserInit:
-            return "User-provided initialiser must be marked @Inject so Wire knows which one to call. Either add @Inject to this initialiser, or remove the initialiser entirely and let Wire generate one from @Inject stored properties."
+            return
+                "User-provided initialiser must be marked @Inject so Wire knows which one to call. Either add @Inject to this initialiser, or remove the initialiser entirely and let Wire generate one from @Inject stored properties."
         case .injectOnInitAndProperty:
-            return "@Inject is on both an initialiser and a stored property. Pick one source of truth — either the @Inject-marked initialiser declares dependencies via its parameters, or @Inject-marked properties declare them via Wire's auto-generated init."
+            return
+                "@Inject is on both an initialiser and a stored property. Pick one source of truth — either the @Inject-marked initialiser declares dependencies via its parameters, or @Inject-marked properties declare them via Wire's auto-generated init."
         }
     }
 
