@@ -49,6 +49,7 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 - Ambiguity errors with explicit-key disambiguation (`@Inject(Foo.key)`)
 - Generic specialization (when one binding satisfies a generic constraint, specialise; when multiple do, the explicit-key rule applies)
 - Whitespace normalisation for type-expression matching (M0 finding from Spike 3 — `Router<X, Y>` and `Router<X,Y>` resolve to the same binding)
+- **Extension-init detection on `@Singleton` types.** The macro can't see extensions, so `@Inject` on an extension init is silently ignored and a non-`@Inject` extension init either collides with the macro-generated init (Swift redeclaration) or is silently shadowed by it. The build plugin's whole-file parse can detect both cases and emit Wire-specific diagnostics: "@Inject on an extension init is ignored; move it to the primary declaration of `Foo`" and "extension init conflicts with Wire's generated init for `Foo`; move it to the primary declaration and mark it @Inject if it should be the canonical one." Both diagnostics point at the extension init with the precise remedy, replacing Swift's confusing "invalid redeclaration" or the silent-shadow non-error.
 
 **Validation gate:** a "diagnostic gallery" test directory containing intentionally-broken graphs:
 - Missing binding for a primitive type
@@ -57,6 +58,8 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 - Three-type cycle (A → B → C → A)
 - Ambiguous binding requiring a key
 - Deep generic instantiation across multiple `@Singleton`s
+- `@Inject`-marked init in an extension of a `@Singleton` type
+- Non-marked init in an extension of a `@Singleton` type that Wire is auto-generating an init for
 
 Each broken graph produces a precise error pointing at the right source location with a fix-it where applicable. The diagnostic gallery becomes the regression suite for diagnostic quality from this point forward.
 

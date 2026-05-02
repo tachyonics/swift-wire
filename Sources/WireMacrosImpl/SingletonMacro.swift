@@ -36,13 +36,24 @@ import SwiftSyntaxMacros
 /// ## Extensions
 ///
 /// The macro only sees the primary type declaration, not extensions:
-/// - When Wire generates the init (no user init in primary), avoid adding
-///   inits in extensions — Swift's redeclaration check fires if the
-///   signatures collide.
-/// - When the user provides an `@Inject`-marked init in the primary
-///   declaration, extensions can add any additional non-canonical inits
+/// - **When Wire generates the init** (no user init in primary), do not
+///   add inits in extensions. If the extension init's signature matches
+///   the generated one, Swift's redeclaration check fires. If it
+///   differs, the extension init exists alongside Wire's generated init,
+///   but Wire calls its own — there's no way to tell the macro to defer
+///   to an extension init, because the macro can't see it. To make Wire
+///   call a custom init, put it in the primary declaration and mark it
+///   with `@Inject`.
+/// - **When the user provides an `@Inject`-marked init in the primary
+///   declaration**, extensions can add any additional non-canonical inits
 ///   (e.g. `init(from decoder:)` for `Codable`); Wire only knows about
 ///   the marked init in primary.
+///
+/// The macro itself can't validate this — extensions are invisible to
+/// it — but the Wire build plugin's whole-file scan catches both
+/// failure modes and emits Wire-specific diagnostics pointing at the
+/// offending extension init. The remedy is the same in either case:
+/// keep the canonical initialiser in the primary declaration.
 public struct SingletonMacro: MemberMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -60,50 +71,13 @@ public struct SingletonMacro: MemberMacro {
         let injectionPoints = collectInjectionPoints(in: declaration)
         let hasUserKey = hasUserProvidedKey(in: declaration)
 
-        // Validation. The three checks below are mutually exclusive on the
-        // configurations they fire for, so at most one set of diagnostics
-        // emits per declaration.
-
-        if markedInits.count > 1 {
-            for markedInit in markedInits {
-                context.diagnose(
-                    Diagnostic(
-                        node: Syntax(markedInit.initDecl),
-                        message: WireDiagnostic.multipleInjectInits
-                    )
-                )
-            }
-        } else if markedInits.isEmpty && !userInits.isEmpty {
-            // User provided init(s) but none marked @Inject. Wire can't
-            // pick one; require the user to mark exactly one.
-            for userInit in userInits {
-                context.diagnose(
-                    Diagnostic(
-                        node: Syntax(userInit.initDecl),
-                        message: WireDiagnostic.unmarkedUserInit
-                    )
-                )
-            }
-        } else if markedInits.count == 1 && !injectionPoints.isEmpty {
-            // @Inject on init AND stored property. The marked init's
-            // parameters are the dependency declaration; @Inject on
-            // properties duplicates that information ambiguously.
-            context.diagnose(
-                Diagnostic(
-                    node: Syntax(markedInits[0].initDecl),
-                    message: WireDiagnostic.injectOnInitAndProperty
-                )
-            )
-        }
-
-        // Diagnose stored properties the synthesised init won't initialise.
-        // Only relevant when Wire generates the init (no user inits) — when
-        // the user provides one, their init handles initialisation and
-        // Swift's own "didn't initialise all properties" diagnostic fires
-        // at their init site if anything's missed.
-        if userInits.isEmpty {
-            diagnoseUninitialisedStoredProperties(in: declaration, context: context)
-        }
+        diagnoseInitialiserConfiguration(
+            userInits: userInits,
+            markedInits: markedInits,
+            injectionPoints: injectionPoints,
+            in: declaration,
+            context: context
+        )
 
         var members: [DeclSyntax] = []
 
@@ -142,6 +116,65 @@ public struct SingletonMacro: MemberMacro {
             guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { return nil }
             let hasInject = initDecl.attributes.hasAttribute(named: "Inject")
             return UserInitInfo(initDecl: initDecl, hasInjectAttribute: hasInject)
+        }
+    }
+
+    /// Walk the user's initialiser/property configuration and emit any
+    /// Wire-specific diagnostics for invalid combinations.
+    ///
+    /// The three @Inject-related checks are mutually exclusive on the
+    /// configurations they fire for, so at most one set of init-related
+    /// diagnostics emits per declaration:
+    /// - Multiple inits marked `@Inject`.
+    /// - User-provided init(s) with no `@Inject` marker on any of them.
+    /// - `@Inject` on both an init and a stored property.
+    ///
+    /// Plus an unrelated check that runs only when Wire is generating the
+    /// init: stored properties that the synthesised init won't initialise.
+    /// When the user provides their own init, Swift's "didn't initialise
+    /// all properties" diagnostic fires at their init site if anything's
+    /// missed, which is clearer than Wire reporting it here.
+    private static func diagnoseInitialiserConfiguration(
+        userInits: [UserInitInfo],
+        markedInits: [UserInitInfo],
+        injectionPoints: [InjectionPoint],
+        in declaration: some DeclGroupSyntax,
+        context: some MacroExpansionContext
+    ) {
+        if markedInits.count > 1 {
+            for markedInit in markedInits {
+                context.diagnose(
+                    Diagnostic(
+                        node: Syntax(markedInit.initDecl),
+                        message: WireDiagnostic.multipleInjectInits
+                    )
+                )
+            }
+        } else if markedInits.isEmpty && !userInits.isEmpty {
+            // User provided init(s) but none marked @Inject. Wire can't
+            // pick one; require the user to mark exactly one.
+            for userInit in userInits {
+                context.diagnose(
+                    Diagnostic(
+                        node: Syntax(userInit.initDecl),
+                        message: WireDiagnostic.unmarkedUserInit
+                    )
+                )
+            }
+        } else if markedInits.count == 1 && !injectionPoints.isEmpty {
+            // @Inject on init AND stored property. The marked init's
+            // parameters are the dependency declaration; @Inject on
+            // properties duplicates that information ambiguously.
+            context.diagnose(
+                Diagnostic(
+                    node: Syntax(markedInits[0].initDecl),
+                    message: WireDiagnostic.injectOnInitAndProperty
+                )
+            )
+        }
+
+        if userInits.isEmpty {
+            diagnoseUninitialisedStoredProperties(in: declaration, context: context)
         }
     }
 
