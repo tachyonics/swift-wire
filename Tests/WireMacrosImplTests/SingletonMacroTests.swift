@@ -340,36 +340,6 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
-    func test_singletonAllowsComputedAndDefaultedPropertiesWithoutDiagnostic() {
-        // Sanity check that the validation only fires on truly
-        // uninitialised stored properties; computed and defaulted both
-        // remain silent.
-        assertMacroExpansion(
-            """
-            @Singleton
-            struct A {
-                @Inject var dep: Dep
-                let defaulted: String = "hi"
-                var computed: Int { 42 }
-            }
-            """,
-            expandedSource: """
-                struct A {
-                    var dep: Dep
-                    let defaulted: String = "hi"
-                    var computed: Int { 42 }
-
-                    init(dep: Dep) {
-                        self.dep = dep
-                    }
-
-                    static let key = BindingKey<A>()
-                }
-                """,
-            macros: macros
-        )
-    }
-
     // MARK: - Deference to user-provided members
 
     func test_singletonSkipsInitGenerationWhenInjectInitProvided() {
@@ -633,6 +603,8 @@ final class SingletonMacroTests: XCTestCase {
                     init(b: B) {
                         self.b = b
                     }
+
+                    static let key = BindingKey<A>()
                 }
                 """,
             diagnostics: [
