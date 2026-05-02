@@ -180,6 +180,35 @@ The protocol is therefore deferred. Iteration 1's bootstrap is a concrete struct
 
 If neither iteration ends up needing the protocol, it never lands. If one does, the resulting design is shaped by that real use case rather than M1-time speculation. The README's references to `Resolver` describe the *eventual* design and don't need to change at this point — they describe a target that will either be reached or revised once the use case clarifies.
 
+### Library-binding override (`@Replaces`)
+
+The README's "What's not in scope" section excludes fine-grained binding override across containers — when you select a `@Container`, it's the whole graph for that run, not an overlay on the default. That stance still holds, but a narrower form of override has surfaced as a concrete future use case worth capturing now: replacing a single library-provided `@Singleton` with a consumer-provided `@Provides`.
+
+The shape we'd consider when the use case becomes concrete:
+
+```swift
+import WireSQS
+
+@Provides
+@Replaces(WireSQS.SQSClient.self)
+static func customSQSClient(config: CustomConfig) -> WireSQS.SQSClient {
+    SQSClient(specialConstructor: config)
+}
+```
+
+Build plugin behaviour:
+- Removes the library's `@Singleton SQSClient` binding from the graph.
+- Substitutes the consumer's `@Provides` as the binding for that type.
+- Validates: replacement type matches replaced type; consumer's target only (libraries can't replace each other's bindings); at most one `@Replaces` per replaced type per graph.
+
+Reasons to defer until a real use case appears:
+
+1. The all-or-nothing activation rule is the simplest committable model. `@Replaces` introduces the first crack; once we have one override mechanism, requests for others (override a `@Contributes` collection element, override an adapter annotation's effect) become harder to refuse without a principle to point at.
+2. Step B's "two bindings for the same type, both activated" diagnostic already gives users a path: disambiguate with a key. Less ergonomic than `@Replaces` but functional. Whether that pain is real has to be measured by external adopters hitting it, not anticipated.
+3. The exact validation rules — particularly around transitive consumers of the library binding inside the library itself — need shaping by a real example, not a hypothetical one.
+
+Decision point: when a concrete adopter (likely the user themselves, integrating a library binding they need to swap) hits the disambiguate-with-keys workaround and finds it insufficient, that's the demand signal to build `@Replaces`. Until then, document the design space here and move on.
+
 ## Estimating
 
 Hard to be precise; iterations 3 and 8 have the most variance.

@@ -372,15 +372,17 @@ final class SingletonMacroTests: XCTestCase {
 
     // MARK: - Deference to user-provided members
 
-    func test_singletonSkipsInitGenerationWhenUserProvided() {
-        // The user has their own init — possibly with extra setup or
-        // assertions. The macro generates only the key.
+    func test_singletonSkipsInitGenerationWhenInjectInitProvided() {
+        // The user has their own init marked @Inject. The init's parameters
+        // are the dependency declaration; stored properties are just
+        // storage. The macro generates only the key.
         assertMacroExpansion(
             """
             @Singleton
             struct A {
-                @Inject var b: B
+                let b: B
 
+                @Inject
                 init(b: B) {
                     self.b = b
                 }
@@ -388,8 +390,7 @@ final class SingletonMacroTests: XCTestCase {
             """,
             expandedSource: """
                 struct A {
-                    var b: B
-
+                    let b: B
                     init(b: B) {
                         self.b = b
                     }
@@ -433,8 +434,9 @@ final class SingletonMacroTests: XCTestCase {
             """
             @Singleton
             struct A {
-                @Inject var b: B
+                let b: B
 
+                @Inject
                 init(b: B) {
                     self.b = b
                 }
@@ -443,8 +445,7 @@ final class SingletonMacroTests: XCTestCase {
             """,
             expandedSource: """
                 struct A {
-                    var b: B
-
+                    let b: B
                     init(b: B) {
                         self.b = b
                     }
@@ -455,17 +456,19 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
-    func test_singletonSuppressesUninitialisedDiagnosticWhenUserInitProvided() {
-        // The user's init handles the otherwise-uninitialised property;
-        // Wire's diagnostic would be redundant noise here. Swift will
-        // still validate the user's init covers every stored property —
-        // any miss surfaces at the user's init site, not at Wire.
+    func test_singletonSuppressesUninitialisedDiagnosticWhenInjectInitProvided() {
+        // The user's @Inject-marked init handles the otherwise-
+        // uninitialised property; Wire's diagnostic would be redundant
+        // noise. Swift will still validate the user's init covers every
+        // stored property — any miss surfaces at the user's init site, not
+        // at Wire.
         assertMacroExpansion(
             """
             @Singleton
             struct A {
                 let uninitialised: String
 
+                @Inject
                 init(value: String) {
                     self.uninitialised = value
                 }
@@ -474,9 +477,262 @@ final class SingletonMacroTests: XCTestCase {
             expandedSource: """
                 struct A {
                     let uninitialised: String
-
                     init(value: String) {
                         self.uninitialised = value
+                    }
+
+                    static let key = BindingKey<A>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    // MARK: - @Inject on init: validation errors
+
+    func test_singletonReportsUnmarkedUserInit() {
+        // User-provided init with no @Inject anywhere is ambiguous — Wire
+        // doesn't know whether the parameters are dependencies. Strict
+        // rule: the user must mark exactly one init.
+        assertMacroExpansion(
+            """
+            @Singleton
+            struct A {
+                init(b: B) {
+                    self.b = b
+                }
+                let b: B
+            }
+            """,
+            expandedSource: """
+                struct A {
+                    init(b: B) {
+                        self.b = b
+                    }
+                    let b: B
+
+                    static let key = BindingKey<A>()
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message:
+                        "User-provided initialiser must be marked @Inject so Wire knows which one to call. Either add @Inject to this initialiser, or remove the initialiser entirely and let Wire generate one from @Inject stored properties.",
+                    line: 3,
+                    column: 5,
+                    severity: .error
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func test_singletonReportsUnmarkedParameterlessInit() {
+        // Even a parameterless init must be marked @Inject for
+        // consistency. Without the rule, the difference between "no init"
+        // (macro generates) and "init() {}" (silently used) is invisible.
+        assertMacroExpansion(
+            """
+            @Singleton
+            struct A {
+                init() {
+                }
+            }
+            """,
+            expandedSource: """
+                struct A {
+                    init() {
+                    }
+
+                    static let key = BindingKey<A>()
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message:
+                        "User-provided initialiser must be marked @Inject so Wire knows which one to call. Either add @Inject to this initialiser, or remove the initialiser entirely and let Wire generate one from @Inject stored properties.",
+                    line: 3,
+                    column: 5,
+                    severity: .error
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func test_singletonReportsMultipleInjectInits() {
+        // Wire must call exactly one init at bootstrap; multiple marked
+        // inits is ambiguous.
+        assertMacroExpansion(
+            """
+            @Singleton
+            struct A {
+                let b: B
+
+                @Inject
+                init(b: B) {
+                    self.b = b
+                }
+
+                @Inject
+                init(b: B, extra: Int) {
+                    self.b = b
+                }
+            }
+            """,
+            expandedSource: """
+                struct A {
+                    let b: B
+                    init(b: B) {
+                        self.b = b
+                    }
+                    init(b: B, extra: Int) {
+                        self.b = b
+                    }
+
+                    static let key = BindingKey<A>()
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "Only one initialiser can be marked @Inject. Remove @Inject from the others.",
+                    line: 5,
+                    column: 5,
+                    severity: .error
+                ),
+                DiagnosticSpec(
+                    message: "Only one initialiser can be marked @Inject. Remove @Inject from the others.",
+                    line: 10,
+                    column: 5,
+                    severity: .error
+                ),
+            ],
+            macros: macros
+        )
+    }
+
+    func test_singletonReportsInjectOnInitAndProperty() {
+        // @Inject on both an init and a property is two declarations of
+        // the same intent. The marked init's params are the deps; @Inject
+        // on properties is redundant and ambiguous.
+        assertMacroExpansion(
+            """
+            @Singleton
+            struct A {
+                @Inject var b: B
+
+                @Inject
+                init(b: B) {
+                    self.b = b
+                }
+            }
+            """,
+            expandedSource: """
+                struct A {
+                    var b: B
+                    init(b: B) {
+                        self.b = b
+                    }
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message:
+                        "@Inject is on both an initialiser and a stored property. Pick one source of truth — either the @Inject-marked initialiser declares dependencies via its parameters, or @Inject-marked properties declare them via Wire's auto-generated init.",
+                    line: 5,
+                    column: 5,
+                    severity: .error
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    // MARK: - @Inject on init: happy paths
+
+    func test_singletonAllowsInjectInitWithTransformation() {
+        // The canonical "transformation" use case: stored property doesn't
+        // directly correspond to what's injected; the init does the work.
+        assertMacroExpansion(
+            """
+            @Singleton
+            struct CacheLayer {
+                let cache: Cache
+
+                @Inject
+                init(repository: Repository) {
+                    self.cache = Cache(backedBy: repository)
+                }
+            }
+            """,
+            expandedSource: """
+                struct CacheLayer {
+                    let cache: Cache
+                    init(repository: Repository) {
+                        self.cache = Cache(backedBy: repository)
+                    }
+
+                    static let key = BindingKey<CacheLayer>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    func test_singletonAllowsMultipleInitsWithOneMarked() {
+        // Multiple inits are fine as long as exactly one is marked.
+        // Unmarked inits exist as ordinary Swift inits but Wire ignores
+        // them — they're available for testing, manual construction, etc.
+        assertMacroExpansion(
+            """
+            @Singleton
+            struct A {
+                let b: B
+
+                @Inject
+                init(b: B) {
+                    self.b = b
+                }
+
+                init(testValue: B) {
+                    self.b = testValue
+                }
+            }
+            """,
+            expandedSource: """
+                struct A {
+                    let b: B
+                    init(b: B) {
+                        self.b = b
+                    }
+
+                    init(testValue: B) {
+                        self.b = testValue
+                    }
+
+                    static let key = BindingKey<A>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    func test_singletonAllowsInjectParameterlessInit() {
+        // @Inject init() {} is the explicit "construct A() with no
+        // dependencies" form. Equivalent in behaviour to the no-user-init
+        // case (Wire generates init() {}) but explicit at the source.
+        assertMacroExpansion(
+            """
+            @Singleton
+            struct A {
+                @Inject
+                init() {
+                }
+            }
+            """,
+            expandedSource: """
+                struct A {
+                    init() {
                     }
 
                     static let key = BindingKey<A>()

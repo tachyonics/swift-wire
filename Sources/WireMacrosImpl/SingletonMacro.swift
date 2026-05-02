@@ -2,19 +2,47 @@ import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// `@Singleton` — type-level macro generating:
-/// - A `static let key: BindingKey<Self>` for graph identity, *unless* the
-///   user has provided one explicitly. A user-provided key lets the type
-///   carry a named identifier (e.g. for disambiguating same-type bindings).
-/// - An `init(...)` taking one parameter per `@Inject` property on the
-///   type, in declaration order, *unless* the user has provided any `init`.
-///   A user-provided init suppresses both generation and the
-///   uninitialised-stored-property diagnostic — the user's init takes
-///   responsibility for initialisation and Swift validates it directly.
+/// `@Singleton` — type-level macro.
 ///
-/// In both cases the principle is the same: the macro is a convenience.
-/// If the user wants to customise, they write the member themselves and
-/// the macro defers.
+/// Generates two things:
+/// 1. An initialiser Wire calls to construct the type at bootstrap time.
+/// 2. A `static let key: BindingKey<Self>` for graph identity.
+///
+/// ## Initialiser source
+///
+/// Wire determines the canonical initialiser by these rules, applied in
+/// order:
+/// - **No user-provided initialisers** → Wire generates one from
+///   `@Inject`-marked stored properties (or `init()` if there are none).
+/// - **Any user-provided initialisers** → exactly one of them must be
+///   marked `@Inject`. Wire calls that one. Other initialisers exist as
+///   ordinary Swift inits but Wire ignores them.
+///
+/// `@Inject` is exclusive: it belongs on stored properties *or* on one
+/// initialiser, not both. Mixing produces a compile error.
+///
+/// Validation errors emitted by this macro:
+/// - Multiple initialisers marked `@Inject`.
+/// - User-provided initialiser with no `@Inject` marker (any parameter
+///   list, including `init()`).
+/// - `@Inject` on both an initialiser and a stored property.
+///
+/// ## Static key
+///
+/// Generated unless the user provides their own `static let key` (or
+/// `static var key`) — typically to give the binding a named identifier
+/// for disambiguation.
+///
+/// ## Extensions
+///
+/// The macro only sees the primary type declaration, not extensions:
+/// - When Wire generates the init (no user init in primary), avoid adding
+///   inits in extensions — Swift's redeclaration check fires if the
+///   signatures collide.
+/// - When the user provides an `@Inject`-marked init in the primary
+///   declaration, extensions can add any additional non-canonical inits
+///   (e.g. `init(from decoder:)` for `Codable`); Wire only knows about
+///   the marked init in primary.
 public struct SingletonMacro: MemberMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -27,26 +55,64 @@ public struct SingletonMacro: MemberMacro {
             throw SingletonMacroError.unsupportedDeclaration
         }
 
-        let hasUserInit = hasUserProvidedInit(in: declaration)
+        let userInits = collectUserInits(in: declaration)
+        let markedInits = userInits.filter { $0.hasInjectAttribute }
+        let injectionPoints = collectInjectionPoints(in: declaration)
         let hasUserKey = hasUserProvidedKey(in: declaration)
 
-        // Walk stored properties looking for those marked with @Inject.
-        let injectionPoints = collectInjectionPoints(in: declaration)
+        // Validation. The three checks below are mutually exclusive on the
+        // configurations they fire for, so at most one set of diagnostics
+        // emits per declaration.
+
+        if markedInits.count > 1 {
+            for markedInit in markedInits {
+                context.diagnose(
+                    Diagnostic(
+                        node: Syntax(markedInit.initDecl),
+                        message: WireDiagnostic.multipleInjectInits
+                    )
+                )
+            }
+        } else if markedInits.isEmpty && !userInits.isEmpty {
+            // User provided init(s) but none marked @Inject. Wire can't
+            // pick one; require the user to mark exactly one.
+            for userInit in userInits {
+                context.diagnose(
+                    Diagnostic(
+                        node: Syntax(userInit.initDecl),
+                        message: WireDiagnostic.unmarkedUserInit
+                    )
+                )
+            }
+        } else if markedInits.count == 1 && !injectionPoints.isEmpty {
+            // @Inject on init AND stored property. The marked init's
+            // parameters are the dependency declaration; @Inject on
+            // properties duplicates that information ambiguously.
+            context.diagnose(
+                Diagnostic(
+                    node: Syntax(markedInits[0].initDecl),
+                    message: WireDiagnostic.injectOnInitAndProperty
+                )
+            )
+        }
 
         // Diagnose stored properties the synthesised init won't initialise.
-        // Skip when the user has their own init — they own initialisation
-        // and Swift's "didn't initialise" error fires directly at their init
-        // if anything's missed, which is clearer than Wire reporting it
-        // here.
-        if !hasUserInit {
+        // Only relevant when Wire generates the init (no user inits) — when
+        // the user provides one, their init handles initialisation and
+        // Swift's own "didn't initialise all properties" diagnostic fires
+        // at their init site if anything's missed.
+        if userInits.isEmpty {
             diagnoseUninitialisedStoredProperties(in: declaration, context: context)
         }
 
         var members: [DeclSyntax] = []
 
-        if !hasUserInit {
+        if userInits.isEmpty {
             members.append(renderInit(typeInfo: typeInfo, injectionPoints: injectionPoints))
         }
+        // else: skip init generation. The marked init (or the user's
+        // unmarked init that's about to be flagged by validation above) is
+        // the source of truth.
 
         if !hasUserKey {
             // The key's type identity is `Self` via `nameWithGenerics`, so
@@ -60,16 +126,22 @@ public struct SingletonMacro: MemberMacro {
         return members
     }
 
-    /// `true` if the host type declares any `init`. The macro defers to the
-    /// user's init regardless of its parameter list — if the user's init
-    /// doesn't take the right `@Inject` parameters, the build plugin's
-    /// generated bootstrap will fail to compile when it tries to call it,
-    /// surfacing the mismatch with a clear Swift diagnostic at the call
-    /// site. Validating the user's init signature here is possible but more
-    /// complex than it's worth at M1.
-    private static func hasUserProvidedInit(in declaration: some DeclGroupSyntax) -> Bool {
-        declaration.memberBlock.members.contains { member in
-            member.decl.is(InitializerDeclSyntax.self)
+    /// One user-provided initialiser, with a flag for whether it carries
+    /// `@Inject`. The validation rules above all reduce to combinations of
+    /// this list's contents.
+    private struct UserInitInfo {
+        let initDecl: InitializerDeclSyntax
+        let hasInjectAttribute: Bool
+    }
+
+    /// Collect every `init` the user has written on the primary
+    /// declaration (extensions are invisible to the macro — see the type's
+    /// doc comment).
+    private static func collectUserInits(in declaration: some DeclGroupSyntax) -> [UserInitInfo] {
+        declaration.memberBlock.members.compactMap { member -> UserInitInfo? in
+            guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { return nil }
+            let hasInject = initDecl.attributes.hasAttribute(named: "Inject")
+            return UserInitInfo(initDecl: initDecl, hasInjectAttribute: hasInject)
         }
     }
 
@@ -270,26 +342,36 @@ enum SingletonMacroError: Error, CustomStringConvertible {
 /// diagnostic kinds without affecting others.
 enum WireDiagnostic: DiagnosticMessage {
     case uninitialisedStoredProperty(name: String)
+    case multipleInjectInits
+    case unmarkedUserInit
+    case injectOnInitAndProperty
 
     var message: String {
         switch self {
         case .uninitialisedStoredProperty(let name):
             return "Stored property '\(name)' must have a default value, be a computed property, or be marked @Inject."
+        case .multipleInjectInits:
+            return "Only one initialiser can be marked @Inject. Remove @Inject from the others."
+        case .unmarkedUserInit:
+            return "User-provided initialiser must be marked @Inject so Wire knows which one to call. Either add @Inject to this initialiser, or remove the initialiser entirely and let Wire generate one from @Inject stored properties."
+        case .injectOnInitAndProperty:
+            return "@Inject is on both an initialiser and a stored property. Pick one source of truth — either the @Inject-marked initialiser declares dependencies via its parameters, or @Inject-marked properties declare them via Wire's auto-generated init."
         }
     }
 
     var diagnosticID: MessageID {
+        let identifier: String
         switch self {
-        case .uninitialisedStoredProperty:
-            return MessageID(domain: "Wire", id: "uninitialised-stored-property")
+        case .uninitialisedStoredProperty: identifier = "uninitialised-stored-property"
+        case .multipleInjectInits: identifier = "multiple-inject-inits"
+        case .unmarkedUserInit: identifier = "unmarked-user-init"
+        case .injectOnInitAndProperty: identifier = "inject-on-init-and-property"
         }
+        return MessageID(domain: "Wire", id: identifier)
     }
 
     var severity: DiagnosticSeverity {
-        switch self {
-        case .uninitialisedStoredProperty:
-            return .error
-        }
+        .error
     }
 }
 
