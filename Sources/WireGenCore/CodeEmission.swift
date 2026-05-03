@@ -1,5 +1,3 @@
-import Foundation
-
 /// Render the `_WireGraph.swift` source the build plugin writes alongside
 /// the consumer target. The generated struct has one stored property per
 /// binding (named by lowerCamelCased type name) and a static
