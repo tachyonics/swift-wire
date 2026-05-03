@@ -264,8 +264,13 @@ public func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> St
         if !lines.isEmpty { lines.append("") }
         lines.append("error: missing binding(s):")
         for missing in errors.missingBindings {
+            // Wildcard-label dependencies (`@Inject init(_ x: Foo)`) carry
+            // a nil name; render as `_` for the diagnostic so it matches
+            // the source-level form and Swift's compiler doesn't generate
+            // a "debug description of optional" warning.
+            let displayName = missing.dependency.name ?? "_"
             lines.append(
-                "  \(missing.consumer.typeName) needs \(missing.dependency.name): \(missing.dependency.type) — no @Singleton matches '\(missing.dependency.type)'"
+                "  \(missing.consumer.typeName) needs \(displayName): \(missing.dependency.type) — no @Singleton matches '\(missing.dependency.type)'"
             )
         }
     }

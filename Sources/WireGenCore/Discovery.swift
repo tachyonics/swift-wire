@@ -31,12 +31,18 @@ public struct DiscoveredSingleton: Sendable {
 /// One dependency that the synthesised (or user-marked) initialiser takes
 /// — i.e. one parameter Wire must resolve from the graph at construction
 /// time.
+///
+/// `name` is the external argument label used at the call site. `nil`
+/// represents a wildcard label (the `_` form, e.g. `init(_ a: A)`),
+/// where the call site omits the label entirely. Property-based
+/// injection always produces a concrete label (the property name);
+/// only `@Inject init(_ x: Foo)` produces a `nil` name.
 public struct DependencyParameter: Sendable {
-    public let name: String
+    public let name: String?
     public let type: String
     public let kind: DependencyKind
 
-    public init(name: String, type: String, kind: DependencyKind) {
+    public init(name: String?, type: String, kind: DependencyKind) {
         self.name = name
         self.type = type
         self.kind = kind
@@ -96,7 +102,12 @@ public func renderDiscoveryReport(
                     case .injectProperty: kindLabel = "@Inject property"
                     case .injectInitParameter: kindLabel = "@Inject init parameter"
                     }
-                    lines.append("    \(dep.name): \(dep.type)   (\(kindLabel))")
+                    // For wildcard-label parameters, render as `_` since
+                    // that's the Swift source-level representation. The
+                    // sentinel character only appears in human-facing
+                    // output here; codegen receives the actual `nil`.
+                    let displayName = dep.name ?? "_"
+                    lines.append("    \(displayName): \(dep.type)   (\(kindLabel))")
                 }
             }
         }
@@ -233,15 +244,26 @@ final class SingletonDiscovery: SyntaxVisitor {
         return injectInitDependencies ?? propertyDependencies
     }
 
-    /// The parameter's "internal" name — the one used inside the function
-    /// body. For `init(_ a: Int)` that's `a` (secondName). For
-    /// `init(label internal: Int)` that's `internal`. For `init(a: Int)`
-    /// it's `a` (firstName, since secondName is nil).
-    private func parameterName(_ parameter: FunctionParameterSyntax) -> String {
+    /// The parameter's external label — what callers write at the call
+    /// site. Sitting 4's bootstrap emits `Type(label: resolvedValue)`
+    /// calls and needs the label.
+    ///
+    /// Returns `nil` for wildcard (`_`) labels so the call site is told
+    /// to omit the label entirely rather than emit `"_"` as a sentinel
+    /// the consumer has to special-case downstream.
+    ///
+    /// - `init(label internal: A)` → `"label"`
+    /// - `init(_ a: A)` → `nil`
+    /// - `init(a: A)` → `"a"`
+    ///
+    /// The internal name (`secondName`, when present) is irrelevant — it
+    /// only appears inside the init body, which is the user's code, not
+    /// Wire's.
+    private func parameterName(_ parameter: FunctionParameterSyntax) -> String? {
         if parameter.firstName.tokenKind == .wildcard {
-            return parameter.secondName?.text ?? "_"
+            return nil
         }
-        return parameter.secondName?.text ?? parameter.firstName.text
+        return parameter.firstName.text
     }
 
     private func hasAttribute(

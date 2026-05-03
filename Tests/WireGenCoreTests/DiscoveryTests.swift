@@ -180,7 +180,11 @@ struct DiscoveryTests {
     // MARK: - Parameter name edge cases
 
     @Test func injectInitWithWildcardParameterLabel() {
-        // `init(_ a: A)` — wildcard external label, internal name "a".
+        // `init(_ a: A)` — wildcard external label. Wire captures `nil`
+        // for the name so the type system forces sitting 4's codegen
+        // to handle the "omit the label" case explicitly, rather than
+        // sneaking through as a `"_"` sentinel that downstream might
+        // accidentally emit literally.
         let source = """
             @Singleton
             struct X {
@@ -192,14 +196,16 @@ struct DiscoveryTests {
         let result = discoverSingletons(in: source, sourcePath: "X.swift")
         #expect(result.count == 1)
         #expect(result[0].dependencies.count == 1)
-        #expect(result[0].dependencies[0].name == "a")
+        #expect(result[0].dependencies[0].name == nil)
         #expect(result[0].dependencies[0].type == "A")
     }
 
     @Test func injectInitWithExternalAndInternalLabels() {
-        // `init(label internalName: A)` — both first and second name set.
-        // The internal name is what's used in the init body and the one
-        // we capture as the dependency name.
+        // `init(label internalName: A)` — both names set. The external
+        // label "label" is what callers write at the call site, so
+        // that's what Wire captures. The internal name "internalName"
+        // is an implementation detail of the init body, irrelevant to
+        // Wire's bootstrap codegen.
         let source = """
             @Singleton
             struct X {
@@ -210,7 +216,7 @@ struct DiscoveryTests {
             """
         let result = discoverSingletons(in: source, sourcePath: "X.swift")
         #expect(result.count == 1)
-        #expect(result[0].dependencies[0].name == "internalName")
+        #expect(result[0].dependencies[0].name == "label")
     }
 
     @Test func injectPropertyWithoutTypeAnnotationIsSkipped() {
