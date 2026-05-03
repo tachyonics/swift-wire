@@ -9,18 +9,18 @@
 /// informational (generic singletons deferred to iteration 3's
 /// specialisation work) and reported the same way regardless of whether
 /// the rest of the graph validated cleanly.
-public struct GraphResult: Sendable {
-    public let outcome: Outcome
-    public let skipped: [DiscoveredSingleton]
+package struct GraphResult: Sendable {
+    package let outcome: Outcome
+    package let skipped: [DiscoveredSingleton]
 
-    public init(outcome: Outcome, skipped: [DiscoveredSingleton]) {
+    package init(outcome: Outcome, skipped: [DiscoveredSingleton]) {
         self.outcome = outcome
         self.skipped = skipped
     }
 
     /// Either a valid topological order (the graph constructs cleanly)
     /// or a bundle of validation errors that prevented sorting.
-    public enum Outcome: Sendable {
+    package enum Outcome: Sendable {
         case success(topologicalOrder: [DiscoveredSingleton])
         case validationFailed(ValidationErrors)
     }
@@ -30,11 +30,11 @@ public struct GraphResult: Sendable {
     /// both cycles and missing bindings — and we report all of them so
     /// the user fixes the whole shape in one pass rather than one
     /// problem per iteration.
-    public struct ValidationErrors: Sendable {
-        public let cycles: [[DiscoveredSingleton]]
-        public let missingBindings: [MissingBinding]
+    package struct ValidationErrors: Sendable {
+        package let cycles: [[DiscoveredSingleton]]
+        package let missingBindings: [MissingBinding]
 
-        public init(
+        package init(
             cycles: [[DiscoveredSingleton]],
             missingBindings: [MissingBinding]
         ) {
@@ -49,14 +49,14 @@ extension GraphResult.Outcome {
     /// otherwise — using `nil` rather than an empty array makes the
     /// either/or shape of the outcome explicit at the type level. Tests
     /// can `try #require(outcome.topologicalOrder)` to extract cleanly.
-    public var topologicalOrder: [DiscoveredSingleton]? {
+    package var topologicalOrder: [DiscoveredSingleton]? {
         if case .success(let order) = self { return order }
         return nil
     }
 
     /// The validation errors, if this outcome is `.validationFailed`.
     /// `nil` otherwise.
-    public var validationErrors: GraphResult.ValidationErrors? {
+    package var validationErrors: GraphResult.ValidationErrors? {
         if case .validationFailed(let errors) = self { return errors }
         return nil
     }
@@ -65,11 +65,11 @@ extension GraphResult.Outcome {
 /// One unresolved dependency — a `@Singleton`'s `@Inject` parameter or
 /// property whose declared type isn't satisfied by any other discovered
 /// `@Singleton`.
-public struct MissingBinding: Sendable {
-    public let consumer: DiscoveredSingleton
-    public let dependency: DependencyParameter
+package struct MissingBinding: Sendable {
+    package let consumer: DiscoveredSingleton
+    package let dependency: DependencyParameter
 
-    public init(consumer: DiscoveredSingleton, dependency: DependencyParameter) {
+    package init(consumer: DiscoveredSingleton, dependency: DependencyParameter) {
         self.consumer = consumer
         self.dependency = dependency
     }
@@ -86,7 +86,7 @@ public struct MissingBinding: Sendable {
 /// generic type parameters rather than concrete types, which the
 /// sitting 3 graph can't resolve cleanly. Concrete substitution arrives
 /// in iteration 3.
-public func buildDependencyGraph(
+package func buildDependencyGraph(
     from singletons: [DiscoveredSingleton]
 ) -> GraphResult {
     // Index non-generic singletons by their type name for O(1) lookup.
@@ -220,7 +220,7 @@ private func topologicalSort(
 
 /// Render the topological order as a numbered list — what sitting 4's
 /// code generation will iterate over to emit the bootstrap.
-public func renderTopologicalOrder(_ order: [DiscoveredSingleton]) -> String {
+package func renderTopologicalOrder(_ order: [DiscoveredSingleton]) -> String {
     var lines: [String] = []
     lines.append("topological order (\(order.count) singleton(s)):")
     if order.isEmpty {
@@ -235,7 +235,7 @@ public func renderTopologicalOrder(_ order: [DiscoveredSingleton]) -> String {
 
 /// Render skipped singletons (generic types deferred to iteration 3) as
 /// a short notice, suppressed entirely when none were skipped.
-public func renderSkipped(_ skipped: [DiscoveredSingleton]) -> String {
+package func renderSkipped(_ skipped: [DiscoveredSingleton]) -> String {
     guard !skipped.isEmpty else { return "" }
     var lines: [String] = []
     lines.append("skipped (generic types — concrete substitution lands in iteration 3):")
@@ -249,7 +249,7 @@ public func renderSkipped(_ skipped: [DiscoveredSingleton]) -> String {
 /// Render validation errors as a multi-line message suitable for stderr.
 /// Cycles come first (graph-shape problems take precedence over
 /// missing-binding problems), then missing bindings.
-public func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> String {
+package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> String {
     var lines: [String] = []
 
     if !errors.cycles.isEmpty {

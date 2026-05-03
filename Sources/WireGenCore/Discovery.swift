@@ -6,14 +6,14 @@ import SwiftSyntax
 /// One `@Singleton`-annotated type found in a source file, with the
 /// dependency declaration extracted from either an `@Inject`-marked init
 /// or from `@Inject` stored properties on the type.
-public struct DiscoveredSingleton: Sendable {
-    public let typeName: String
-    public let typeKind: String
-    public let genericParameterNames: [String]
-    public let dependencies: [DependencyParameter]
-    public let sourcePath: String
+package struct DiscoveredSingleton: Sendable {
+    package let typeName: String
+    package let typeKind: String
+    package let genericParameterNames: [String]
+    package let dependencies: [DependencyParameter]
+    package let sourcePath: String
 
-    public init(
+    package init(
         typeName: String,
         typeKind: String,
         genericParameterNames: [String],
@@ -37,19 +37,19 @@ public struct DiscoveredSingleton: Sendable {
 /// where the call site omits the label entirely. Property-based
 /// injection always produces a concrete label (the property name);
 /// only `@Inject init(_ x: Foo)` produces a `nil` name.
-public struct DependencyParameter: Sendable {
-    public let name: String?
-    public let type: String
-    public let kind: DependencyKind
+package struct DependencyParameter: Sendable {
+    package let name: String?
+    package let type: String
+    package let kind: DependencyKind
 
-    public init(name: String?, type: String, kind: DependencyKind) {
+    package init(name: String?, type: String, kind: DependencyKind) {
         self.name = name
         self.type = type
         self.kind = kind
     }
 }
 
-public enum DependencyKind: Sendable, Equatable {
+package enum DependencyKind: Sendable, Equatable {
     case injectProperty
     case injectInitParameter
 }
@@ -60,7 +60,7 @@ public enum DependencyKind: Sendable, Equatable {
 /// contains, with dependencies extracted via the same priority rule as
 /// `SingletonMacro` (an `@Inject`-marked init's parameter list takes
 /// precedence over `@Inject` stored properties).
-public func discoverSingletons(
+package func discoverSingletons(
     in source: String,
     sourcePath: String
 ) -> [DiscoveredSingleton] {
@@ -73,7 +73,7 @@ public func discoverSingletons(
 /// Render a human-readable summary of `@Singleton` discoveries grouped
 /// by source file. Files with no discoveries are omitted to keep the
 /// report scannable.
-public func renderDiscoveryReport(
+package func renderDiscoveryReport(
     perFile: [(path: String, items: [DiscoveredSingleton])]
 ) -> String {
     var lines: [String] = []
