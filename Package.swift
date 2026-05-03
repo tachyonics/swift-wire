@@ -28,6 +28,9 @@ let package = Package(
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
         ),
+        .executableTarget(
+            name: "WireGen"
+        ),
         .testTarget(
             name: "WireMacrosImplTests",
             dependencies: [
