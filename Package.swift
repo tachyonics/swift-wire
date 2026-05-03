@@ -28,12 +28,16 @@ let package = Package(
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
         ),
-        .executableTarget(
-            name: "WireGen",
+        .target(
+            name: "WireGenCore",
             dependencies: [
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftParser", package: "swift-syntax"),
             ]
+        ),
+        .executableTarget(
+            name: "WireGen",
+            dependencies: ["WireGenCore"]
         ),
         .testTarget(
             name: "WireMacrosImplTests",
@@ -41,6 +45,10 @@ let package = Package(
                 "WireMacrosImpl",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
             ]
+        ),
+        .testTarget(
+            name: "WireGenCoreTests",
+            dependencies: ["WireGenCore"]
         ),
     ]
 )
