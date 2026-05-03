@@ -1,37 +1,64 @@
 // MARK: - Graph result
 
 /// The outcome of running graph construction over a set of discovered
-/// singletons. Captures the topological order (used by sitting 4's code
-/// emission), any singletons skipped from analysis (generic types, which
-/// require iteration 3's specialisation work), and any validation errors
-/// found.
+/// singletons. Models the success/failure split as an enum so consumers
+/// can't accidentally read a topological order from a graph that had
+/// cycles, or check `hasErrors` and forget to handle the success path.
+///
+/// `skipped` lives at the top level alongside `outcome` because it's
+/// informational (generic singletons deferred to iteration 3's
+/// specialisation work) and reported the same way regardless of whether
+/// the rest of the graph validated cleanly.
 public struct GraphResult: Sendable {
-    /// Singletons in dependency-first order — every singleton appears
-    /// after all the singletons it depends on. When `cycles` is empty,
-    /// this is a valid ordering for the sitting 4 bootstrap. When cycles
-    /// exist, the ordering is best-effort (cycle members are still
-    /// listed but their relative order isn't meaningful).
-    public let topologicalOrder: [DiscoveredSingleton]
-
-    /// Singletons skipped from graph construction. At sitting 3 this is
-    /// limited to generic singletons — concrete-type substitution lives
-    /// in iteration 3's strict-on-ambiguity work and isn't ready yet.
-    /// Skipped singletons aren't validated against the rest of the graph.
+    public let outcome: Outcome
     public let skipped: [DiscoveredSingleton]
 
-    /// Cycles detected during topological sort. Each entry is the path
-    /// `A → B → … → A`, with the repeating endpoint listed twice so the
-    /// path reads naturally.
-    public let cycles: [[DiscoveredSingleton]]
+    public init(outcome: Outcome, skipped: [DiscoveredSingleton]) {
+        self.outcome = outcome
+        self.skipped = skipped
+    }
 
-    /// Dependencies whose declared type doesn't match any discovered
-    /// `@Singleton` in the graph. At sitting 3 this is the only way a
-    /// dependency can be unresolved — `@Provides` (iteration 2) and
-    /// adapter annotations (M3+) provide further resolution paths later.
-    public let missingBindings: [MissingBinding]
+    /// Either a valid topological order (the graph constructs cleanly)
+    /// or a bundle of validation errors that prevented sorting.
+    public enum Outcome: Sendable {
+        case success(topologicalOrder: [DiscoveredSingleton])
+        case validationFailed(ValidationErrors)
+    }
 
-    public var hasErrors: Bool {
-        !cycles.isEmpty || !missingBindings.isEmpty
+    /// Bundles the validation errors found during graph construction.
+    /// Both lists may be non-empty simultaneously — a graph can have
+    /// both cycles and missing bindings — and we report all of them so
+    /// the user fixes the whole shape in one pass rather than one
+    /// problem per iteration.
+    public struct ValidationErrors: Sendable {
+        public let cycles: [[DiscoveredSingleton]]
+        public let missingBindings: [MissingBinding]
+
+        public init(
+            cycles: [[DiscoveredSingleton]],
+            missingBindings: [MissingBinding]
+        ) {
+            self.cycles = cycles
+            self.missingBindings = missingBindings
+        }
+    }
+}
+
+extension GraphResult.Outcome {
+    /// The topological order, if this outcome is `.success`. `nil`
+    /// otherwise — using `nil` rather than an empty array makes the
+    /// either/or shape of the outcome explicit at the type level. Tests
+    /// can `try #require(outcome.topologicalOrder)` to extract cleanly.
+    public var topologicalOrder: [DiscoveredSingleton]? {
+        if case .success(let order) = self { return order }
+        return nil
+    }
+
+    /// The validation errors, if this outcome is `.validationFailed`.
+    /// `nil` otherwise.
+    public var validationErrors: GraphResult.ValidationErrors? {
+        if case .validationFailed(let errors) = self { return errors }
+        return nil
     }
 }
 
@@ -101,12 +128,19 @@ public func buildDependencyGraph(
         edges: dependencyEdges
     )
 
-    return GraphResult(
-        topologicalOrder: sortResult.order,
-        skipped: skipped,
-        cycles: sortResult.cycles,
-        missingBindings: missingBindings
-    )
+    let outcome: GraphResult.Outcome
+    if sortResult.cycles.isEmpty && missingBindings.isEmpty {
+        outcome = .success(topologicalOrder: sortResult.order)
+    } else {
+        outcome = .validationFailed(
+            GraphResult.ValidationErrors(
+                cycles: sortResult.cycles,
+                missingBindings: missingBindings
+            )
+        )
+    }
+
+    return GraphResult(outcome: outcome, skipped: skipped)
 }
 
 // MARK: - Topological sort
@@ -124,8 +158,9 @@ private enum VisitState {
 ///
 /// When cycles are present, the order is best-effort — cycle members
 /// still appear in it, but their relative order isn't meaningful.
-/// Callers should treat a non-empty `cycles` as a validation failure
-/// regardless of what the order looks like.
+/// `buildDependencyGraph` discards this best-effort order via the enum
+/// outcome when validation errors exist; the order is only surfaced on
+/// success.
 private func topologicalSort(
     nodes: [String: DiscoveredSingleton],
     edges: [String: [String]]
@@ -205,31 +240,30 @@ public func renderSkipped(_ skipped: [DiscoveredSingleton]) -> String {
     var lines: [String] = []
     lines.append("skipped (generic types — concrete substitution lands in iteration 3):")
     for singleton in skipped {
-        let generics =
-            "<\(singleton.genericParameterNames.joined(separator: ", "))>"
+        let generics = "<\(singleton.genericParameterNames.joined(separator: ", "))>"
         lines.append("  \(singleton.typeName)\(generics)")
     }
     return lines.joined(separator: "\n")
 }
 
-/// Render any validation errors as a multi-line message suitable for
-/// stderr. Cycles come first (graph-shape problems take precedence over
+/// Render validation errors as a multi-line message suitable for stderr.
+/// Cycles come first (graph-shape problems take precedence over
 /// missing-binding problems), then missing bindings.
-public func renderValidationErrors(_ result: GraphResult) -> String {
+public func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> String {
     var lines: [String] = []
 
-    if !result.cycles.isEmpty {
+    if !errors.cycles.isEmpty {
         lines.append("error: dependency cycle(s) detected:")
-        for cycle in result.cycles {
+        for cycle in errors.cycles {
             let path = cycle.map { $0.typeName }.joined(separator: " → ")
             lines.append("  \(path)")
         }
     }
 
-    if !result.missingBindings.isEmpty {
+    if !errors.missingBindings.isEmpty {
         if !lines.isEmpty { lines.append("") }
         lines.append("error: missing binding(s):")
-        for missing in result.missingBindings {
+        for missing in errors.missingBindings {
             lines.append(
                 "  \(missing.consumer.typeName) needs \(missing.dependency.name): \(missing.dependency.type) — no @Singleton matches '\(missing.dependency.type)'"
             )

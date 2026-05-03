@@ -66,19 +66,18 @@ struct WireGen {
             print(skippedReport)
         }
 
-        // 4. Validation errors → stderr + non-zero exit.
-        if graphResult.hasErrors {
+        // 4. Either-or: success prints topological order; failure writes
+        //    validation errors to stderr and exits non-zero.
+        switch graphResult.outcome {
+        case .success(let topologicalOrder):
+            print("")
+            print(renderTopologicalOrder(topologicalOrder))
+        case .validationFailed(let errors):
             FileHandle.standardError.write(Data("\n".utf8))
-            FileHandle.standardError.write(
-                Data(renderValidationErrors(graphResult).utf8)
-            )
+            FileHandle.standardError.write(Data(renderValidationErrors(errors).utf8))
             FileHandle.standardError.write(Data("\n".utf8))
             exit(1)
         }
-
-        // 5. Success — print topological order.
-        print("")
-        print(renderTopologicalOrder(graphResult.topologicalOrder))
 
         // 6. Write the placeholder _WireGraph.swift. Real emission lands in
         // sitting 4 — the build plugin still wants an output file regardless
