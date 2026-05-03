@@ -188,29 +188,34 @@ final class SingletonDiscovery: SyntaxVisitor {
     private func extractDependencies(
         from members: MemberBlockItemListSyntax
     ) -> [DependencyParameter] {
-        // Prefer @Inject init when one exists.
-        for member in members {
-            guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { continue }
-            guard hasAttribute(initDecl.attributes, named: "Inject") else { continue }
-            return initDecl.signature.parameterClause.parameters.map { parameter in
-                let name = parameterName(parameter)
-                return DependencyParameter(
-                    name: name,
-                    type: parameter.type.trimmedDescription,
-                    kind: .injectInitParameter
-                )
-            }
-        }
+        // Single pass: collect both candidate dependency lists. Choose at
+        // the end based on the same priority rule as `SingletonMacro`:
+        // an `@Inject`-marked init's parameter list takes precedence over
+        // `@Inject` properties.
+        var injectInitDependencies: [DependencyParameter]?
+        var propertyDependencies: [DependencyParameter] = []
 
-        // Otherwise collect from @Inject stored properties, in declaration order.
-        var deps: [DependencyParameter] = []
         for member in members {
+            if let initDecl = member.decl.as(InitializerDeclSyntax.self) {
+                if hasAttribute(initDecl.attributes, named: "Inject") {
+                    injectInitDependencies = initDecl.signature.parameterClause.parameters.map {
+                        parameter in
+                        DependencyParameter(
+                            name: parameterName(parameter),
+                            type: parameter.type.trimmedDescription,
+                            kind: .injectInitParameter
+                        )
+                    }
+                }
+                continue
+            }
+
             guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
             guard hasAttribute(varDecl.attributes, named: "Inject") else { continue }
             for binding in varDecl.bindings {
                 guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
                 guard let typeAnnotation = binding.typeAnnotation else { continue }
-                deps.append(
+                propertyDependencies.append(
                     DependencyParameter(
                         name: pattern.identifier.text,
                         type: typeAnnotation.type.trimmedDescription,
@@ -219,7 +224,8 @@ final class SingletonDiscovery: SyntaxVisitor {
                 )
             }
         }
-        return deps
+
+        return injectInitDependencies ?? propertyDependencies
     }
 
     /// The parameter's "internal" name — the one used inside the function
