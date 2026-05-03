@@ -66,29 +66,25 @@ public struct SingletonMacro: MemberMacro {
             throw SingletonMacroError.unsupportedDeclaration
         }
 
-        let userInits = collectUserInits(in: declaration)
-        let markedInits = userInits.filter { $0.hasInjectAttribute }
-        let injectionPoints = collectInjectionPoints(in: declaration)
-        let hasUserKey = hasUserProvidedKey(in: declaration)
+        let analysis = analyseDeclaration(declaration)
+        let markedInits = analysis.userInits.filter { $0.hasInjectAttribute }
 
         diagnoseInitialiserConfiguration(
-            userInits: userInits,
+            analysis: analysis,
             markedInits: markedInits,
-            injectionPoints: injectionPoints,
-            in: declaration,
             context: context
         )
 
         var members: [DeclSyntax] = []
 
-        if userInits.isEmpty {
-            members.append(renderInit(typeInfo: typeInfo, injectionPoints: injectionPoints))
+        if analysis.userInits.isEmpty {
+            members.append(renderInit(typeInfo: typeInfo, injectionPoints: analysis.injectionPoints))
         }
         // else: skip init generation. The marked init (or the user's
-        // unmarked init that's about to be flagged by validation above) is
-        // the source of truth.
+        // unmarked init that's about to be flagged by validation) is the
+        // source of truth.
 
-        if !hasUserKey {
+        if !analysis.hasUserKey {
             // The key's type identity is `Self` via `nameWithGenerics`, so
             // it automatically refers to the correct generic instantiation.
             let keyDecl: DeclSyntax = """
@@ -108,19 +104,116 @@ public struct SingletonMacro: MemberMacro {
         let hasInjectAttribute: Bool
     }
 
-    /// Collect every `init` the user has written on the primary
-    /// declaration (extensions are invisible to the macro — see the type's
-    /// doc comment).
-    private static func collectUserInits(in declaration: some DeclGroupSyntax) -> [UserInitInfo] {
-        declaration.memberBlock.members.compactMap { member -> UserInitInfo? in
-            guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { return nil }
-            let hasInject = initDecl.attributes.hasAttribute(named: "Inject")
-            return UserInitInfo(initDecl: initDecl, hasInjectAttribute: hasInject)
-        }
+    /// One injection point on the host type — the parameter the synthesised
+    /// init takes for a given `@Inject` property.
+    private struct InjectionPoint {
+        let name: String
+        let type: String
     }
 
-    /// Walk the user's initialiser/property configuration and emit any
-    /// Wire-specific diagnostics for invalid combinations.
+    /// One non-`@Inject`, non-static stored property whose binding has no
+    /// default value and isn't computed — i.e. the synthesised init won't
+    /// know how to set it. Captured by the analysis pass for later
+    /// diagnosis.
+    private struct UninitialisedProperty {
+        let binding: PatternBindingSyntax
+        let name: String
+    }
+
+    /// Everything `expansion` and `diagnoseInitialiserConfiguration` need
+    /// to know about the primary declaration. Built by a single pass over
+    /// the member list so the rest of the macro never has to re-walk.
+    private struct DeclarationAnalysis {
+        var userInits: [UserInitInfo] = []
+        var injectionPoints: [InjectionPoint] = []
+        var hasUserKey: Bool = false
+        var uninitialisedStoredProperties: [UninitialisedProperty] = []
+    }
+
+    /// Walk the primary declaration's members exactly once and bucket
+    /// them into the pieces the macro needs: user-provided initialisers
+    /// (with their `@Inject` flag), `@Inject` stored-property injection
+    /// points, presence of a user-supplied `static key`, and stored
+    /// properties the synthesised init won't initialise.
+    ///
+    /// Subsequent validation and generation operate on the returned
+    /// analysis without re-walking. Extensions are invisible to the macro
+    /// — see the type's doc comment.
+    private static func analyseDeclaration(
+        _ declaration: some DeclGroupSyntax
+    ) -> DeclarationAnalysis {
+        var analysis = DeclarationAnalysis()
+
+        for member in declaration.memberBlock.members {
+            if let initDecl = member.decl.as(InitializerDeclSyntax.self) {
+                let hasInject = initDecl.attributes.hasAttribute(named: "Inject")
+                analysis.userInits.append(
+                    UserInitInfo(initDecl: initDecl, hasInjectAttribute: hasInject)
+                )
+                continue
+            }
+
+            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
+
+            let isStatic = varDecl.modifiers.contains {
+                ["static", "class"].contains($0.name.text)
+            }
+            let hasInject = varDecl.attributes.hasAttribute(named: "Inject")
+
+            if isStatic {
+                // Static properties don't take part in instance init. The
+                // only thing we care about is whether one of them is the
+                // user-supplied `key`.
+                for binding in varDecl.bindings {
+                    if binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "key" {
+                        analysis.hasUserKey = true
+                        break
+                    }
+                }
+                continue
+            }
+
+            if hasInject {
+                // Each binding under an `@Inject var` becomes one
+                // injection point — `@Inject var a, b: Dep` is two points.
+                for binding in varDecl.bindings {
+                    guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else {
+                        continue
+                    }
+                    guard let typeAnnotation = binding.typeAnnotation else { continue }
+                    analysis.injectionPoints.append(
+                        InjectionPoint(
+                            name: pattern.identifier.text,
+                            type: typeAnnotation.type.trimmedDescription
+                        )
+                    )
+                }
+                continue
+            }
+
+            // Non-`@Inject`, non-static stored property: each binding has
+            // to be initialised somehow. Computed (accessor block) and
+            // defaulted (initializer clause) bindings are fine; anything
+            // else is captured for later diagnosis.
+            for binding in varDecl.bindings {
+                if binding.accessorBlock != nil { continue }
+                if binding.initializer != nil { continue }
+
+                let propName =
+                    binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+                    ?? binding.pattern.trimmedDescription
+
+                analysis.uninitialisedStoredProperties.append(
+                    UninitialisedProperty(binding: binding, name: propName)
+                )
+            }
+        }
+
+        return analysis
+    }
+
+    /// Emit Wire-specific diagnostics for invalid combinations of
+    /// `@Inject` placements found in the analysis.
     ///
     /// The three @Inject-related checks are mutually exclusive on the
     /// configurations they fire for, so at most one set of init-related
@@ -130,15 +223,13 @@ public struct SingletonMacro: MemberMacro {
     /// - `@Inject` on both an init and a stored property.
     ///
     /// Plus an unrelated check that runs only when Wire is generating the
-    /// init: stored properties that the synthesised init won't initialise.
-    /// When the user provides their own init, Swift's "didn't initialise
-    /// all properties" diagnostic fires at their init site if anything's
+    /// init: stored properties the synthesised init won't initialise. When
+    /// the user provides their own init, Swift's "didn't initialise all
+    /// properties" diagnostic fires at their init site if anything's
     /// missed, which is clearer than Wire reporting it here.
     private static func diagnoseInitialiserConfiguration(
-        userInits: [UserInitInfo],
+        analysis: DeclarationAnalysis,
         markedInits: [UserInitInfo],
-        injectionPoints: [InjectionPoint],
-        in declaration: some DeclGroupSyntax,
         context: some MacroExpansionContext
     ) {
         if markedInits.count > 1 {
@@ -150,10 +241,10 @@ public struct SingletonMacro: MemberMacro {
                     )
                 )
             }
-        } else if markedInits.isEmpty && !userInits.isEmpty {
+        } else if markedInits.isEmpty && !analysis.userInits.isEmpty {
             // User provided init(s) but none marked @Inject. Wire can't
             // pick one; require the user to mark exactly one.
-            for userInit in userInits {
+            for userInit in analysis.userInits {
                 context.diagnose(
                     Diagnostic(
                         node: Syntax(userInit.initDecl),
@@ -161,7 +252,7 @@ public struct SingletonMacro: MemberMacro {
                     )
                 )
             }
-        } else if markedInits.count == 1 && !injectionPoints.isEmpty {
+        } else if markedInits.count == 1 && !analysis.injectionPoints.isEmpty {
             // @Inject on init AND stored property. The marked init's
             // parameters are the dependency declaration; @Inject on
             // properties duplicates that information ambiguously.
@@ -173,107 +264,19 @@ public struct SingletonMacro: MemberMacro {
             )
         }
 
-        if userInits.isEmpty {
-            diagnoseUninitialisedStoredProperties(in: declaration, context: context)
-        }
-    }
-
-    /// `true` if the host type declares a `static let key` (or `static var`)
-    /// — typically for naming the binding with a specific identifier.
-    private static func hasUserProvidedKey(in declaration: some DeclGroupSyntax) -> Bool {
-        declaration.memberBlock.members.contains { member in
-            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { return false }
-            let isStatic = varDecl.modifiers.contains { ["static", "class"].contains($0.name.text) }
-            guard isStatic else { return false }
-            return varDecl.bindings.contains { binding in
-                binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "key"
+        if analysis.userInits.isEmpty {
+            for property in analysis.uninitialisedStoredProperties {
+                context.diagnose(
+                    Diagnostic(
+                        node: Syntax(property.binding),
+                        message: WireDiagnostic.uninitialisedStoredProperty(name: property.name)
+                    )
+                )
             }
         }
     }
 
     // MARK: - Helpers
-
-    /// One injection point on the host type — the parameter the synthesised
-    /// init takes for a given `@Inject` property.
-    private struct InjectionPoint {
-        let name: String
-        let type: String
-    }
-
-    /// Find every `@Inject`-attributed stored property on the type and
-    /// produce one `InjectionPoint` per binding declared.
-    private static func collectInjectionPoints(in declaration: some DeclGroupSyntax) -> [InjectionPoint] {
-        var points: [InjectionPoint] = []
-
-        for member in declaration.memberBlock.members {
-            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
-            guard varDecl.attributes.hasAttribute(named: "Inject") else { continue }
-
-            for binding in varDecl.bindings {
-                guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
-                guard let typeAnnotation = binding.typeAnnotation else { continue }
-                points.append(
-                    InjectionPoint(
-                        name: pattern.identifier.text,
-                        type: typeAnnotation.type.trimmedDescription
-                    )
-                )
-            }
-        }
-
-        return points
-    }
-
-    /// Walk stored properties looking for ones the synthesised init won't
-    /// know how to initialise: no `@Inject`, no default value, not a
-    /// computed property, not `static`. Emit a Wire-specific diagnostic at
-    /// each so the user gets a clear remedy at the offending property
-    /// rather than Swift's "stored property requires explicit initializer"
-    /// pointing at the synthesised init.
-    private static func diagnoseUninitialisedStoredProperties(
-        in declaration: some DeclGroupSyntax,
-        context: some MacroExpansionContext
-    ) {
-        for member in declaration.memberBlock.members {
-            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
-
-            // `static`/`class` properties live on the type, not the instance —
-            // they don't need to be initialised by the synthesised init.
-            if varDecl.modifiers.contains(where: { ["static", "class"].contains($0.name.text) }) {
-                continue
-            }
-
-            // `@Inject` properties become init parameters; they're handled
-            // separately. (A property with both a default and `@Inject` is
-            // still treated as `@Inject`; the default is shadowed by the
-            // injected value. That's pointless but not invalid.)
-            if varDecl.attributes.hasAttribute(named: "Inject") {
-                continue
-            }
-
-            for binding in varDecl.bindings {
-                // Computed property — fine, no init storage needed.
-                if binding.accessorBlock != nil {
-                    continue
-                }
-                // Has a default value — fine, init doesn't need to set it.
-                if binding.initializer != nil {
-                    continue
-                }
-
-                let propName =
-                    binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
-                    ?? binding.pattern.trimmedDescription
-
-                context.diagnose(
-                    Diagnostic(
-                        node: Syntax(binding),
-                        message: WireDiagnostic.uninitialisedStoredProperty(name: propName)
-                    )
-                )
-            }
-        }
-    }
 
     /// Render the synthesised init from the collected injection points.
     private static func renderInit(typeInfo: HostTypeInfo, injectionPoints: [InjectionPoint]) -> DeclSyntax {

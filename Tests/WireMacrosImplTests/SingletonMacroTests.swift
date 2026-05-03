@@ -689,6 +689,62 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
+    // MARK: - Unsupported declarations
+
+    func test_singletonOnEnum_throwsUnsupportedDeclarationError() {
+        // `@Singleton` only applies to struct/class/actor. Applying it to
+        // an enum causes the macro to throw `SingletonMacroError.unsupportedDeclaration`,
+        // which the macro framework surfaces as a diagnostic at the
+        // attribute site.
+        assertMacroExpansion(
+            """
+            @Singleton
+            enum A {
+                case b
+            }
+            """,
+            expandedSource: """
+                enum A {
+                    case b
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Singleton can only be applied to a struct, class, or actor.",
+                    line: 1,
+                    column: 1,
+                    severity: .error
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    func test_singletonOnProtocol_throwsUnsupportedDeclarationError() {
+        assertMacroExpansion(
+            """
+            @Singleton
+            protocol A {
+                func b()
+            }
+            """,
+            expandedSource: """
+                protocol A {
+                    func b()
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Singleton can only be applied to a struct, class, or actor.",
+                    line: 1,
+                    column: 1,
+                    severity: .error
+                )
+            ],
+            macros: macros
+        )
+    }
+
     func test_singletonAllowsInjectParameterlessInit() {
         // @Inject init() {} is the explicit "construct A() with no
         // dependencies" form. Equivalent in behaviour to the no-user-init
