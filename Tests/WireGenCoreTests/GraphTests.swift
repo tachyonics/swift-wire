@@ -206,4 +206,89 @@ struct GraphTests {
             forwardOrder.map { $0.typeName } == reversedOrder.map { $0.typeName }
         )
     }
+
+    // MARK: - renderTopologicalOrder
+
+    @Test func renderTopologicalOrderEmptyShowsEmptyNotice() {
+        let report = renderTopologicalOrder([])
+        #expect(report.contains("topological order (0 singleton(s))"))
+        #expect(report.contains("(graph is empty)"))
+    }
+
+    @Test func renderTopologicalOrderNumbersEachEntry() {
+        let report = renderTopologicalOrder([singleton("First"), singleton("Second")])
+        #expect(report.contains("topological order (2 singleton(s))"))
+        #expect(report.contains("1. First"))
+        #expect(report.contains("2. Second"))
+    }
+
+    // MARK: - renderSkipped
+
+    @Test func renderSkippedEmptyReturnsEmptyString() {
+        // Suppression so the CLI doesn't print an empty section header
+        // when there are no generic singletons.
+        #expect(renderSkipped([]).isEmpty)
+    }
+
+    @Test func renderSkippedRendersGenericParameters() {
+        let report = renderSkipped([
+            singleton("Repository", generics: ["Model"]),
+            singleton("Pair", generics: ["Left", "Right"]),
+        ])
+        #expect(report.contains("Repository<Model>"))
+        #expect(report.contains("Pair<Left, Right>"))
+    }
+
+    // MARK: - renderValidationErrors
+
+    @Test func renderValidationErrorsCyclesOnly() {
+        let errors = GraphResult.ValidationErrors(
+            cycles: [[singleton("A"), singleton("B"), singleton("A")]],
+            missingBindings: []
+        )
+        let report = renderValidationErrors(errors)
+        #expect(report.contains("dependency cycle"))
+        #expect(report.contains("A → B → A"))
+        #expect(!report.contains("missing binding"))
+    }
+
+    @Test func renderValidationErrorsMissingBindingsOnly() {
+        let consumer = singleton("A")
+        let dep = DependencyParameter(name: "x", type: "Missing", kind: .injectProperty)
+        let errors = GraphResult.ValidationErrors(
+            cycles: [],
+            missingBindings: [MissingBinding(consumer: consumer, dependency: dep)]
+        )
+        let report = renderValidationErrors(errors)
+        #expect(report.contains("missing binding"))
+        #expect(report.contains("A needs x: Missing"))
+        #expect(!report.contains("cycle"))
+    }
+
+    @Test func renderValidationErrorsBothCyclesAndMissingBindings() {
+        // Exercises the blank-line separator between the two error
+        // sections that gets inserted only when both are present.
+        let consumer = singleton("A")
+        let dep = DependencyParameter(name: "x", type: "Missing", kind: .injectProperty)
+        let errors = GraphResult.ValidationErrors(
+            cycles: [[singleton("A"), singleton("B"), singleton("A")]],
+            missingBindings: [MissingBinding(consumer: consumer, dependency: dep)]
+        )
+        let report = renderValidationErrors(errors)
+        #expect(report.contains("dependency cycle"))
+        #expect(report.contains("missing binding"))
+    }
+
+    @Test func renderValidationErrorsMultipleCyclesEachOnItsOwnLine() {
+        let errors = GraphResult.ValidationErrors(
+            cycles: [
+                [singleton("A"), singleton("B"), singleton("A")],
+                [singleton("C"), singleton("D"), singleton("C")],
+            ],
+            missingBindings: []
+        )
+        let report = renderValidationErrors(errors)
+        #expect(report.contains("A → B → A"))
+        #expect(report.contains("C → D → C"))
+    }
 }

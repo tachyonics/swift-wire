@@ -176,4 +176,136 @@ struct DiscoveryTests {
         #expect(result.count == 2)
         #expect(Set(result.map { $0.typeName }) == ["A", "B"])
     }
+
+    // MARK: - Parameter name edge cases
+
+    @Test func injectInitWithWildcardParameterLabel() {
+        // `init(_ a: A)` — wildcard external label, internal name "a".
+        let source = """
+            @Singleton
+            struct X {
+                @Inject
+                init(_ a: A) {
+                }
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "X.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].name == "a")
+        #expect(result[0].dependencies[0].type == "A")
+    }
+
+    @Test func injectInitWithExternalAndInternalLabels() {
+        // `init(label internalName: A)` — both first and second name set.
+        // The internal name is what's used in the init body and the one
+        // we capture as the dependency name.
+        let source = """
+            @Singleton
+            struct X {
+                @Inject
+                init(label internalName: A) {
+                }
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "X.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies[0].name == "internalName")
+    }
+
+    @Test func injectPropertyWithoutTypeAnnotationIsSkipped() {
+        // `@Inject var x = SomeFactory.make()` — type-inferred property.
+        // The macro would normally reject this; WireGen is downstream of
+        // that and takes a best-effort posture: a property without a
+        // type annotation can't be turned into an injection point.
+        let source = """
+            @Singleton
+            struct X {
+                @Inject var x = 5
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "X.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.isEmpty)
+    }
+
+    // MARK: - renderDiscoveryReport
+
+    @Test func discoveryReportHeaderAndCountWithEmptyInput() {
+        let report = renderDiscoveryReport(perFile: [])
+        #expect(report.contains("WireGen discovery report"))
+        #expect(report.contains("discovered 0 @Singleton type(s) across 0 source file(s)"))
+    }
+
+    @Test func discoveryReportSkipsFilesWithNoSingletons() {
+        // Files that contained no @Singletons should not appear in the
+        // report body; they still count toward "source file(s)" though.
+        let item = DiscoveredSingleton(
+            typeName: "A",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [],
+            sourcePath: "Found.swift"
+        )
+        let report = renderDiscoveryReport(perFile: [
+            (path: "Empty.swift", items: []),
+            (path: "Found.swift", items: [item]),
+        ])
+        #expect(!report.contains("Empty.swift"))
+        #expect(report.contains("Found.swift"))
+        #expect(report.contains("discovered 1 @Singleton type(s) across 2 source file(s)"))
+    }
+
+    @Test func discoveryReportRendersGenerics() {
+        let item = DiscoveredSingleton(
+            typeName: "Repository",
+            typeKind: "struct",
+            genericParameterNames: ["Model"],
+            dependencies: [],
+            sourcePath: "R.swift"
+        )
+        let report = renderDiscoveryReport(perFile: [(path: "R.swift", items: [item])])
+        #expect(report.contains("@Singleton struct Repository<Model>"))
+    }
+
+    @Test func discoveryReportRendersInjectPropertyDependency() {
+        let item = DiscoveredSingleton(
+            typeName: "A",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [
+                DependencyParameter(name: "b", type: "B", kind: .injectProperty)
+            ],
+            sourcePath: "A.swift"
+        )
+        let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
+        #expect(report.contains("b: B"))
+        #expect(report.contains("@Inject property"))
+    }
+
+    @Test func discoveryReportRendersInjectInitParameterDependency() {
+        let item = DiscoveredSingleton(
+            typeName: "A",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [
+                DependencyParameter(name: "b", type: "B", kind: .injectInitParameter)
+            ],
+            sourcePath: "A.swift"
+        )
+        let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
+        #expect(report.contains("@Inject init parameter"))
+    }
+
+    @Test func discoveryReportShowsNoDependenciesNoticeWhenEmpty() {
+        let item = DiscoveredSingleton(
+            typeName: "A",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [],
+            sourcePath: "A.swift"
+        )
+        let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
+        #expect(report.contains("(no dependencies)"))
+    }
 }
