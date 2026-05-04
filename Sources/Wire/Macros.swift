@@ -1,7 +1,8 @@
 // Public-facing macro declarations.
 //
-// At M1 only `@Singleton` and `@Inject` ship. `@RequestScope`, `@JobScope`,
-// `@Container`, `@Provides`, `@Contributes` arrive in subsequent iterations.
+// The currently shipping surface is `@Singleton` and `@Inject`.
+// `@RequestScope`, `@JobScope`, `@Container`, `@Provides`, and
+// `@Contributes` are planned for later milestones.
 
 /// Declares a process-lifetime singleton. The macro generates:
 /// - A `static let key: BindingKey<Self>` for the auto-generated key.
