@@ -31,13 +31,34 @@ The smallest end-to-end pipeline. Highest-risk integration first: if anything in
 
 Lets the test app inject framework primitives (`Logger`, configuration, etc.) that aren't `@Singleton` types.
 
-**Scope:**
-- `@Provides` macro on module-scope `let` and `func` declarations
-- `@Provides` macro inside `@Container` enums
-- `@Container` macro
-- Build plugin aggregates `@Provides` declarations alongside `@Singleton` types
+Split into two sub-milestones. `@Container` introduces a binding-selection mechanism whose design questions are independent of `@Provides` discovery, and a half-done `@Container` (binding discovery without selection) would be a worse user experience than no `@Container` at all.
 
-**Validation gate:** test app with `@Provides let logger = Logger(label: "test")` at module scope, consumed by a `@Singleton` via `@Inject`. Same with a `@Container` enum holding multiple `@Provides`.
+### Iteration 2a — module-scope `@Provides`
+
+**Scope:**
+- `@Provides` macro on:
+  - Module-scope `let` and `func` declarations
+  - `static let` and `static func` members of any enclosing type (struct, class, enum, actor) that is *not* `@Container`-annotated
+- Build plugin aggregates `@Provides` declarations alongside `@Singleton` types into the default graph
+- Function-form `@Provides` contributes parameter dependencies; property-form contributes none
+
+**Out of scope:** `@Container` macro and container selection. The `@Container` identifier is unrecognized in 2a — if a consumer writes it, it parses as a plain enum and Wire ignores it.
+
+**Why static members of non-`@Container` types count as module-scope:** the caseless-enum-as-namespace pattern is a Swift idiom unrelated to DI semantics. Refusing to recognize `@Provides` on `static` members would force a stylistic choice ("must be at file scope") with no DI rationale. Semantically a `@Provides` is part of the default graph unless its enclosing type is `@Container`; the enclosing type is otherwise just an access-path detail (`AppConfig.logger` vs. `logger`).
+
+**Validation gate:** test app with `@Provides let logger = Logger(label: "test")` at module scope, consumed by a `@Singleton` via `@Inject`. Same scenario with the binding declared as `static let` on a non-`@Container` enum used as a namespace. `@Provides func` form (with parameter dependencies) covered by an additional fixture.
+
+### Iteration 2b — `@Container` with selection
+
+**Scope:**
+- `@Container` macro
+- Build plugin discovers `@Provides` inside `@Container` enums separately from module-scope `@Provides`
+- Selected-container bootstrap: when a `@Container` is named at the entry point, that container's `@Provides` are the graph for that run (module-scope `@Provides` are not merged in), per the README's "selection is atomic" rule
+- Default `bootstrap()` (no container) continues to use only module-scope `@Provides`
+
+**Open design question:** how the selected-bootstrap is shaped — an overload per container (`bootstrap(container: TestContainer.Type)`), a separately generated struct per container (`_TestContainerWireGraph`), or a single bootstrap that takes a container selector. Decide when starting 2b based on what the `@Container` discovery code actually needs from the call site.
+
+**Validation gate:** test app with a `@Container` enum holding multiple `@Provides`; selecting the container at the entry point produces a graph with the container's bindings (and `@Singleton`s); module-scope `@Provides` are not merged in. Default `bootstrap()` (no container) still works using only module-scope `@Provides`. Multiple `@Container`s in the same target produce a collision error per the README.
 
 ## Iteration 3 — validation diagnostics
 
@@ -147,7 +168,7 @@ Tail-end work scope-bounded by what earlier iterations surfaced.
 
 Don't migrate task-cluster all at once at iteration 9. Migrate incrementally as Wire features become available:
 
-- After iteration 2: replace task-cluster's manual `Logger` and `InMemoryDynamoDBCompositePrimaryKeyTable` wiring with `@Provides`. The repository and controller stay manually constructed.
+- After iteration 2a: replace task-cluster's manual `Logger` and `InMemoryDynamoDBCompositePrimaryKeyTable` wiring with module-scope `@Provides`. The repository and controller stay manually constructed.
 - After iteration 3: confirm the migration's diagnostics behave well (introduce a deliberate missing binding, fix it, see the diagnostic improvement work in real time).
 - After iteration 5: if any task-cluster behaviour benefits from `@Contributes` (e.g., a list of middleware), migrate it.
 - After iteration 7: if task-cluster's library targets exercise multi-module composition meaningfully, validate against them.
