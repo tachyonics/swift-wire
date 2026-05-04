@@ -56,5 +56,10 @@ let package = Package(
             name: "WireGenCoreTests",
             dependencies: ["WireGenCore"]
         ),
+        .testTarget(
+            name: "IntegrationTests",
+            dependencies: ["Wire"],
+            plugins: [.plugin(name: "WireBuildPlugin")]
+        ),
     ]
 )
