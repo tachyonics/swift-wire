@@ -181,8 +181,8 @@ struct DiscoveryTests {
 
     @Test func injectInitWithWildcardParameterLabel() {
         // `init(_ a: A)` — wildcard external label. Wire captures `nil`
-        // for the name so the type system forces sitting 4's codegen
-        // to handle the "omit the label" case explicitly, rather than
+        // for the name so the type system forces code emission to
+        // handle the "omit the label" case explicitly, rather than
         // sneaking through as a `"_"` sentinel that downstream might
         // accidentally emit literally.
         let source = """

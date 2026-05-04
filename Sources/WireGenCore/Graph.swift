@@ -6,9 +6,9 @@
 /// cycles, or check `hasErrors` and forget to handle the success path.
 ///
 /// `skipped` lives at the top level alongside `outcome` because it's
-/// informational (generic singletons deferred to iteration 3's
-/// specialisation work) and reported the same way regardless of whether
-/// the rest of the graph validated cleanly.
+/// informational (generic singletons are deferred until concrete
+/// specialisation is implemented) and reported the same way regardless
+/// of whether the rest of the graph validated cleanly.
 package struct GraphResult: Sendable {
     package let outcome: Outcome
     package let skipped: [DiscoveredSingleton]
@@ -84,8 +84,8 @@ package struct MissingBinding: Sendable {
 /// Generic singletons (those with one or more generic parameters) are
 /// excluded from the graph. Their dependencies typically reference
 /// generic type parameters rather than concrete types, which the
-/// sitting 3 graph can't resolve cleanly. Concrete substitution arrives
-/// in iteration 3.
+/// type-name-keyed graph can't resolve cleanly. Concrete specialisation
+/// is deferred until a separate substitution pass is implemented.
 package func buildDependencyGraph(
     from singletons: [DiscoveredSingleton]
 ) -> GraphResult {
@@ -218,8 +218,9 @@ private func topologicalSort(
 
 // MARK: - Rendering
 
-/// Render the topological order as a numbered list — what sitting 4's
-/// code generation will iterate over to emit the bootstrap.
+/// Render the topological order as a numbered human-readable list,
+/// suitable for diagnostics and the discovery report. The same order
+/// is what code emission iterates over to construct each binding.
 package func renderTopologicalOrder(_ order: [DiscoveredSingleton]) -> String {
     var lines: [String] = []
     lines.append("topological order (\(order.count) singleton(s)):")
@@ -233,12 +234,13 @@ package func renderTopologicalOrder(_ order: [DiscoveredSingleton]) -> String {
     return lines.joined(separator: "\n")
 }
 
-/// Render skipped singletons (generic types deferred to iteration 3) as
-/// a short notice, suppressed entirely when none were skipped.
+/// Render skipped singletons (generic types pending concrete
+/// specialisation support) as a short notice, suppressed entirely when
+/// none were skipped.
 package func renderSkipped(_ skipped: [DiscoveredSingleton]) -> String {
     guard !skipped.isEmpty else { return "" }
     var lines: [String] = []
-    lines.append("skipped (generic types — concrete substitution lands in iteration 3):")
+    lines.append("skipped (generic types — concrete specialisation not yet supported):")
     for singleton in skipped {
         let generics = "<\(singleton.genericParameterNames.joined(separator: ", "))>"
         lines.append("  \(singleton.typeName)\(generics)")

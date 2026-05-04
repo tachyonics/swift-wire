@@ -136,8 +136,8 @@ package func renderDiscoveryReport(
 /// Validation (multiple `@Inject` inits, mixing init+property `@Inject`,
 /// etc.) is the macro's job and fires during the consumer's compilation.
 /// WireGen is downstream of that and assumes the inputs are well-formed
-/// enough to discover; mismatches surface at construction-time codegen
-/// in sittings 3–4.
+/// enough to discover; remaining shape problems (cycles, missing
+/// bindings) surface during graph construction.
 final class SingletonDiscovery: SyntaxVisitor {
     var discovered: [DiscoveredSingleton] = []
     private let sourcePath: String
@@ -245,7 +245,7 @@ final class SingletonDiscovery: SyntaxVisitor {
     }
 
     /// The parameter's external label — what callers write at the call
-    /// site. Sitting 4's bootstrap emits `Type(label: resolvedValue)`
+    /// site. The generated bootstrap emits `Type(label: resolvedValue)`
     /// calls and needs the label.
     ///
     /// Returns `nil` for wildcard (`_`) labels so the call site is told
