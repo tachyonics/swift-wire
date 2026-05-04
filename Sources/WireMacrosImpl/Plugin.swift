@@ -6,5 +6,6 @@ struct WireMacrosPlugin: CompilerPlugin {
     let providingMacros: [Macro.Type] = [
         SingletonMacro.self,
         InjectMacro.self,
+        ProvidesMacro.self,
     ]
 }
