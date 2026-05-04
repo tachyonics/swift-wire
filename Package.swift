@@ -8,7 +8,8 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "Wire", targets: ["Wire"])
+        .library(name: "Wire", targets: ["Wire"]),
+        .plugin(name: "WireBuildPlugin", targets: ["WireBuildPlugin"]),
     ],
     dependencies: [
         // Pin from M0/Spike 4. Resolves to swift-syntax 601.0.1 on Swift 6.3.x.
@@ -38,6 +39,11 @@ let package = Package(
         .executableTarget(
             name: "WireGen",
             dependencies: ["WireGenCore"]
+        ),
+        .plugin(
+            name: "WireBuildPlugin",
+            capability: .buildTool(),
+            dependencies: ["WireGen"]
         ),
         .testTarget(
             name: "WireMacrosImplTests",
