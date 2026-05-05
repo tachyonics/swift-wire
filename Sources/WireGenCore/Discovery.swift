@@ -3,6 +3,59 @@ import SwiftSyntax
 
 // MARK: - Discovery model
 
+/// One binding the build plugin found in source — either a `@Singleton`
+/// type whose construction Wire owns, or a `@Provides`-declared property
+/// or function the user wrote to supply a value.
+///
+/// The graph algorithm operates uniformly on `DiscoveredBinding`. The
+/// kind only matters at code emission, where the construction call
+/// shape differs (`Type(args)` vs `accessPath` vs `accessPath(args)`).
+package enum DiscoveredBinding: Sendable {
+    case singleton(DiscoveredSingleton)
+    case provider(DiscoveredProvider)
+}
+
+extension DiscoveredBinding {
+    /// The fully-qualified type the binding produces. For `@Singleton`
+    /// this is the type's name; for `@Provides` this is the property
+    /// type or the function return type.
+    package var boundType: String {
+        switch self {
+        case .singleton(let singleton): return singleton.typeName
+        case .provider(let provider): return provider.boundType
+        }
+    }
+
+    /// The dependencies the binding needs to be constructed —
+    /// `@Inject` parameters/properties for `@Singleton`, function
+    /// parameters for `@Provides func`, and empty for `@Provides let`.
+    package var dependencies: [DependencyParameter] {
+        switch self {
+        case .singleton(let singleton): return singleton.dependencies
+        case .provider(let provider): return provider.dependencies
+        }
+    }
+
+    /// Generic-parameter names declared on the binding — for `@Singleton`
+    /// the type's generic parameters, for `@Provides func` the
+    /// function's. Used by the graph to skip bindings that can't be
+    /// resolved without a separate concrete-specialisation pass (not
+    /// yet implemented).
+    package var genericParameterNames: [String] {
+        switch self {
+        case .singleton(let singleton): return singleton.genericParameterNames
+        case .provider(let provider): return provider.genericParameterNames
+        }
+    }
+
+    package var sourcePath: String {
+        switch self {
+        case .singleton(let singleton): return singleton.sourcePath
+        case .provider(let provider): return provider.sourcePath
+        }
+    }
+}
+
 /// One `@Singleton`-annotated type found in a source file, with the
 /// dependency declaration extracted from either an `@Inject`-marked init
 /// or from `@Inject` stored properties on the type.
@@ -25,6 +78,47 @@ package struct DiscoveredSingleton: Sendable {
         self.genericParameterNames = genericParameterNames
         self.dependencies = dependencies
         self.sourcePath = sourcePath
+    }
+}
+
+/// One `@Provides`-declared binding — either a property (no
+/// dependencies) or a function whose parameters become its
+/// dependencies. Lives at module scope or as a `static` member of any
+/// non-`@Container` enclosing type (struct, class, enum, actor).
+///
+/// The `accessPath` is what the generated bootstrap writes after the
+/// module qualifier — `logger` for a top-level `let logger`, or
+/// `Config.dbURL` for a `static let dbURL` on `enum Config`. Nested
+/// enclosing types are joined with `.` (e.g., `Outer.Inner.foo`).
+package struct DiscoveredProvider: Sendable {
+    package let boundType: String
+    package let accessPath: String
+    package let form: Form
+    package let dependencies: [DependencyParameter]
+    package let genericParameterNames: [String]
+    package let sourcePath: String
+
+    package init(
+        boundType: String,
+        accessPath: String,
+        form: Form,
+        dependencies: [DependencyParameter],
+        genericParameterNames: [String],
+        sourcePath: String
+    ) {
+        self.boundType = boundType
+        self.accessPath = accessPath
+        self.form = form
+        self.dependencies = dependencies
+        self.genericParameterNames = genericParameterNames
+        self.sourcePath = sourcePath
+    }
+
+    /// Whether the binding source is a property (read its value directly)
+    /// or a function (call it with resolved arguments).
+    package enum Form: Sendable, Equatable {
+        case property
+        case function
     }
 }
 
@@ -52,29 +146,32 @@ package struct DependencyParameter: Sendable {
 package enum DependencyKind: Sendable, Equatable {
     case injectProperty
     case injectInitParameter
+    case providerFunctionParameter
 }
 
 // MARK: - Top-level entry points
 
-/// Parse one source file and return every `@Singleton`-annotated type it
-/// contains, with dependencies extracted via the same priority rule as
-/// `SingletonMacro` (an `@Inject`-marked init's parameter list takes
-/// precedence over `@Inject` stored properties).
-package func discoverSingletons(
+/// Parse one source file and return every `@Singleton` and `@Provides`
+/// binding it contains. Singletons follow the same priority rule as
+/// `SingletonMacro` for dependencies (an `@Inject`-marked init's
+/// parameter list takes precedence over `@Inject` stored properties).
+/// Providers come from module-scope `let`/`func` declarations and from
+/// `static let`/`static func` members of enclosing types.
+package func discoverBindings(
     in source: String,
     sourcePath: String
-) -> [DiscoveredSingleton] {
+) -> [DiscoveredBinding] {
     let syntaxTree = Parser.parse(source: source)
-    let visitor = SingletonDiscovery(sourcePath: sourcePath)
+    let visitor = BindingDiscovery(sourcePath: sourcePath)
     visitor.walk(syntaxTree)
-    return visitor.discovered
+    return visitor.bindings
 }
 
-/// Render a human-readable summary of `@Singleton` discoveries grouped
-/// by source file. Files with no discoveries are omitted to keep the
+/// Render a human-readable summary of bindings discovered grouped by
+/// source file. Files with no discoveries are omitted to keep the
 /// report scannable.
 package func renderDiscoveryReport(
-    perFile: [(path: String, items: [DiscoveredSingleton])]
+    perFile: [(path: String, items: [DiscoveredBinding])]
 ) -> String {
     var lines: [String] = []
     lines.append("WireGen discovery report")
@@ -88,67 +185,118 @@ package func renderDiscoveryReport(
         lines.append("\(path):")
         for item in items {
             totalCount += 1
-            let generics =
-                item.genericParameterNames.isEmpty
-                ? ""
-                : "<\(item.genericParameterNames.joined(separator: ", "))>"
-            lines.append("  @Singleton \(item.typeKind) \(item.typeName)\(generics)")
-            if item.dependencies.isEmpty {
-                lines.append("    (no dependencies)")
-            } else {
-                for dep in item.dependencies {
-                    let kindLabel: String
-                    switch dep.kind {
-                    case .injectProperty: kindLabel = "@Inject property"
-                    case .injectInitParameter: kindLabel = "@Inject init parameter"
-                    }
-                    // For wildcard-label parameters, render as `_` since
-                    // that's the Swift source-level representation. The
-                    // sentinel character only appears in human-facing
-                    // output here; codegen receives the actual `nil`.
-                    let displayName = dep.name ?? "_"
-                    lines.append("    \(displayName): \(dep.type)   (\(kindLabel))")
-                }
+            switch item {
+            case .singleton(let singleton):
+                renderSingleton(singleton, into: &lines)
+            case .provider(let provider):
+                renderProvider(provider, into: &lines)
             }
         }
         lines.append("")
     }
 
     lines.append(
-        "discovered \(totalCount) @Singleton type(s) across \(sourceFileCount) source file(s)"
+        "discovered \(totalCount) binding(s) across \(sourceFileCount) source file(s)"
     )
 
     return lines.joined(separator: "\n")
 }
 
+private func renderSingleton(_ item: DiscoveredSingleton, into lines: inout [String]) {
+    let generics =
+        item.genericParameterNames.isEmpty
+        ? ""
+        : "<\(item.genericParameterNames.joined(separator: ", "))>"
+    lines.append("  @Singleton \(item.typeKind) \(item.typeName)\(generics)")
+    if item.dependencies.isEmpty {
+        lines.append("    (no dependencies)")
+    } else {
+        for dep in item.dependencies {
+            lines.append("    \(dependencyLine(dep))")
+        }
+    }
+}
+
+private func renderProvider(_ item: DiscoveredProvider, into lines: inout [String]) {
+    let generics =
+        item.genericParameterNames.isEmpty
+        ? ""
+        : "<\(item.genericParameterNames.joined(separator: ", "))>"
+    let formLabel: String
+    switch item.form {
+    case .property: formLabel = "let"
+    case .function: formLabel = "func"
+    }
+    lines.append(
+        "  @Provides \(formLabel) \(item.accessPath)\(generics) -> \(item.boundType)"
+    )
+    if item.dependencies.isEmpty {
+        lines.append("    (no dependencies)")
+    } else {
+        for dep in item.dependencies {
+            lines.append("    \(dependencyLine(dep))")
+        }
+    }
+}
+
+private func dependencyLine(_ dep: DependencyParameter) -> String {
+    let kindLabel: String
+    switch dep.kind {
+    case .injectProperty: kindLabel = "@Inject property"
+    case .injectInitParameter: kindLabel = "@Inject init parameter"
+    case .providerFunctionParameter: kindLabel = "@Provides function parameter"
+    }
+    // Wildcard-label parameters render as `_` to match the source-level
+    // form. The sentinel only appears in human-facing output here;
+    // codegen receives the actual `nil` from `DependencyParameter.name`.
+    let displayName = dep.name ?? "_"
+    return "\(displayName): \(dep.type)   (\(kindLabel))"
+}
+
 // MARK: - Discovery visitor
 
-/// Walks a parsed source tree looking for `@Singleton`-annotated types.
-/// For each, captures the type's name, generic parameter list, and
-/// dependencies in declaration-order.
+/// Walks a parsed source tree looking for `@Singleton`-annotated types
+/// and `@Provides`-annotated declarations. For each, captures the data
+/// the graph and code emission need: bound type, dependencies, source
+/// location, and (for providers) the access path under the consumer's
+/// module.
 ///
-/// Dependency source preference matches `SingletonMacro`'s rule:
-/// 1. If the type has an `@Inject`-marked initialiser, dependencies come
-///    from that initialiser's parameter list.
+/// Dependency source preference for `@Singleton` matches
+/// `SingletonMacro`'s rule:
+/// 1. If the type has an `@Inject`-marked initialiser, dependencies
+///    come from that initialiser's parameter list.
 /// 2. Otherwise, dependencies come from `@Inject`-marked stored
 ///    properties in declaration order.
 ///
-/// Validation (multiple `@Inject` inits, mixing init+property `@Inject`,
-/// etc.) is the macro's job and fires during the consumer's compilation.
-/// WireGen is downstream of that and assumes the inputs are well-formed
-/// enough to discover; remaining shape problems (cycles, missing
-/// bindings) surface during graph construction.
-final class SingletonDiscovery: SyntaxVisitor {
-    var discovered: [DiscoveredSingleton] = []
+/// `@Provides` recognised positions:
+/// - Module-scope `let`/`var` and `func` declarations
+/// - `static let`/`static var` and `static func` members of any
+///   enclosing type (struct, class, enum, actor)
+///
+/// Other positions (instance members, locals inside functions) are
+/// silently ignored. The macro itself is a marker — the validation
+/// happens in the build plugin's discovery (which simply doesn't see
+/// them) and in the consumer's compiler errors if they `@Inject` a
+/// dependency no binding satisfies.
+final class BindingDiscovery: SyntaxVisitor {
+    var bindings: [DiscoveredBinding] = []
     private let sourcePath: String
+    /// Stack of enclosing type names — top of stack is the immediate
+    /// enclosing type. Used to compute `accessPath` for static
+    /// `@Provides` members of nested types.
+    private var enclosingTypes: [String] = []
 
     init(sourcePath: String) {
         self.sourcePath = sourcePath
         super.init(viewMode: .sourceAccurate)
     }
 
+    // MARK: Type decls — push/pop the enclosing-type stack and process
+    // `@Singleton` if applicable.
+
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
-        process(
+        enclosingTypes.append(node.name.text)
+        processSingleton(
             typeKind: "struct",
             name: node.name.text,
             generics: node.genericParameterClause,
@@ -157,9 +305,13 @@ final class SingletonDiscovery: SyntaxVisitor {
         )
         return .visitChildren
     }
+    override func visitPost(_ node: StructDeclSyntax) {
+        enclosingTypes.removeLast()
+    }
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
-        process(
+        enclosingTypes.append(node.name.text)
+        processSingleton(
             typeKind: "class",
             name: node.name.text,
             generics: node.genericParameterClause,
@@ -168,9 +320,13 @@ final class SingletonDiscovery: SyntaxVisitor {
         )
         return .visitChildren
     }
+    override func visitPost(_ node: ClassDeclSyntax) {
+        enclosingTypes.removeLast()
+    }
 
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
-        process(
+        enclosingTypes.append(node.name.text)
+        processSingleton(
             typeKind: "actor",
             name: node.name.text,
             generics: node.genericParameterClause,
@@ -179,8 +335,57 @@ final class SingletonDiscovery: SyntaxVisitor {
         )
         return .visitChildren
     }
+    override func visitPost(_ node: ActorDeclSyntax) {
+        enclosingTypes.removeLast()
+    }
 
-    private func process(
+    override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+        // Enums can't be `@Singleton` (no stored properties to inject)
+        // but can host `@Provides static` members — the canonical
+        // caseless-enum-as-namespace pattern.
+        enclosingTypes.append(node.name.text)
+        return .visitChildren
+    }
+    override func visitPost(_ node: EnumDeclSyntax) {
+        enclosingTypes.removeLast()
+    }
+
+    // MARK: `@Provides` on variables and functions.
+
+    override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
+        if hasAttribute(node.attributes, named: "Provides"),
+            isAtRecognisedProvidesPosition(modifiers: node.modifiers)
+        {
+            extractProvidesProperty(node)
+        }
+        return .skipChildren
+    }
+
+    override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
+        if hasAttribute(node.attributes, named: "Provides"),
+            isAtRecognisedProvidesPosition(modifiers: node.modifiers)
+        {
+            extractProvidesFunction(node)
+        }
+        return .skipChildren
+    }
+
+    // MARK: Helpers
+
+    /// `@Provides` is only recognised at module scope or as a `static`
+    /// member of an enclosing type. Instance members and locals inside
+    /// function bodies are silently skipped.
+    private func isAtRecognisedProvidesPosition(modifiers: DeclModifierListSyntax) -> Bool {
+        if enclosingTypes.isEmpty {
+            // Top-level — no `static` keyword expected.
+            return true
+        }
+        return modifiers.contains { modifier in
+            modifier.name.tokenKind == .keyword(.static)
+        }
+    }
+
+    private func processSingleton(
         typeKind: String,
         name: String,
         generics: GenericParameterClauseSyntax?,
@@ -189,25 +394,86 @@ final class SingletonDiscovery: SyntaxVisitor {
     ) {
         guard hasAttribute(attributes, named: "Singleton") else { return }
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
-        let dependencies = extractDependencies(from: members)
-        discovered.append(
-            DiscoveredSingleton(
-                typeName: name,
-                typeKind: typeKind,
-                genericParameterNames: genericParameterNames,
-                dependencies: dependencies,
-                sourcePath: sourcePath
+        let dependencies = extractInjectDependencies(from: members)
+        bindings.append(
+            .singleton(
+                DiscoveredSingleton(
+                    typeName: name,
+                    typeKind: typeKind,
+                    genericParameterNames: genericParameterNames,
+                    dependencies: dependencies,
+                    sourcePath: sourcePath
+                )
             )
         )
     }
 
-    private func extractDependencies(
+    private func extractProvidesProperty(_ node: VariableDeclSyntax) {
+        // Multi-binding declarations (`let a = 1, b = 2`) are skipped:
+        // they're a rare style and supporting them complicates the
+        // `accessPath` story for no real-world gain.
+        guard node.bindings.count == 1, let binding = node.bindings.first else { return }
+        guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { return }
+        guard let typeAnnotation = binding.typeAnnotation else {
+            // Type-inferred properties can't be turned into bindings —
+            // the build plugin can't run type inference. Same posture
+            // as `@Inject` properties without annotations.
+            return
+        }
+        let propertyName = pattern.identifier.text
+        let accessPath = (enclosingTypes + [propertyName]).joined(separator: ".")
+        bindings.append(
+            .provider(
+                DiscoveredProvider(
+                    boundType: typeAnnotation.type.trimmedDescription,
+                    accessPath: accessPath,
+                    form: .property,
+                    dependencies: [],
+                    genericParameterNames: [],
+                    sourcePath: sourcePath
+                )
+            )
+        )
+    }
+
+    private func extractProvidesFunction(_ node: FunctionDeclSyntax) {
+        guard let returnClause = node.signature.returnClause else {
+            // Void-returning `@Provides func` produces nothing
+            // injectable. Silently skip.
+            return
+        }
+        let functionName = node.name.text
+        let accessPath = (enclosingTypes + [functionName]).joined(separator: ".")
+        let dependencies = node.signature.parameterClause.parameters.map { parameter in
+            DependencyParameter(
+                name: parameterName(parameter),
+                type: parameter.type.trimmedDescription,
+                kind: .providerFunctionParameter
+            )
+        }
+        let genericParameterNames =
+            node.genericParameterClause?.parameters.map { $0.name.text } ?? []
+        bindings.append(
+            .provider(
+                DiscoveredProvider(
+                    boundType: returnClause.type.trimmedDescription,
+                    accessPath: accessPath,
+                    form: .function,
+                    dependencies: dependencies,
+                    genericParameterNames: genericParameterNames,
+                    sourcePath: sourcePath
+                )
+            )
+        )
+    }
+
+    private func extractInjectDependencies(
         from members: MemberBlockItemListSyntax
     ) -> [DependencyParameter] {
-        // Single pass: collect both candidate dependency lists. Choose at
-        // the end based on the same priority rule as `SingletonMacro`:
-        // an `@Inject`-marked init's parameter list takes precedence over
-        // `@Inject` properties.
+        // Single pass: collect both candidate dependency lists. Choose
+        // at the end based on the same priority rule as
+        // `SingletonMacro`: an `@Inject`-marked init's parameter list
+        // takes precedence over `@Inject` properties.
         var injectInitDependencies: [DependencyParameter]?
         var propertyDependencies: [DependencyParameter] = []
 
