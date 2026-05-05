@@ -150,8 +150,8 @@ private func sanitizeIdentifier(_ raw: String) -> String {
             if char.isLetter || char.isNumber || char == "_" {
                 result.append(char)
             }
-            // Everything else (whitespace, `>`, `?`, `!`, `[`, `]`,
-            // `&`, `:`, `.`, `(`, `)`, `->`) is dropped silently.
+        // Everything else (whitespace, `>`, `?`, `!`, `[`, `]`,
+        // `&`, `:`, `.`, `(`, `)`, `->`) is dropped silently.
         }
     }
     return result
