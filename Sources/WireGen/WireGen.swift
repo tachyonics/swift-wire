@@ -13,26 +13,33 @@ import WireGenCore
 ///
 /// CLI shape:
 ///
-///     WireGen <output-path> [source-files...]
+///     WireGen <output-path> <module-name> [source-files...]
+///
+/// The module name is the consumer's SPM target name. Code emission
+/// uses it to qualify every reference to a user-supplied symbol on the
+/// RHS of constructed locals (`Module.someProvider`, `Module.SomeType(…)`),
+/// avoiding the recursive-shadow case where a module-scope `@Provides
+/// let X` would collide with a local of the same name.
 @main
 struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
 
-        guard arguments.count >= 2 else {
+        guard arguments.count >= 3 else {
             FileHandle.standardError.write(
                 Data(
-                    "error: WireGen requires at least an output path argument.\n".utf8
+                    "error: WireGen requires an output path and a module name.\n".utf8
                 )
             )
             FileHandle.standardError.write(
-                Data("usage: WireGen <output-path> [source-files...]\n".utf8)
+                Data("usage: WireGen <output-path> <module-name> [source-files...]\n".utf8)
             )
             exit(1)
         }
 
         let outputPath = arguments[1]
-        let sourcePaths = Array(arguments.dropFirst(2))
+        let moduleName = arguments[2]
+        let sourcePaths = Array(arguments.dropFirst(3))
 
         // 1. Discover @Singleton and @Provides bindings across input sources.
         var perFileDiscovered: [(path: String, items: [DiscoveredBinding])] = []
@@ -53,13 +60,8 @@ struct WireGen {
         print(renderDiscoveryReport(perFile: perFileDiscovered))
 
         // 2. Build the dependency graph and run topo sort + validation.
-        // Singletons-only until B2 lands provider handling in the graph.
         let allBindings = perFileDiscovered.flatMap { $0.items }
-        let allSingletons = allBindings.compactMap { binding -> DiscoveredSingleton? in
-            if case .singleton(let singleton) = binding { return singleton }
-            return nil
-        }
-        let graphResult = buildDependencyGraph(from: allSingletons)
+        let graphResult = buildDependencyGraph(from: allBindings)
 
         // 3. Print skipped (generic) singletons if any — informational.
         let skippedReport = renderSkipped(graphResult.skipped)
@@ -76,7 +78,10 @@ struct WireGen {
             print("")
             print(renderTopologicalOrder(topologicalOrder))
 
-            let generated = renderWireGraph(topologicalOrder: topologicalOrder)
+            let generated = renderWireGraph(
+                moduleName: moduleName,
+                topologicalOrder: topologicalOrder
+            )
             try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
             print("wrote \(outputPath)")
         case .validationFailed(let errors):
