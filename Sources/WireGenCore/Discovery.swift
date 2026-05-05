@@ -15,47 +15,6 @@ package enum DiscoveredBinding: Sendable {
     case provider(DiscoveredProvider)
 }
 
-extension DiscoveredBinding {
-    /// The fully-qualified type the binding produces. For `@Singleton`
-    /// this is the type's name; for `@Provides` this is the property
-    /// type or the function return type.
-    package var boundType: String {
-        switch self {
-        case .singleton(let singleton): return singleton.typeName
-        case .provider(let provider): return provider.boundType
-        }
-    }
-
-    /// The dependencies the binding needs to be constructed —
-    /// `@Inject` parameters/properties for `@Singleton`, function
-    /// parameters for `@Provides func`, and empty for `@Provides let`.
-    package var dependencies: [DependencyParameter] {
-        switch self {
-        case .singleton(let singleton): return singleton.dependencies
-        case .provider(let provider): return provider.dependencies
-        }
-    }
-
-    /// Generic-parameter names declared on the binding — for `@Singleton`
-    /// the type's generic parameters, for `@Provides func` the
-    /// function's. Used by the graph to skip bindings that can't be
-    /// resolved without a separate concrete-specialisation pass (not
-    /// yet implemented).
-    package var genericParameterNames: [String] {
-        switch self {
-        case .singleton(let singleton): return singleton.genericParameterNames
-        case .provider(let provider): return provider.genericParameterNames
-        }
-    }
-
-    package var sourcePath: String {
-        switch self {
-        case .singleton(let singleton): return singleton.sourcePath
-        case .provider(let provider): return provider.sourcePath
-        }
-    }
-}
-
 /// One `@Singleton`-annotated type found in a source file, with the
 /// dependency declaration extracted from either an `@Inject`-marked init
 /// or from `@Inject` stored properties on the type.

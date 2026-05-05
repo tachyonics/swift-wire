@@ -387,6 +387,21 @@ struct DiscoveryTests {
         #expect(result[0].genericParameterNames == ["T"])
     }
 
+    @Test func providesOnVoidReturningFuncIsSkipped() {
+        // A `@Provides func` with no return clause produces nothing
+        // injectable. The build plugin silently skips it; the macro
+        // could later turn this into a diagnostic, but for now it's a
+        // no-op rather than a hard error.
+        let source = """
+            @Provides
+            func sideEffect() {
+                print("hello")
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.isEmpty)
+    }
+
     @Test func providesPreservesGenericInstantiationInBoundType() {
         // Concrete generic instantiations as the bound type are
         // supported (the codegen sanitisation handles them when
