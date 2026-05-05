@@ -4,6 +4,30 @@ import Testing
 
 @Suite("Discovery")
 struct DiscoveryTests {
+    /// Extract just the `@Singleton` bindings — preserves the
+    /// pre-`@Provides` shape of these tests, which assert on
+    /// `DiscoveredSingleton` fields directly.
+    private func discoverSingletons(
+        in source: String,
+        sourcePath: String
+    ) -> [DiscoveredSingleton] {
+        discoverBindings(in: source, sourcePath: sourcePath).compactMap { binding in
+            if case .singleton(let singleton) = binding { return singleton }
+            return nil
+        }
+    }
+
+    /// Extract just the `@Provides` bindings.
+    private func discoverProviders(
+        in source: String,
+        sourcePath: String
+    ) -> [DiscoveredProvider] {
+        discoverBindings(in: source, sourcePath: sourcePath).compactMap { binding in
+            if case .provider(let provider) = binding { return provider }
+            return nil
+        }
+    }
+
     @Test func emptySourceFindsNoSingletons() {
         let result = discoverSingletons(in: "", sourcePath: "Empty.swift")
         #expect(result.isEmpty)
@@ -235,23 +259,214 @@ struct DiscoveryTests {
         #expect(result[0].dependencies.isEmpty)
     }
 
+    // MARK: - @Provides discovery
+
+    @Test func providesOnTopLevelLetIsDiscovered() {
+        let source = """
+            @Provides let logger: Logger = Logger()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "Logger")
+        #expect(result[0].accessPath == "logger")
+        #expect(result[0].form == .property)
+        #expect(result[0].dependencies.isEmpty)
+        #expect(result[0].sourcePath == "App.swift")
+    }
+
+    @Test func providesOnTopLevelFuncWithoutParametersIsDiscovered() {
+        let source = """
+            @Provides
+            func makeLogger() -> Logger {
+                Logger()
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "Logger")
+        #expect(result[0].accessPath == "makeLogger")
+        #expect(result[0].form == .function)
+        #expect(result[0].dependencies.isEmpty)
+    }
+
+    @Test func providesOnTopLevelFuncWithParametersBecomesDependencies() {
+        let source = """
+            @Provides
+            func makeRepository(table: TaskTable, logger: Logger) -> Repository {
+                Repository(table: table, logger: logger)
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.count == 2)
+        #expect(result[0].dependencies[0].name == "table")
+        #expect(result[0].dependencies[0].type == "TaskTable")
+        #expect(result[0].dependencies[0].kind == .providerFunctionParameter)
+        #expect(result[0].dependencies[1].name == "logger")
+        #expect(result[0].dependencies[1].type == "Logger")
+    }
+
+    @Test func providesOnStaticLetCapturesEnclosingTypeInAccessPath() {
+        let source = """
+            enum Config {
+                @Provides static let dbURL: URL = URL(string: "...")!
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Config.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "URL")
+        #expect(result[0].accessPath == "Config.dbURL")
+        #expect(result[0].form == .property)
+    }
+
+    @Test func providesOnStaticFuncCapturesEnclosingTypeInAccessPath() {
+        let source = """
+            struct AppConfig {
+                @Provides
+                static func makeClient() -> HTTPClient {
+                    HTTPClient()
+                }
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "AppConfig.swift")
+        #expect(result.count == 1)
+        #expect(result[0].accessPath == "AppConfig.makeClient")
+        #expect(result[0].form == .function)
+    }
+
+    @Test func providesNestedInsideTypesProducesDottedAccessPath() {
+        // Caseless-enum-as-namespace pattern with nested namespacing.
+        // Access path joins enclosing types with `.`, just like Swift
+        // call-site syntax.
+        let source = """
+            enum Outer {
+                enum Inner {
+                    @Provides static let foo: Foo = Foo()
+                }
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "N.swift")
+        #expect(result.count == 1)
+        #expect(result[0].accessPath == "Outer.Inner.foo")
+    }
+
+    @Test func providesOnInstanceMemberIsSkipped() {
+        // Instance members have no resolvable construction path, so
+        // `@Provides` on them is silently ignored.
+        let source = """
+            struct AppConfig {
+                @Provides let logger: Logger = Logger()
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "AppConfig.swift")
+        #expect(result.isEmpty)
+    }
+
+    @Test func providesOnLetWithoutTypeAnnotationIsSkipped() {
+        // No type annotation → no resolvable bound type. Same posture
+        // as `@Inject` properties without annotations.
+        let source = """
+            @Provides let logger = Logger()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.isEmpty)
+    }
+
+    @Test func providesOnFuncCapturesGenericParameters() {
+        // Generic functions are skipped from the graph at construction
+        // time (deferred until concrete specialisation lands), but
+        // discovery captures the names so the skip can be reported.
+        let source = """
+            @Provides
+            func makeRepository<T: TaskTable>(table: T) -> Repository<T> {
+                Repository(table: table)
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].genericParameterNames == ["T"])
+    }
+
+    @Test func providesOnVoidReturningFuncIsSkipped() {
+        // A `@Provides func` with no return clause produces nothing
+        // injectable. The build plugin silently skips it; the macro
+        // could later turn this into a diagnostic, but for now it's a
+        // no-op rather than a hard error.
+        let source = """
+            @Provides
+            func sideEffect() {
+                print("hello")
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.isEmpty)
+    }
+
+    @Test func providesPreservesGenericInstantiationInBoundType() {
+        // Concrete generic instantiations as the bound type are
+        // supported (the codegen sanitisation handles them when
+        // building the property name).
+        let source = """
+            @Provides
+            func makeRepository(table: TaskTable)
+                -> DynamoDBRepository<TaskTable>
+            {
+                DynamoDBRepository(table: table)
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "DynamoDBRepository<TaskTable>")
+    }
+
+    @Test func mixedSingletonsAndProvidersInOneFile() {
+        let source = """
+            @Provides let logger: Logger = Logger()
+
+            @Singleton
+            struct UserService {
+                @Inject var logger: Logger
+            }
+
+            enum Config {
+                @Provides static let baseURL: URL = URL(string: "...")!
+            }
+            """
+        let bindings = discoverBindings(in: source, sourcePath: "Mixed.swift")
+        #expect(bindings.count == 3)
+        let singletons = bindings.compactMap { binding -> DiscoveredSingleton? in
+            if case .singleton(let s) = binding { return s }
+            return nil
+        }
+        let providers = bindings.compactMap { binding -> DiscoveredProvider? in
+            if case .provider(let p) = binding { return p }
+            return nil
+        }
+        #expect(singletons.count == 1)
+        #expect(singletons[0].typeName == "UserService")
+        #expect(providers.count == 2)
+        #expect(Set(providers.map { $0.accessPath }) == ["logger", "Config.baseURL"])
+    }
+
     // MARK: - renderDiscoveryReport
 
     @Test func discoveryReportHeaderAndCountWithEmptyInput() {
         let report = renderDiscoveryReport(perFile: [])
         #expect(report.contains("WireGen discovery report"))
-        #expect(report.contains("discovered 0 @Singleton type(s) across 0 source file(s)"))
+        #expect(report.contains("discovered 0 binding(s) across 0 source file(s)"))
     }
 
-    @Test func discoveryReportSkipsFilesWithNoSingletons() {
-        // Files that contained no @Singletons should not appear in the
+    @Test func discoveryReportSkipsFilesWithNoBindings() {
+        // Files that contained no bindings should not appear in the
         // report body; they still count toward "source file(s)" though.
-        let item = DiscoveredSingleton(
-            typeName: "A",
-            typeKind: "struct",
-            genericParameterNames: [],
-            dependencies: [],
-            sourcePath: "Found.swift"
+        let item: DiscoveredBinding = .singleton(
+            DiscoveredSingleton(
+                typeName: "A",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [],
+                sourcePath: "Found.swift"
+            )
         )
         let report = renderDiscoveryReport(perFile: [
             (path: "Empty.swift", items: []),
@@ -259,30 +474,34 @@ struct DiscoveryTests {
         ])
         #expect(!report.contains("Empty.swift"))
         #expect(report.contains("Found.swift"))
-        #expect(report.contains("discovered 1 @Singleton type(s) across 2 source file(s)"))
+        #expect(report.contains("discovered 1 binding(s) across 2 source file(s)"))
     }
 
-    @Test func discoveryReportRendersGenerics() {
-        let item = DiscoveredSingleton(
-            typeName: "Repository",
-            typeKind: "struct",
-            genericParameterNames: ["Model"],
-            dependencies: [],
-            sourcePath: "R.swift"
+    @Test func discoveryReportRendersSingletonGenerics() {
+        let item: DiscoveredBinding = .singleton(
+            DiscoveredSingleton(
+                typeName: "Repository",
+                typeKind: "struct",
+                genericParameterNames: ["Model"],
+                dependencies: [],
+                sourcePath: "R.swift"
+            )
         )
         let report = renderDiscoveryReport(perFile: [(path: "R.swift", items: [item])])
         #expect(report.contains("@Singleton struct Repository<Model>"))
     }
 
     @Test func discoveryReportRendersInjectPropertyDependency() {
-        let item = DiscoveredSingleton(
-            typeName: "A",
-            typeKind: "struct",
-            genericParameterNames: [],
-            dependencies: [
-                DependencyParameter(name: "b", type: "B", kind: .injectProperty)
-            ],
-            sourcePath: "A.swift"
+        let item: DiscoveredBinding = .singleton(
+            DiscoveredSingleton(
+                typeName: "A",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [
+                    DependencyParameter(name: "b", type: "B", kind: .injectProperty)
+                ],
+                sourcePath: "A.swift"
+            )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
         #expect(report.contains("b: B"))
@@ -290,26 +509,68 @@ struct DiscoveryTests {
     }
 
     @Test func discoveryReportRendersInjectInitParameterDependency() {
-        let item = DiscoveredSingleton(
-            typeName: "A",
-            typeKind: "struct",
-            genericParameterNames: [],
-            dependencies: [
-                DependencyParameter(name: "b", type: "B", kind: .injectInitParameter)
-            ],
-            sourcePath: "A.swift"
+        let item: DiscoveredBinding = .singleton(
+            DiscoveredSingleton(
+                typeName: "A",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [
+                    DependencyParameter(name: "b", type: "B", kind: .injectInitParameter)
+                ],
+                sourcePath: "A.swift"
+            )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
         #expect(report.contains("@Inject init parameter"))
     }
 
+    @Test func discoveryReportRendersProviderProperty() {
+        let item: DiscoveredBinding = .provider(
+            DiscoveredProvider(
+                boundType: "Logger",
+                accessPath: "logger",
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                sourcePath: "App.swift"
+            )
+        )
+        let report = renderDiscoveryReport(perFile: [(path: "App.swift", items: [item])])
+        #expect(report.contains("@Provides let logger -> Logger"))
+    }
+
+    @Test func discoveryReportRendersProviderFunctionWithParameters() {
+        let item: DiscoveredBinding = .provider(
+            DiscoveredProvider(
+                boundType: "Repository",
+                accessPath: "makeRepository",
+                form: .function,
+                dependencies: [
+                    DependencyParameter(
+                        name: "table",
+                        type: "TaskTable",
+                        kind: .providerFunctionParameter
+                    )
+                ],
+                genericParameterNames: [],
+                sourcePath: "App.swift"
+            )
+        )
+        let report = renderDiscoveryReport(perFile: [(path: "App.swift", items: [item])])
+        #expect(report.contains("@Provides func makeRepository -> Repository"))
+        #expect(report.contains("table: TaskTable"))
+        #expect(report.contains("@Provides function parameter"))
+    }
+
     @Test func discoveryReportShowsNoDependenciesNoticeWhenEmpty() {
-        let item = DiscoveredSingleton(
-            typeName: "A",
-            typeKind: "struct",
-            genericParameterNames: [],
-            dependencies: [],
-            sourcePath: "A.swift"
+        let item: DiscoveredBinding = .singleton(
+            DiscoveredSingleton(
+                typeName: "A",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [],
+                sourcePath: "A.swift"
+            )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
         #expect(report.contains("(no dependencies)"))

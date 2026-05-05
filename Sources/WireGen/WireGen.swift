@@ -34,8 +34,8 @@ struct WireGen {
         let outputPath = arguments[1]
         let sourcePaths = Array(arguments.dropFirst(2))
 
-        // 1. Discover @Singleton types across input sources.
-        var perFileDiscovered: [(path: String, items: [DiscoveredSingleton])] = []
+        // 1. Discover @Singleton and @Provides bindings across input sources.
+        var perFileDiscovered: [(path: String, items: [DiscoveredBinding])] = []
         for path in sourcePaths {
             let url = URL(fileURLWithPath: path)
             let source: String
@@ -47,14 +47,19 @@ struct WireGen {
                 )
                 exit(1)
             }
-            let items = discoverSingletons(in: source, sourcePath: path)
+            let items = discoverBindings(in: source, sourcePath: path)
             perFileDiscovered.append((path: path, items: items))
         }
         print(renderDiscoveryReport(perFile: perFileDiscovered))
 
         // 2. Build the dependency graph and run topo sort + validation.
-        let allDiscovered = perFileDiscovered.flatMap { $0.items }
-        let graphResult = buildDependencyGraph(from: allDiscovered)
+        // Singletons-only until B2 lands provider handling in the graph.
+        let allBindings = perFileDiscovered.flatMap { $0.items }
+        let allSingletons = allBindings.compactMap { binding -> DiscoveredSingleton? in
+            if case .singleton(let singleton) = binding { return singleton }
+            return nil
+        }
+        let graphResult = buildDependencyGraph(from: allSingletons)
 
         // 3. Print skipped (generic) singletons if any — informational.
         let skippedReport = renderSkipped(graphResult.skipped)
