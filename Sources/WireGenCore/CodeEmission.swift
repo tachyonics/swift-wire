@@ -146,12 +146,12 @@ private func sanitizeIdentifier(_ raw: String) -> String {
             result += "Of"
         case ",":
             result += "And"
+        case _ where char.isLetter || char.isNumber || char == "_":
+            result.append(char)
         default:
-            if char.isLetter || char.isNumber || char == "_" {
-                result.append(char)
-            }
-        // Everything else (whitespace, `>`, `?`, `!`, `[`, `]`,
-        // `&`, `:`, `.`, `(`, `)`, `->`) is dropped silently.
+            // Everything else (whitespace, `>`, `?`, `!`, `[`, `]`,
+            // `&`, `:`, `.`, `(`, `)`, `->`) is dropped silently.
+            break
         }
     }
     return result
