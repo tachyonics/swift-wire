@@ -448,6 +448,56 @@ struct DiscoveryTests {
         #expect(Set(providers.map { $0.accessPath }) == ["logger", "Config.baseURL"])
     }
 
+    // MARK: - discoverImports
+
+    @Test func discoverImportsFindsPlainImports() {
+        let source = """
+            import Foundation
+            import OSLog
+
+            @Provides let logger: Logger = Logger()
+            """
+        let imports = discoverImports(in: source)
+        #expect(imports == ["import Foundation", "import OSLog"])
+    }
+
+    @Test func discoverImportsPreservesAccessModifiersVerbatim() {
+        // @testable, @_implementationOnly, @preconcurrency, etc. need
+        // to be propagated verbatim — silently dropping them changes
+        // semantics in the generated file.
+        let source = """
+            import Foundation
+            @testable import Internals
+            @_implementationOnly import OSLog
+            """
+        let imports = discoverImports(in: source)
+        #expect(imports.contains("import Foundation"))
+        #expect(imports.contains("@testable import Internals"))
+        #expect(imports.contains("@_implementationOnly import OSLog"))
+    }
+
+    @Test func discoverImportsCapturesScopedImports() {
+        // `import struct Foundation.URL` form is supported by Swift
+        // and must be preserved as-is.
+        let source = """
+            import struct Foundation.URL
+            import func Foundation.exit
+            """
+        let imports = discoverImports(in: source)
+        #expect(imports.contains("import struct Foundation.URL"))
+        #expect(imports.contains("import func Foundation.exit"))
+    }
+
+    @Test func discoverImportsReturnsEmptyForFileWithNoImports() {
+        let source = """
+            @Singleton
+            struct A {
+            }
+            """
+        let imports = discoverImports(in: source)
+        #expect(imports.isEmpty)
+    }
+
     // MARK: - renderDiscoveryReport
 
     @Test func discoveryReportHeaderAndCountWithEmptyInput() {

@@ -3,46 +3,43 @@ import WireGenCore
 
 /// `WireGen` — code-generation executable invoked by the Wire build plugin.
 ///
-/// Thin CLI wrapper over `WireGenCore`. Discovers `@Singleton` types in
-/// the input source files, builds a dependency graph, runs topological
-/// sort with cycle detection and missing-binding detection, and on
-/// success emits `_WireGraph.swift` to the output path. On validation
-/// failure, writes the errors to stderr, exits non-zero, and writes no
-/// output file — the build plugin treats a missing output as a failed
-/// generation step.
+/// Thin CLI wrapper over `WireGenCore`. Discovers `@Singleton` and
+/// `@Provides` bindings in the input source files, builds a dependency
+/// graph, runs topological sort with cycle / missing-binding /
+/// duplicate-binding detection, and on success emits `_WireGraph.swift`
+/// to the output path. On validation failure, writes the errors to
+/// stderr, exits non-zero, and writes no output file — the build
+/// plugin treats a missing output as a failed generation step.
+///
+/// `import` declarations are propagated verbatim from input source
+/// files into the generated bootstrap so any types referenced by
+/// bindings remain in scope.
 ///
 /// CLI shape:
 ///
-///     WireGen <output-path> <module-name> [source-files...]
-///
-/// The module name is the consumer's SPM target name. Code emission
-/// uses it to qualify every reference to a user-supplied symbol on the
-/// RHS of constructed locals (`Module.someProvider`, `Module.SomeType(…)`),
-/// avoiding the recursive-shadow case where a module-scope `@Provides
-/// let X` would collide with a local of the same name.
+///     WireGen <output-path> [source-files...]
 @main
 struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
 
-        guard arguments.count >= 3 else {
+        guard arguments.count >= 2 else {
             FileHandle.standardError.write(
-                Data(
-                    "error: WireGen requires an output path and a module name.\n".utf8
-                )
+                Data("error: WireGen requires at least an output path argument.\n".utf8)
             )
             FileHandle.standardError.write(
-                Data("usage: WireGen <output-path> <module-name> [source-files...]\n".utf8)
+                Data("usage: WireGen <output-path> [source-files...]\n".utf8)
             )
             exit(1)
         }
 
         let outputPath = arguments[1]
-        let moduleName = arguments[2]
-        let sourcePaths = Array(arguments.dropFirst(3))
+        let sourcePaths = Array(arguments.dropFirst(2))
 
-        // 1. Discover @Singleton and @Provides bindings across input sources.
+        // 1. Discover @Singleton/@Provides bindings and `import`
+        //    declarations across input sources.
         var perFileDiscovered: [(path: String, items: [DiscoveredBinding])] = []
+        var allImports: [String] = []
         for path in sourcePaths {
             let url = URL(fileURLWithPath: path)
             let source: String
@@ -56,6 +53,7 @@ struct WireGen {
             }
             let items = discoverBindings(in: source, sourcePath: path)
             perFileDiscovered.append((path: path, items: items))
+            allImports.append(contentsOf: discoverImports(in: source))
         }
         print(renderDiscoveryReport(perFile: perFileDiscovered))
 
@@ -63,7 +61,7 @@ struct WireGen {
         let allBindings = perFileDiscovered.flatMap { $0.items }
         let graphResult = buildDependencyGraph(from: allBindings)
 
-        // 3. Print skipped (generic) singletons if any — informational.
+        // 3. Print skipped (generic) bindings if any — informational.
         let skippedReport = renderSkipped(graphResult.skipped)
         if !skippedReport.isEmpty {
             print("")
@@ -79,7 +77,7 @@ struct WireGen {
             print(renderTopologicalOrder(topologicalOrder))
 
             let generated = renderWireGraph(
-                moduleName: moduleName,
+                imports: allImports,
                 topologicalOrder: topologicalOrder
             )
             try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
