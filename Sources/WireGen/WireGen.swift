@@ -53,7 +53,10 @@ struct WireGen {
             }
             let items = discoverBindings(in: source, sourcePath: path)
             perFileDiscovered.append((path: path, items: items))
-            allImports.append(contentsOf: discoverImports(in: source))
+            // Only collect imports from files that contribute bindings.
+            if !items.isEmpty {
+                allImports.append(contentsOf: discoverImports(in: source))
+            }
         }
         print(renderDiscoveryReport(perFile: perFileDiscovered))
 
