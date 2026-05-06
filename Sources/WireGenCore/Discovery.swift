@@ -166,6 +166,19 @@ package func discoverBindings(
     return visitor.bindings
 }
 
+/// Parse one source file and return every `import` declaration found,
+/// captured verbatim (preserving access modifiers like
+/// `@_implementationOnly` / `@testable`). The build plugin unions
+/// these across input source files and emits them at the top of the
+/// generated `_WireGraph.swift` so any types referenced by bindings
+/// stay in scope.
+package func discoverImports(in source: String) -> [String] {
+    let syntaxTree = Parser.parse(source: source)
+    let visitor = BindingDiscovery(sourcePath: "")
+    visitor.walk(syntaxTree)
+    return visitor.imports
+}
+
 /// Render a human-readable summary of bindings discovered grouped by
 /// source file. Files with no discoveries are omitted to keep the
 /// report scannable.
@@ -279,6 +292,12 @@ private func dependencyLine(_ dep: DependencyParameter) -> String {
 /// dependency no binding satisfies.
 final class BindingDiscovery: SyntaxVisitor {
     var bindings: [DiscoveredBinding] = []
+    /// Verbatim `import` statements found in the source — captured for
+    /// propagation into the generated `_WireGraph.swift` so any types
+    /// referenced by discovered bindings stay in scope. Includes
+    /// `@_implementationOnly`, `@testable`, and other modifiers since
+    /// `trimmedDescription` preserves them.
+    var imports: [String] = []
     private let sourcePath: String
     /// Stack of enclosing type names — top of stack is the immediate
     /// enclosing type. Used to compute `accessPath` for static
@@ -288,6 +307,13 @@ final class BindingDiscovery: SyntaxVisitor {
     init(sourcePath: String) {
         self.sourcePath = sourcePath
         super.init(viewMode: .sourceAccurate)
+    }
+
+    // MARK: Import collection — verbatim text, no semantic analysis.
+
+    override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind {
+        imports.append(node.trimmedDescription)
+        return .skipChildren
     }
 
     // MARK: Type decls — push/pop the enclosing-type stack and process

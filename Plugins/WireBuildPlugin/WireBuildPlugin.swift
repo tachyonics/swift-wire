@@ -55,15 +55,11 @@ struct WireBuildPlugin: BuildToolPlugin {
             )
         }
 
-        // Pass the SPM target name as the module name. WireGen uses it
-        // to module-qualify every reference to a user-supplied symbol
-        // in the generated bootstrap. Iteration 7 will extend this to
-        // per-binding origin modules; for now there's a single qualifier.
         return [
             .buildCommand(
                 displayName: "WireGen \(target.name)",
                 executable: wireGen.url,
-                arguments: [outputURL.path, target.name] + swiftSources.map { $0.path },
+                arguments: [outputURL.path] + swiftSources.map { $0.path },
                 inputFiles: swiftSources,
                 outputFiles: [outputURL]
             )
