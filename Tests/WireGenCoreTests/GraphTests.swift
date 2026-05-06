@@ -10,16 +10,61 @@ struct GraphTests {
         _ name: String,
         dependencies: [(name: String, type: String)] = [],
         generics: [String] = []
-    ) -> DiscoveredSingleton {
+    ) -> DiscoveredBinding {
         let deps = dependencies.map {
             DependencyParameter(name: $0.name, type: $0.type, kind: .injectProperty)
         }
-        return DiscoveredSingleton(
-            typeName: name,
-            typeKind: "struct",
-            genericParameterNames: generics,
-            dependencies: deps,
-            sourcePath: "\(name).swift"
+        return .singleton(
+            DiscoveredSingleton(
+                typeName: name,
+                typeKind: "struct",
+                genericParameterNames: generics,
+                dependencies: deps,
+                sourcePath: "\(name).swift"
+            )
+        )
+    }
+
+    private func providerProperty(
+        _ accessPath: String,
+        boundType: String,
+        sourcePath: String? = nil
+    ) -> DiscoveredBinding {
+        .provider(
+            DiscoveredProvider(
+                boundType: boundType,
+                accessPath: accessPath,
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                sourcePath: sourcePath ?? "\(accessPath).swift"
+            )
+        )
+    }
+
+    private func providerFunction(
+        _ accessPath: String,
+        boundType: String,
+        dependencies: [(name: String, type: String)] = [],
+        generics: [String] = [],
+        sourcePath: String? = nil
+    ) -> DiscoveredBinding {
+        let deps = dependencies.map {
+            DependencyParameter(
+                name: $0.name,
+                type: $0.type,
+                kind: .providerFunctionParameter
+            )
+        }
+        return .provider(
+            DiscoveredProvider(
+                boundType: boundType,
+                accessPath: accessPath,
+                form: .function,
+                dependencies: deps,
+                genericParameterNames: generics,
+                sourcePath: sourcePath ?? "\(accessPath).swift"
+            )
         )
     }
 
@@ -34,7 +79,7 @@ struct GraphTests {
     @Test func singleNodeNoDependenciesIsInOrder() throws {
         let result = buildDependencyGraph(from: [singleton("A")])
         let order = try #require(result.outcome.topologicalOrder)
-        #expect(order.map { $0.typeName } == ["A"])
+        #expect(order.map { $0.boundType } == ["A"])
     }
 
     @Test func twoNodesOneDependencyDependencyConstructedFirst() throws {
@@ -44,7 +89,7 @@ struct GraphTests {
             singleton("B"),
         ])
         let order = try #require(result.outcome.topologicalOrder)
-        #expect(order.map { $0.typeName } == ["B", "A"])
+        #expect(order.map { $0.boundType } == ["B", "A"])
     }
 
     @Test func threeNodeChainOrderedCorrectly() throws {
@@ -55,7 +100,7 @@ struct GraphTests {
             singleton("C"),
         ])
         let order = try #require(result.outcome.topologicalOrder)
-        #expect(order.map { $0.typeName } == ["C", "B", "A"])
+        #expect(order.map { $0.boundType } == ["C", "B", "A"])
     }
 
     @Test func diamondDependencySingleConstructionOfShared() throws {
@@ -71,7 +116,7 @@ struct GraphTests {
             singleton("D"),
         ])
         let order = try #require(result.outcome.topologicalOrder)
-        let names = order.map { $0.typeName }
+        let names = order.map { $0.boundType }
         #expect(names.count == 4)
         #expect(names.filter { $0 == "D" }.count == 1)
 
@@ -95,7 +140,7 @@ struct GraphTests {
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.cycles.count == 1)
-        let cycleNames = Set(errors.cycles[0].map { $0.typeName })
+        let cycleNames = Set(errors.cycles[0].map { $0.boundType })
         #expect(cycleNames == ["A", "B"])
     }
 
@@ -108,7 +153,7 @@ struct GraphTests {
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.cycles.count == 1)
-        let cycleNames = Set(errors.cycles[0].map { $0.typeName })
+        let cycleNames = Set(errors.cycles[0].map { $0.boundType })
         #expect(cycleNames == ["A", "B", "C"])
     }
 
@@ -119,7 +164,7 @@ struct GraphTests {
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.cycles.count == 1)
-        #expect(errors.cycles[0].first?.typeName == "A")
+        #expect(errors.cycles[0].first?.boundType == "A")
     }
 
     @Test func disjointGraphsSomeCyclesOnlyReportsCycles() throws {
@@ -136,13 +181,13 @@ struct GraphTests {
     // MARK: - Missing bindings
 
     @Test func dependencyOnUndiscoveredTypeRecordedAsMissing() throws {
-        // A depends on Missing — no @Singleton found for it.
+        // A depends on Missing — no binding found for it.
         let result = buildDependencyGraph(from: [
             singleton("A", dependencies: [(name: "x", type: "Missing")])
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.missingBindings.count == 1)
-        #expect(errors.missingBindings[0].consumer.typeName == "A")
+        #expect(errors.missingBindings[0].consumer.boundType == "A")
         #expect(errors.missingBindings[0].dependency.type == "Missing")
     }
 
@@ -160,6 +205,90 @@ struct GraphTests {
         #expect(errors.missingBindings.count == 2)
     }
 
+    // MARK: - @Provides bindings participate in the graph
+
+    @Test func providerPropertyParticipatesInTopologicalOrder() throws {
+        // App is a @Singleton that injects Logger; Logger is a
+        // @Provides let, not a @Singleton. Both must end up in the topo
+        // order, with Logger before App.
+        let result = buildDependencyGraph(from: [
+            singleton("App", dependencies: [(name: "logger", type: "Logger")]),
+            providerProperty("logger", boundType: "Logger"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["Logger", "App"])
+    }
+
+    @Test func providerFunctionParametersBecomeGraphDependencies() throws {
+        // makeRepo(table:) -> Repository, with table: TaskTable provided
+        // by another @Provides. The function's parameter is a real
+        // graph edge that affects topological order.
+        let result = buildDependencyGraph(from: [
+            providerFunction(
+                "makeRepo",
+                boundType: "Repository",
+                dependencies: [(name: "table", type: "TaskTable")]
+            ),
+            providerProperty("taskTable", boundType: "TaskTable"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["TaskTable", "Repository"])
+    }
+
+    @Test func mixedSingletonAndProviderInDependencyChain() throws {
+        // Logger (provider) → UserService (singleton injects logger).
+        let result = buildDependencyGraph(from: [
+            singleton("UserService", dependencies: [(name: "logger", type: "Logger")]),
+            providerProperty("logger", boundType: "Logger"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["Logger", "UserService"])
+    }
+
+    // MARK: - Duplicate bindings
+
+    @Test func twoSingletonsForSameTypeAreFlaggedAsDuplicate() throws {
+        // Two distinct singleton types whose typeName collides — only
+        // possible in pathological code, but the duplicate check catches
+        // it. Same model would reject `@Singleton class Logger` plus
+        // `@Provides let logger: Logger` once we get such a case.
+        let result = buildDependencyGraph(from: [
+            singleton("Logger"),
+            singleton("Logger"),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+        #expect(errors.duplicateBindings[0].boundType == "Logger")
+        #expect(errors.duplicateBindings[0].bindings.count == 2)
+    }
+
+    @Test func singletonAndProviderForSameTypeAreFlaggedAsDuplicate() throws {
+        // The realistic shape: a @Singleton type and a @Provides for
+        // that exact type. Both produce 'Logger' → ambiguous.
+        let result = buildDependencyGraph(from: [
+            singleton("Logger"),
+            providerProperty("loggerProvider", boundType: "Logger"),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+        #expect(errors.duplicateBindings[0].boundType == "Logger")
+    }
+
+    @Test func duplicateBindingsShortCircuitOtherValidation() throws {
+        // When duplicates exist, the graph is fundamentally ambiguous
+        // and the rest of validation isn't trustworthy. Cycles and
+        // missing-bindings are not reported alongside.
+        let result = buildDependencyGraph(from: [
+            singleton("Logger"),
+            singleton("Logger"),
+            singleton("App", dependencies: [(name: "missing", type: "Missing")]),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+        #expect(errors.cycles.isEmpty)
+        #expect(errors.missingBindings.isEmpty)
+    }
+
     // MARK: - Generic types are skipped
 
     @Test func genericSingletonIsSkippedFromGraph() throws {
@@ -167,14 +296,29 @@ struct GraphTests {
             singleton("Repository", dependencies: [], generics: ["Model"]),
             singleton("App"),
         ])
-        #expect(result.skipped.map { $0.typeName } == ["Repository"])
+        #expect(result.skipped.map { $0.boundType } == ["Repository"])
         let order = try #require(result.outcome.topologicalOrder)
-        #expect(order.map { $0.typeName } == ["App"])
+        #expect(order.map { $0.boundType } == ["App"])
+    }
+
+    @Test func genericProviderFunctionIsSkippedFromGraph() throws {
+        let result = buildDependencyGraph(from: [
+            providerFunction(
+                "makeAny",
+                boundType: "Box",
+                dependencies: [],
+                generics: ["T"]
+            ),
+            singleton("App"),
+        ])
+        #expect(result.skipped.count == 1)
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["App"])
     }
 
     @Test func dependencyOnGenericNameIsMissingNotResolvedToGeneric() throws {
         // App depends on Repository<Model> by name "Repository". Generic
-        // singletons aren't in the resolved graph, so this is a missing
+        // bindings aren't in the resolved graph, so this is a missing
         // binding rather than a successful match.
         let result = buildDependencyGraph(from: [
             singleton("Repository", dependencies: [], generics: ["Model"]),
@@ -191,7 +335,7 @@ struct GraphTests {
         // Same graph constructed in two different input orders should
         // produce the same topological output. The DFS visits nodes in
         // sorted name order, so output stability is guaranteed.
-        let inputForward: [DiscoveredSingleton] = [
+        let inputForward: [DiscoveredBinding] = [
             singleton("A", dependencies: [(name: "b", type: "B")]),
             singleton("B", dependencies: [(name: "c", type: "C")]),
             singleton("C"),
@@ -203,7 +347,7 @@ struct GraphTests {
         let forwardOrder = try #require(forward.outcome.topologicalOrder)
         let reversedOrder = try #require(reversed.outcome.topologicalOrder)
         #expect(
-            forwardOrder.map { $0.typeName } == reversedOrder.map { $0.typeName }
+            forwardOrder.map { $0.boundType } == reversedOrder.map { $0.boundType }
         )
     }
 
@@ -211,22 +355,31 @@ struct GraphTests {
 
     @Test func renderTopologicalOrderEmptyShowsEmptyNotice() {
         let report = renderTopologicalOrder([])
-        #expect(report.contains("topological order (0 singleton(s))"))
+        #expect(report.contains("topological order (0 binding(s))"))
         #expect(report.contains("(graph is empty)"))
     }
 
     @Test func renderTopologicalOrderNumbersEachEntry() {
         let report = renderTopologicalOrder([singleton("First"), singleton("Second")])
-        #expect(report.contains("topological order (2 singleton(s))"))
+        #expect(report.contains("topological order (2 binding(s))"))
         #expect(report.contains("1. First"))
         #expect(report.contains("2. Second"))
+    }
+
+    @Test func renderTopologicalOrderUsesAccessPathForProviders() {
+        // Providers display by access path, not by bound type, so the
+        // user sees the source-level identifier they wrote.
+        let report = renderTopologicalOrder([
+            providerProperty("Config.dbURL", boundType: "URL")
+        ])
+        #expect(report.contains("Config.dbURL"))
     }
 
     // MARK: - renderSkipped
 
     @Test func renderSkippedEmptyReturnsEmptyString() {
         // Suppression so the CLI doesn't print an empty section header
-        // when there are no generic singletons.
+        // when there are no generic bindings.
         #expect(renderSkipped([]).isEmpty)
     }
 
@@ -244,12 +397,14 @@ struct GraphTests {
     @Test func renderValidationErrorsCyclesOnly() {
         let errors = GraphResult.ValidationErrors(
             cycles: [[singleton("A"), singleton("B"), singleton("A")]],
-            missingBindings: []
+            missingBindings: [],
+            duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
         #expect(report.contains("dependency cycle"))
         #expect(report.contains("A → B → A"))
         #expect(!report.contains("missing binding"))
+        #expect(!report.contains("duplicate binding"))
     }
 
     @Test func renderValidationErrorsMissingBindingsOnly() {
@@ -257,7 +412,8 @@ struct GraphTests {
         let dep = DependencyParameter(name: "x", type: "Missing", kind: .injectProperty)
         let errors = GraphResult.ValidationErrors(
             cycles: [],
-            missingBindings: [MissingBinding(consumer: consumer, dependency: dep)]
+            missingBindings: [MissingBinding(consumer: consumer, dependency: dep)],
+            duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
         #expect(report.contains("missing binding"))
@@ -266,13 +422,14 @@ struct GraphTests {
     }
 
     @Test func renderValidationErrorsBothCyclesAndMissingBindings() {
-        // Exercises the blank-line separator between the two error
-        // sections that gets inserted only when both are present.
+        // Exercises the blank-line separator between the error sections
+        // that gets inserted only when prior sections exist.
         let consumer = singleton("A")
         let dep = DependencyParameter(name: "x", type: "Missing", kind: .injectProperty)
         let errors = GraphResult.ValidationErrors(
             cycles: [[singleton("A"), singleton("B"), singleton("A")]],
-            missingBindings: [MissingBinding(consumer: consumer, dependency: dep)]
+            missingBindings: [MissingBinding(consumer: consumer, dependency: dep)],
+            duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
         #expect(report.contains("dependency cycle"))
@@ -285,10 +442,32 @@ struct GraphTests {
                 [singleton("A"), singleton("B"), singleton("A")],
                 [singleton("C"), singleton("D"), singleton("C")],
             ],
-            missingBindings: []
+            missingBindings: [],
+            duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
         #expect(report.contains("A → B → A"))
         #expect(report.contains("C → D → C"))
+    }
+
+    @Test func renderValidationErrorsDuplicateBindingsListSourcePaths() {
+        let errors = GraphResult.ValidationErrors(
+            cycles: [],
+            missingBindings: [],
+            duplicateBindings: [
+                DuplicateBinding(
+                    boundType: "Logger",
+                    bindings: [
+                        singleton("Logger"),
+                        providerProperty("loggerProvider", boundType: "Logger"),
+                    ]
+                )
+            ]
+        )
+        let report = renderValidationErrors(errors)
+        #expect(report.contains("duplicate binding"))
+        #expect(report.contains("Logger is bound by 2 declarations"))
+        #expect(report.contains("Logger.swift"))
+        #expect(report.contains("loggerProvider.swift"))
     }
 }

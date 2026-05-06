@@ -1,19 +1,20 @@
 // MARK: - Graph result
 
 /// The outcome of running graph construction over a set of discovered
-/// singletons. Models the success/failure split as an enum so consumers
+/// bindings. Models the success/failure split as an enum so consumers
 /// can't accidentally read a topological order from a graph that had
-/// cycles, or check `hasErrors` and forget to handle the success path.
+/// validation errors, or check `hasErrors` and forget to handle the
+/// success path.
 ///
 /// `skipped` lives at the top level alongside `outcome` because it's
-/// informational (generic singletons are deferred until concrete
+/// informational (generic bindings are deferred until concrete
 /// specialisation is implemented) and reported the same way regardless
 /// of whether the rest of the graph validated cleanly.
 package struct GraphResult: Sendable {
     package let outcome: Outcome
-    package let skipped: [DiscoveredSingleton]
+    package let skipped: [DiscoveredBinding]
 
-    package init(outcome: Outcome, skipped: [DiscoveredSingleton]) {
+    package init(outcome: Outcome, skipped: [DiscoveredBinding]) {
         self.outcome = outcome
         self.skipped = skipped
     }
@@ -21,25 +22,30 @@ package struct GraphResult: Sendable {
     /// Either a valid topological order (the graph constructs cleanly)
     /// or a bundle of validation errors that prevented sorting.
     package enum Outcome: Sendable {
-        case success(topologicalOrder: [DiscoveredSingleton])
+        case success(topologicalOrder: [DiscoveredBinding])
         case validationFailed(ValidationErrors)
     }
 
     /// Bundles the validation errors found during graph construction.
-    /// Both lists may be non-empty simultaneously — a graph can have
-    /// both cycles and missing bindings — and we report all of them so
-    /// the user fixes the whole shape in one pass rather than one
-    /// problem per iteration.
+    /// Cycles and missing bindings may both be non-empty simultaneously
+    /// — a graph can have both — and we report all of them so the user
+    /// fixes the whole shape in one pass. Duplicate bindings are
+    /// reported alone: when a type has two bindings, the graph is
+    /// fundamentally ambiguous and the rest of the validation isn't
+    /// meaningful until the duplicates are resolved.
     package struct ValidationErrors: Sendable {
-        package let cycles: [[DiscoveredSingleton]]
+        package let cycles: [[DiscoveredBinding]]
         package let missingBindings: [MissingBinding]
+        package let duplicateBindings: [DuplicateBinding]
 
         package init(
-            cycles: [[DiscoveredSingleton]],
-            missingBindings: [MissingBinding]
+            cycles: [[DiscoveredBinding]],
+            missingBindings: [MissingBinding],
+            duplicateBindings: [DuplicateBinding]
         ) {
             self.cycles = cycles
             self.missingBindings = missingBindings
+            self.duplicateBindings = duplicateBindings
         }
     }
 }
@@ -49,7 +55,7 @@ extension GraphResult.Outcome {
     /// otherwise — using `nil` rather than an empty array makes the
     /// either/or shape of the outcome explicit at the type level. Tests
     /// can `try #require(outcome.topologicalOrder)` to extract cleanly.
-    package var topologicalOrder: [DiscoveredSingleton]? {
+    package var topologicalOrder: [DiscoveredBinding]? {
         if case .success(let order) = self { return order }
         return nil
     }
@@ -62,69 +68,115 @@ extension GraphResult.Outcome {
     }
 }
 
-/// One unresolved dependency — a `@Singleton`'s `@Inject` parameter or
-/// property whose declared type isn't satisfied by any other discovered
-/// `@Singleton`.
+/// One unresolved dependency — an `@Inject` parameter/property or a
+/// `@Provides func` parameter whose declared type isn't satisfied by
+/// any other discovered binding.
 package struct MissingBinding: Sendable {
-    package let consumer: DiscoveredSingleton
+    package let consumer: DiscoveredBinding
     package let dependency: DependencyParameter
 
-    package init(consumer: DiscoveredSingleton, dependency: DependencyParameter) {
+    package init(consumer: DiscoveredBinding, dependency: DependencyParameter) {
         self.consumer = consumer
         self.dependency = dependency
     }
 }
 
+/// Two or more bindings claim to produce the same type, leaving the
+/// graph fundamentally ambiguous about which one to use at injection
+/// sites. Iteration 3's explicit-key disambiguation will let users
+/// resolve this; until then it's a hard error.
+package struct DuplicateBinding: Sendable {
+    package let boundType: String
+    package let bindings: [DiscoveredBinding]
+
+    package init(boundType: String, bindings: [DiscoveredBinding]) {
+        self.boundType = boundType
+        self.bindings = bindings
+    }
+}
+
 // MARK: - Graph construction
 
-/// Build the dependency graph from the discovered singletons, run a
+/// Build the dependency graph from the discovered bindings, run a
 /// topological sort, and surface any validation problems found along
 /// the way.
 ///
-/// Generic singletons (those with one or more generic parameters) are
-/// excluded from the graph. Their dependencies typically reference
-/// generic type parameters rather than concrete types, which the
-/// type-name-keyed graph can't resolve cleanly. Concrete specialisation
-/// is deferred until a separate substitution pass is implemented.
+/// Generic bindings — `@Singleton` types with type parameters or
+/// `@Provides` functions with type parameters — are excluded from the
+/// graph. Their dependencies typically reference generic type
+/// parameters rather than concrete types, which the type-name-keyed
+/// graph can't resolve cleanly. Concrete specialisation is deferred
+/// until a separate substitution pass is implemented.
+///
+/// Duplicate bindings (two bindings producing the same type) cause an
+/// early-exit failure: without unique bindings, downstream validation
+/// (cycles, missing bindings) can't be interpreted meaningfully.
 package func buildDependencyGraph(
-    from singletons: [DiscoveredSingleton]
+    from bindings: [DiscoveredBinding]
 ) -> GraphResult {
-    // Index non-generic singletons by their type name for O(1) lookup.
-    // Generic singletons are deferred via the `skipped` bucket.
-    var indexedByName: [String: DiscoveredSingleton] = [:]
-    var skipped: [DiscoveredSingleton] = []
-    for singleton in singletons {
-        if singleton.genericParameterNames.isEmpty {
-            indexedByName[singleton.typeName] = singleton
+    // Index non-generic bindings by their bound type, capturing
+    // duplicates as we go. Generic bindings are deferred to `skipped`.
+    var groupedByType: [String: [DiscoveredBinding]] = [:]
+    var skipped: [DiscoveredBinding] = []
+    for binding in bindings {
+        if binding.genericParameterNames.isEmpty {
+            groupedByType[binding.boundType, default: []].append(binding)
         } else {
-            skipped.append(singleton)
+            skipped.append(binding)
         }
     }
 
-    // Resolve each singleton's dependencies to type names. Anything that
+    // Split into uniquely-bound types vs duplicates.
+    var uniqueByType: [String: DiscoveredBinding] = [:]
+    var duplicates: [DuplicateBinding] = []
+    for boundType in groupedByType.keys.sorted() {
+        let group = groupedByType[boundType] ?? []
+        if group.count == 1 {
+            uniqueByType[boundType] = group[0]
+        } else {
+            duplicates.append(DuplicateBinding(boundType: boundType, bindings: group))
+        }
+    }
+
+    // Duplicates short-circuit graph validation — without unique
+    // bindings the rest of the diagnostics aren't trustworthy.
+    if !duplicates.isEmpty {
+        return GraphResult(
+            outcome: .validationFailed(
+                GraphResult.ValidationErrors(
+                    cycles: [],
+                    missingBindings: [],
+                    duplicateBindings: duplicates
+                )
+            ),
+            skipped: skipped
+        )
+    }
+
+    // Resolve each binding's dependencies to bound types. Anything that
     // doesn't resolve is captured as a missing binding.
     var dependencyEdges: [String: [String]] = [:]
     var missingBindings: [MissingBinding] = []
 
     // Iterate in deterministic (sorted) order so the output is stable
     // across runs.
-    for typeName in indexedByName.keys.sorted() {
-        guard let singleton = indexedByName[typeName] else { continue }
+    for boundType in uniqueByType.keys.sorted() {
+        guard let binding = uniqueByType[boundType] else { continue }
         var resolved: [String] = []
-        for dependency in singleton.dependencies {
-            if indexedByName[dependency.type] != nil {
+        for dependency in binding.dependencies {
+            if uniqueByType[dependency.type] != nil {
                 resolved.append(dependency.type)
             } else {
                 missingBindings.append(
-                    MissingBinding(consumer: singleton, dependency: dependency)
+                    MissingBinding(consumer: binding, dependency: dependency)
                 )
             }
         }
-        dependencyEdges[typeName] = resolved
+        dependencyEdges[boundType] = resolved
     }
 
     let sortResult = topologicalSort(
-        nodes: indexedByName,
+        nodes: uniqueByType,
         edges: dependencyEdges
     )
 
@@ -135,7 +187,8 @@ package func buildDependencyGraph(
         outcome = .validationFailed(
             GraphResult.ValidationErrors(
                 cycles: sortResult.cycles,
-                missingBindings: missingBindings
+                missingBindings: missingBindings,
+                duplicateBindings: []
             )
         )
     }
@@ -162,15 +215,15 @@ private enum VisitState {
 /// outcome when validation errors exist; the order is only surfaced on
 /// success.
 private func topologicalSort(
-    nodes: [String: DiscoveredSingleton],
+    nodes: [String: DiscoveredBinding],
     edges: [String: [String]]
-) -> (order: [DiscoveredSingleton], cycles: [[DiscoveredSingleton]]) {
+) -> (order: [DiscoveredBinding], cycles: [[DiscoveredBinding]]) {
     var state: [String: VisitState] = [:]
     for name in nodes.keys {
         state[name] = .unvisited
     }
-    var order: [DiscoveredSingleton] = []
-    var cycles: [[DiscoveredSingleton]] = []
+    var order: [DiscoveredBinding] = []
+    var cycles: [[DiscoveredBinding]] = []
     var seenCycleNodeSets: Set<Set<String>> = []
     var path: [String] = []
 
@@ -204,8 +257,8 @@ private func topologicalSort(
         }
         path.removeLast()
         state[node] = .visited
-        if let singleton = nodes[node] {
-            order.append(singleton)
+        if let binding = nodes[node] {
+            order.append(binding)
         }
     }
 
@@ -221,43 +274,54 @@ private func topologicalSort(
 /// Render the topological order as a numbered human-readable list,
 /// suitable for diagnostics and the discovery report. The same order
 /// is what code emission iterates over to construct each binding.
-package func renderTopologicalOrder(_ order: [DiscoveredSingleton]) -> String {
+package func renderTopologicalOrder(_ order: [DiscoveredBinding]) -> String {
     var lines: [String] = []
-    lines.append("topological order (\(order.count) singleton(s)):")
+    lines.append("topological order (\(order.count) binding(s)):")
     if order.isEmpty {
         lines.append("  (graph is empty)")
     } else {
-        for (index, singleton) in order.enumerated() {
-            lines.append("  \(index + 1). \(singleton.typeName)")
+        for (index, binding) in order.enumerated() {
+            lines.append("  \(index + 1). \(displayName(binding))")
         }
     }
     return lines.joined(separator: "\n")
 }
 
-/// Render skipped singletons (generic types pending concrete
+/// Render skipped bindings (generic types pending concrete
 /// specialisation support) as a short notice, suppressed entirely when
 /// none were skipped.
-package func renderSkipped(_ skipped: [DiscoveredSingleton]) -> String {
+package func renderSkipped(_ skipped: [DiscoveredBinding]) -> String {
     guard !skipped.isEmpty else { return "" }
     var lines: [String] = []
     lines.append("skipped (generic types — concrete specialisation not yet supported):")
-    for singleton in skipped {
-        let generics = "<\(singleton.genericParameterNames.joined(separator: ", "))>"
-        lines.append("  \(singleton.typeName)\(generics)")
+    for binding in skipped {
+        let generics = "<\(binding.genericParameterNames.joined(separator: ", "))>"
+        lines.append("  \(displayName(binding))\(generics)")
     }
     return lines.joined(separator: "\n")
 }
 
 /// Render validation errors as a multi-line message suitable for stderr.
-/// Cycles come first (graph-shape problems take precedence over
-/// missing-binding problems), then missing bindings.
+/// Duplicate bindings come first (they short-circuit the rest of
+/// validation), then cycles, then missing bindings.
 package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> String {
     var lines: [String] = []
 
+    if !errors.duplicateBindings.isEmpty {
+        lines.append("error: duplicate binding(s):")
+        for duplicate in errors.duplicateBindings {
+            lines.append("  \(duplicate.boundType) is bound by \(duplicate.bindings.count) declarations:")
+            for binding in duplicate.bindings {
+                lines.append("    - \(displayName(binding))   (\(binding.sourcePath))")
+            }
+        }
+    }
+
     if !errors.cycles.isEmpty {
+        if !lines.isEmpty { lines.append("") }
         lines.append("error: dependency cycle(s) detected:")
         for cycle in errors.cycles {
-            let path = cycle.map { $0.typeName }.joined(separator: " → ")
+            let path = cycle.map { displayName($0) }.joined(separator: " → ")
             lines.append("  \(path)")
         }
     }
@@ -266,16 +330,25 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
         if !lines.isEmpty { lines.append("") }
         lines.append("error: missing binding(s):")
         for missing in errors.missingBindings {
-            // Wildcard-label dependencies (`@Inject init(_ x: Foo)`) carry
-            // a nil name; render as `_` for the diagnostic so it matches
-            // the source-level form and Swift's compiler doesn't generate
-            // a "debug description of optional" warning.
-            let displayName = missing.dependency.name ?? "_"
+            // Wildcard-label dependencies (`@Inject init(_ x: Foo)`)
+            // carry a nil name; render as `_` for the diagnostic so it
+            // matches the source-level form and Swift's compiler doesn't
+            // generate a "debug description of optional" warning.
+            let depName = missing.dependency.name ?? "_"
             lines.append(
-                "  \(missing.consumer.typeName) needs \(displayName): \(missing.dependency.type) — no @Singleton matches '\(missing.dependency.type)'"
+                "  \(displayName(missing.consumer)) needs \(depName): \(missing.dependency.type) — no binding produces '\(missing.dependency.type)'"
             )
         }
     }
 
     return lines.joined(separator: "\n")
+}
+
+/// The short identifier to show for a binding in human-facing output:
+/// the type name for `@Singleton`, the access path for `@Provides`.
+private func displayName(_ binding: DiscoveredBinding) -> String {
+    switch binding {
+    case .singleton(let singleton): return singleton.typeName
+    case .provider(let provider): return provider.accessPath
+    }
 }

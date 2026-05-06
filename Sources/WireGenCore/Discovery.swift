@@ -7,12 +7,52 @@ import SwiftSyntax
 /// type whose construction Wire owns, or a `@Provides`-declared property
 /// or function the user wrote to supply a value.
 ///
-/// The graph algorithm operates uniformly on `DiscoveredBinding`. The
-/// kind only matters at code emission, where the construction call
-/// shape differs (`Type(args)` vs `accessPath` vs `accessPath(args)`).
+/// The graph algorithm operates uniformly on `DiscoveredBinding` via the
+/// accessors below. The kind only matters at code emission, where the
+/// construction call shape differs (`Type(args)` vs `accessPath` vs
+/// `accessPath(args)`).
 package enum DiscoveredBinding: Sendable {
     case singleton(DiscoveredSingleton)
     case provider(DiscoveredProvider)
+}
+
+extension DiscoveredBinding {
+    /// The type the binding produces. For `@Singleton` this is the
+    /// type's name; for `@Provides` it's the property's annotated type
+    /// or the function's return type. Bindings are graph-keyed by this.
+    package var boundType: String {
+        switch self {
+        case .singleton(let singleton): return singleton.typeName
+        case .provider(let provider): return provider.boundType
+        }
+    }
+
+    /// Dependencies the binding needs at construction — `@Inject`
+    /// parameters/properties for `@Singleton`, function parameters for
+    /// `@Provides func`, empty for `@Provides let`.
+    package var dependencies: [DependencyParameter] {
+        switch self {
+        case .singleton(let singleton): return singleton.dependencies
+        case .provider(let provider): return provider.dependencies
+        }
+    }
+
+    /// Generic-parameter names declared on the binding. The graph uses
+    /// these to skip bindings that can't be resolved without a concrete
+    /// specialisation pass (not yet implemented).
+    package var genericParameterNames: [String] {
+        switch self {
+        case .singleton(let singleton): return singleton.genericParameterNames
+        case .provider(let provider): return provider.genericParameterNames
+        }
+    }
+
+    package var sourcePath: String {
+        switch self {
+        case .singleton(let singleton): return singleton.sourcePath
+        case .provider(let provider): return provider.sourcePath
+        }
+    }
 }
 
 /// One `@Singleton`-annotated type found in a source file, with the
