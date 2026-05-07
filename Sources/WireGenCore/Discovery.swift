@@ -439,18 +439,32 @@ final class BindingDiscovery: SyntaxVisitor {
         // `accessPath` story for no real-world gain.
         guard node.bindings.count == 1, let binding = node.bindings.first else { return }
         guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { return }
-        guard let typeAnnotation = binding.typeAnnotation else {
-            // Type-inferred properties can't be turned into bindings —
-            // the build plugin can't run type inference. Same posture
-            // as `@Inject` properties without annotations.
+
+        // The bound type is taken from one of two places, in order:
+        //   1. An explicit type annotation: `let x: Foo = ...`
+        //   2. A `Foo(...)` constructor-call initialiser, when the
+        //      annotation is omitted: `let x = Foo()`.
+        // Both are idiomatic Swift; preferring annotation when present
+        // keeps the user's intent honest (they can write a wider type
+        // than the RHS produces, e.g. `let x: any Logger = AppLogger()`).
+        let boundType: String
+        if let typeAnnotation = binding.typeAnnotation {
+            boundType = typeAnnotation.type.trimmedDescription
+        } else if let inferred = inferTypeFromConstructorCall(binding.initializer?.value) {
+            boundType = inferred
+        } else {
+            // Can't determine the bound type without running type
+            // inference. Skip silently — same posture as `@Inject`
+            // properties without annotations.
             return
         }
+
         let propertyName = pattern.identifier.text
         let accessPath = (enclosingTypes + [propertyName]).joined(separator: ".")
         bindings.append(
             .provider(
                 DiscoveredProvider(
-                    boundType: typeAnnotation.type.trimmedDescription,
+                    boundType: boundType,
                     accessPath: accessPath,
                     form: .property,
                     dependencies: [],
@@ -459,6 +473,29 @@ final class BindingDiscovery: SyntaxVisitor {
                 )
             )
         )
+    }
+
+    /// Recover the bound type from a `Foo(...)` or `Foo<Bar>(...)`
+    /// initializer when the user omitted the type annotation. Returns
+    /// `nil` for any other expression shape — member access (`Foo.shared`),
+    /// function calls returning unspecified types (`makeFoo()`),
+    /// literals, etc. — so the caller falls back to skipping the
+    /// declaration. The first-character-uppercase check filters out
+    /// lowercase function calls that would otherwise be misidentified
+    /// as type references.
+    private func inferTypeFromConstructorCall(_ expr: ExprSyntax?) -> String? {
+        guard let call = expr?.as(FunctionCallExprSyntax.self) else { return nil }
+        let called = call.calledExpression
+        // Plain `Foo` or generic-specialised `Foo<Bar>`. Member access
+        // (`Foo.shared` or `Module.Foo`) is rejected — for a plain
+        // type-construction call the called expression is a single
+        // identifier or a generic specialization of one.
+        guard called.is(DeclReferenceExprSyntax.self)
+            || called.is(GenericSpecializationExprSyntax.self)
+        else { return nil }
+        let text = called.trimmedDescription
+        guard let first = text.first, first.isUppercase else { return nil }
+        return text
     }
 
     private func extractProvidesFunction(_ node: FunctionDeclSyntax) {
