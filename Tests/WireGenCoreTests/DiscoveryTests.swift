@@ -362,14 +362,81 @@ struct DiscoveryTests {
         #expect(result.isEmpty)
     }
 
-    @Test func providesOnLetWithoutTypeAnnotationIsSkipped() {
-        // No type annotation → no resolvable bound type. Same posture
-        // as `@Inject` properties without annotations.
+    @Test func providesLetInferredFromConstructorCallIsDiscovered() {
+        // Idiomatic Swift form: `let x = Foo()` with no annotation.
+        // The bound type is inferred from the called constructor.
         let source = """
             @Provides let logger = Logger()
             """
         let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "Logger")
+        #expect(result[0].accessPath == "logger")
+    }
+
+    @Test func providesLetInferredFromGenericConstructorCall() {
+        // `let x = Foo<Bar>()` — the generic specialisation is part of
+        // the inferred type.
+        let source = """
+            @Provides let repo = Repository<TaskTable>()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "Repository<TaskTable>")
+    }
+
+    @Test func providesLetWithDotInitFormIsDiscovered() {
+        // `let x: Type = .init()` — annotation present, RHS isn't read.
+        // This was already supported but pin the behaviour with a test.
+        let source = """
+            @Provides let logger: Logger = .init()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "Logger")
+    }
+
+    @Test func providesLetFromMemberAccessIsSkipped() {
+        // `let x = Foo.shared` — we can't tell what type `shared`
+        // resolves to without running type inference. Skip silently;
+        // the user can add an explicit annotation.
+        let source = """
+            @Provides let logger = Logger.shared
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
         #expect(result.isEmpty)
+    }
+
+    @Test func providesLetFromLowercaseFunctionCallIsSkipped() {
+        // `let x = makeFoo()` — calls a function. By Swift convention
+        // a lowercase-first identifier isn't a type, so we don't
+        // misidentify the function name as the bound type.
+        let source = """
+            @Provides let logger = makeLogger()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.isEmpty)
+    }
+
+    @Test func providesLetFromLiteralIsSkipped() {
+        // `let x = 42` — non-call initializers aren't recognised.
+        let source = """
+            @Provides let answer = 42
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.isEmpty)
+    }
+
+    @Test func providesLetTypeAnnotationTakesPrecedenceOverConstructorCall() {
+        // When both forms are present, the user's annotation is the
+        // declared bound type — they may have widened to a protocol or
+        // existential that the RHS conforms to.
+        let source = """
+            @Provides let logger: any Logger = AppLogger()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "any Logger")
     }
 
     @Test func providesOnFuncCapturesGenericParameters() {
