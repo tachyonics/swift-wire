@@ -11,7 +11,7 @@ struct DiscoveryTests {
         in source: String,
         sourcePath: String
     ) -> [DiscoveredSingleton] {
-        discoverBindings(in: source, sourcePath: sourcePath).compactMap { binding in
+        discover(in: source, sourcePath: sourcePath).bindings.compactMap { binding in
             if case .singleton(let singleton) = binding { return singleton }
             return nil
         }
@@ -22,7 +22,7 @@ struct DiscoveryTests {
         in source: String,
         sourcePath: String
     ) -> [DiscoveredProvider] {
-        discoverBindings(in: source, sourcePath: sourcePath).compactMap { binding in
+        discover(in: source, sourcePath: sourcePath).bindings.compactMap { binding in
             if case .provider(let provider) = binding { return provider }
             return nil
         }
@@ -499,7 +499,7 @@ struct DiscoveryTests {
                 @Provides static let baseURL: URL = URL(string: "...")!
             }
             """
-        let bindings = discoverBindings(in: source, sourcePath: "Mixed.swift")
+        let bindings = discover(in: source, sourcePath: "Mixed.swift").bindings
         #expect(bindings.count == 3)
         let singletons = bindings.compactMap { binding -> DiscoveredSingleton? in
             if case .singleton(let s) = binding { return s }
@@ -515,7 +515,7 @@ struct DiscoveryTests {
         #expect(Set(providers.map { $0.accessPath }) == ["logger", "Config.baseURL"])
     }
 
-    // MARK: - discoverImports
+    // MARK: - Import discovery
 
     @Test func discoverImportsFindsPlainImports() {
         let source = """
@@ -524,7 +524,7 @@ struct DiscoveryTests {
 
             @Provides let logger: Logger = Logger()
             """
-        let imports = discoverImports(in: source)
+        let imports = discover(in: source, sourcePath: "").imports
         #expect(imports == ["import Foundation", "import OSLog"])
     }
 
@@ -537,7 +537,7 @@ struct DiscoveryTests {
             @testable import Internals
             @_implementationOnly import OSLog
             """
-        let imports = discoverImports(in: source)
+        let imports = discover(in: source, sourcePath: "").imports
         #expect(imports.contains("import Foundation"))
         #expect(imports.contains("@testable import Internals"))
         #expect(imports.contains("@_implementationOnly import OSLog"))
@@ -550,7 +550,7 @@ struct DiscoveryTests {
             import struct Foundation.URL
             import func Foundation.exit
             """
-        let imports = discoverImports(in: source)
+        let imports = discover(in: source, sourcePath: "").imports
         #expect(imports.contains("import struct Foundation.URL"))
         #expect(imports.contains("import func Foundation.exit"))
     }
@@ -561,7 +561,7 @@ struct DiscoveryTests {
             struct A {
             }
             """
-        let imports = discoverImports(in: source)
+        let imports = discover(in: source, sourcePath: "").imports
         #expect(imports.isEmpty)
     }
 
