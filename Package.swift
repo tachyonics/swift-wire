@@ -12,9 +12,12 @@ let package = Package(
         .plugin(name: "WireBuildPlugin", targets: ["WireBuildPlugin"]),
     ],
     dependencies: [
-        // Pin from M0/Spike 4. Resolves to swift-syntax 601.0.1 on Swift 6.3.x.
-        // Bumps to 602.x are deliberate per-Swift-release maintenance events.
-        .package(url: "https://github.com/swiftlang/swift-syntax", from: "601.0.0")
+        // Range covers 601.0.0 (M0/Spike 4 baseline) through the next-major
+        // boundary at 604.0.0. swift-syntax major versions track Swift
+        // toolchain releases; per-major bumps are deliberate maintenance
+        // events and the upper bound caps that. The widened range avoids
+        // forcing downstream consumers off newer validated versions.
+        .package(url: "https://github.com/swiftlang/swift-syntax", "601.0.0"..<"604.0.0")
     ],
     targets: [
         .target(
