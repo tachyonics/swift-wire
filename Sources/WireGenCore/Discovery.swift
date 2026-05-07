@@ -490,8 +490,9 @@ final class BindingDiscovery: SyntaxVisitor {
         // (`Foo.shared` or `Module.Foo`) is rejected — for a plain
         // type-construction call the called expression is a single
         // identifier or a generic specialization of one.
-        guard called.is(DeclReferenceExprSyntax.self)
-            || called.is(GenericSpecializationExprSyntax.self)
+        guard
+            called.is(DeclReferenceExprSyntax.self)
+                || called.is(GenericSpecializationExprSyntax.self)
         else { return nil }
         let text = called.trimmedDescription
         guard let first = text.first, first.isUppercase else { return nil }
