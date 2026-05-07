@@ -150,33 +150,38 @@ package enum DependencyKind: Sendable, Equatable {
 
 // MARK: - Top-level entry points
 
+/// Bindings and imports discovered in a single source file. Both
+/// products of one parse — the visitor walks the tree once and
+/// captures `@Singleton`/`@Provides` declarations alongside `import`
+/// statements.
+package struct SourceFileDiscovery: Sendable {
+    package let bindings: [DiscoveredBinding]
+    package let imports: [String]
+
+    package init(bindings: [DiscoveredBinding], imports: [String]) {
+        self.bindings = bindings
+        self.imports = imports
+    }
+}
+
 /// Parse one source file and return every `@Singleton` and `@Provides`
-/// binding it contains. Singletons follow the same priority rule as
-/// `SingletonMacro` for dependencies (an `@Inject`-marked init's
-/// parameter list takes precedence over `@Inject` stored properties).
-/// Providers come from module-scope `let`/`func` declarations and from
-/// `static let`/`static func` members of enclosing types.
-package func discoverBindings(
+/// binding it contains, plus every `import` declaration. Singletons
+/// follow the same priority rule as `SingletonMacro` for dependencies
+/// (an `@Inject`-marked init's parameter list takes precedence over
+/// `@Inject` stored properties). Providers come from module-scope
+/// `let`/`func` declarations and from `static let`/`static func`
+/// members of enclosing types. Imports are captured verbatim,
+/// preserving access modifiers (`@testable`, `@_implementationOnly`,
+/// etc.) so the build plugin can propagate them into the generated
+/// `_WireGraph.swift`.
+package func discover(
     in source: String,
     sourcePath: String
-) -> [DiscoveredBinding] {
+) -> SourceFileDiscovery {
     let syntaxTree = Parser.parse(source: source)
     let visitor = BindingDiscovery(sourcePath: sourcePath)
     visitor.walk(syntaxTree)
-    return visitor.bindings
-}
-
-/// Parse one source file and return every `import` declaration found,
-/// captured verbatim (preserving access modifiers like
-/// `@_implementationOnly` / `@testable`). The build plugin unions
-/// these across input source files and emits them at the top of the
-/// generated `_WireGraph.swift` so any types referenced by bindings
-/// stay in scope.
-package func discoverImports(in source: String) -> [String] {
-    let syntaxTree = Parser.parse(source: source)
-    let visitor = BindingDiscovery(sourcePath: "")
-    visitor.walk(syntaxTree)
-    return visitor.imports
+    return SourceFileDiscovery(bindings: visitor.bindings, imports: visitor.imports)
 }
 
 /// Render a human-readable summary of bindings discovered grouped by

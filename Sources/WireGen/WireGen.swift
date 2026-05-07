@@ -51,11 +51,15 @@ struct WireGen {
                 )
                 exit(1)
             }
-            let items = discoverBindings(in: source, sourcePath: path)
-            perFileDiscovered.append((path: path, items: items))
+            let result = discover(in: source, sourcePath: path)
+            perFileDiscovered.append((path: path, items: result.bindings))
             // Only collect imports from files that contribute bindings.
-            if !items.isEmpty {
-                allImports.append(contentsOf: discoverImports(in: source))
+            // Files with no @Singleton/@Provides have nothing to add to
+            // the generated file's type-visibility needs — including
+            // their imports would just leak unrelated modules into the
+            // generated bootstrap.
+            if !result.bindings.isEmpty {
+                allImports.append(contentsOf: result.imports)
             }
         }
         print(renderDiscoveryReport(perFile: perFileDiscovered))
