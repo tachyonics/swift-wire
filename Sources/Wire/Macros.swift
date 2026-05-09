@@ -1,7 +1,7 @@
 // Public-facing macro declarations.
 //
-// The currently shipping surface is `@Singleton`, `@Inject`, and
-// `@Provides`. `@RequestScope`, `@JobScope`, `@Container`, and
+// The currently shipping surface is `@Singleton`, `@Inject`,
+// `@Provides`, and `@Container`. `@RequestScope`, `@JobScope`, and
 // `@Contributes` are planned for later milestones.
 
 /// Declares a process-lifetime singleton. The macro generates:
@@ -40,3 +40,38 @@ public macro Inject() = #externalMacro(module: "WireMacrosImpl", type: "InjectMa
 /// plugin recognises during source scanning.
 @attached(peer)
 public macro Provides() = #externalMacro(module: "WireMacrosImpl", type: "ProvidesMacro")
+
+/// Declares a type (or an extension) as a selectable container.
+/// `@Provides` declarations and nested `@Singleton` types inside the
+/// annotated declaration become part of a separate graph that the
+/// consumer can bootstrap by name — useful for swapping the entire
+/// wired graph at the entry point (typically for tests).
+///
+/// Selection is atomic: a container's bindings *are* the graph for
+/// that run — module-scope `@Provides` and module-scope `@Singleton`s
+/// do not leak in. The build plugin generates an
+/// `_<ContainerName>WireGraph` struct alongside the default
+/// `_WireGraph`; the consumer picks one at the entry point.
+///
+/// `@Container` works on any type kind that can carry `static`
+/// members (struct, class, enum, actor) and on extensions of any
+/// type. The README's canonical pattern uses caseless enums for the
+/// "namespace" feel, but the attribute is uniform across kinds. All
+/// `@Container`-annotated declarations targeting the same type name
+/// (e.g. `@Container enum Foo` plus `@Container extension Foo`)
+/// merge their bindings into one logical container called `Foo`. A
+/// plain `extension Foo { ... }` *without* the `@Container`
+/// annotation does not contribute to the container; its bindings
+/// fall through to the default graph. Cross-type composition
+/// (multiple unrelated types contributing to one container) is a
+/// future feature pending the `ContainerKey` design.
+///
+/// Combining `@Container` with `@Singleton` (or other scope macros)
+/// on the same type is technically valid but conceptually unusual —
+/// the type ends up as both a node in one graph and a grouping for
+/// another. Iteration 3's diagnostic gallery will flag this case.
+///
+/// `@Container` itself contributes no code — it's a marker the build
+/// plugin recognises during source scanning.
+@attached(peer)
+public macro Container() = #externalMacro(module: "WireMacrosImpl", type: "ContainerMacro")

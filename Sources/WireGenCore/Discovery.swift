@@ -153,13 +153,31 @@ package enum DependencyKind: Sendable, Equatable {
 /// Bindings and imports discovered in a single source file. Both
 /// products of one parse — the visitor walks the tree once and
 /// captures `@Singleton`/`@Provides` declarations alongside `import`
-/// statements.
+/// statements, partitioning bindings between the default graph and
+/// any `@Container` enums encountered.
 package struct SourceFileDiscovery: Sendable {
+    /// Bindings that feed the default graph: module-scope `@Provides`,
+    /// module-scope `@Singleton`s, and static `@Provides` on
+    /// enclosing types that are *not* `@Container`-annotated.
     package let bindings: [DiscoveredBinding]
+    /// Bindings inside `@Container`-annotated declarations, keyed by
+    /// container name. Each container's list contains `@Provides`
+    /// static members and nested `@Singleton` types from every
+    /// `@Container`-annotated declaration that targets the same type
+    /// name (a primary `@Container enum Foo` plus any
+    /// `@Container extension Foo` declarations all contribute here).
+    /// Plain (un-`@Container`-annotated) extensions don't contribute;
+    /// their bindings fall through to the default `bindings` list.
+    package let containerBindings: [String: [DiscoveredBinding]]
     package let imports: [String]
 
-    package init(bindings: [DiscoveredBinding], imports: [String]) {
+    package init(
+        bindings: [DiscoveredBinding],
+        containerBindings: [String: [DiscoveredBinding]] = [:],
+        imports: [String]
+    ) {
         self.bindings = bindings
+        self.containerBindings = containerBindings
         self.imports = imports
     }
 }
@@ -181,7 +199,11 @@ package func discover(
     let syntaxTree = Parser.parse(source: source)
     let visitor = BindingDiscovery(sourcePath: sourcePath)
     visitor.walk(syntaxTree)
-    return SourceFileDiscovery(bindings: visitor.bindings, imports: visitor.imports)
+    return SourceFileDiscovery(
+        bindings: visitor.bindings,
+        containerBindings: visitor.containerBindings,
+        imports: visitor.imports
+    )
 }
 
 /// Render a human-readable summary of bindings discovered grouped by
@@ -296,7 +318,14 @@ private func dependencyLine(_ dep: DependencyParameter) -> String {
 /// them) and in the consumer's compiler errors if they `@Inject` a
 /// dependency no binding satisfies.
 final class BindingDiscovery: SyntaxVisitor {
+    /// Default-graph bindings: module-scope `@Provides`, module-scope
+    /// `@Singleton`s, and static `@Provides` on non-`@Container`
+    /// enclosing types.
     var bindings: [DiscoveredBinding] = []
+    /// Bindings discovered inside `@Container` enums, keyed by
+    /// container name. The same `DiscoveredBinding` model is reused —
+    /// the container partition is purely about *where* a binding goes.
+    var containerBindings: [String: [DiscoveredBinding]] = [:]
     /// Verbatim `import` statements found in the source — captured for
     /// propagation into the generated `_WireGraph.swift` so any types
     /// referenced by discovered bindings stay in scope. Includes
@@ -308,10 +337,34 @@ final class BindingDiscovery: SyntaxVisitor {
     /// enclosing type. Used to compute `accessPath` for static
     /// `@Provides` members of nested types.
     private var enclosingTypes: [String] = []
+    /// Stack of "active container" names, pushed/popped alongside
+    /// enclosing type entries. Top of stack is the container the
+    /// current declaration belongs to (`nil` = default graph). When
+    /// entering a `@Container`-annotated declaration (primary enum or
+    /// `@Container extension Foo`) the contributing type's name is
+    /// pushed; non-container declarations push the current top to
+    /// preserve scope through nested type declarations.
+    private var containerScope: [String?] = [nil]
 
     init(sourcePath: String) {
         self.sourcePath = sourcePath
         super.init(viewMode: .sourceAccurate)
+    }
+
+    /// The container this declaration belongs to, or `nil` for the
+    /// default graph.
+    private var currentContainer: String? {
+        containerScope.last ?? nil
+    }
+
+    /// Append a binding to either the default graph or the active
+    /// container's bucket, based on the current container scope.
+    private func record(_ binding: DiscoveredBinding) {
+        if let container = currentContainer {
+            containerBindings[container, default: []].append(binding)
+        } else {
+            bindings.append(binding)
+        }
     }
 
     // MARK: Import collection — verbatim text, no semantic analysis.
@@ -325,7 +378,7 @@ final class BindingDiscovery: SyntaxVisitor {
     // `@Singleton` if applicable.
 
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
-        enclosingTypes.append(node.name.text)
+        enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "struct",
             name: node.name.text,
@@ -336,11 +389,11 @@ final class BindingDiscovery: SyntaxVisitor {
         return .visitChildren
     }
     override func visitPost(_ node: StructDeclSyntax) {
-        enclosingTypes.removeLast()
+        exitTypeDecl()
     }
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
-        enclosingTypes.append(node.name.text)
+        enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "class",
             name: node.name.text,
@@ -351,11 +404,11 @@ final class BindingDiscovery: SyntaxVisitor {
         return .visitChildren
     }
     override func visitPost(_ node: ClassDeclSyntax) {
-        enclosingTypes.removeLast()
+        exitTypeDecl()
     }
 
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
-        enclosingTypes.append(node.name.text)
+        enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "actor",
             name: node.name.text,
@@ -366,18 +419,46 @@ final class BindingDiscovery: SyntaxVisitor {
         return .visitChildren
     }
     override func visitPost(_ node: ActorDeclSyntax) {
-        enclosingTypes.removeLast()
+        exitTypeDecl()
     }
 
     override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
         // Enums can't be `@Singleton` (no stored properties to inject)
         // but can host `@Provides static` members — the canonical
-        // caseless-enum-as-namespace pattern.
-        enclosingTypes.append(node.name.text)
+        // caseless-enum-as-namespace pattern. They can also be
+        // `@Container`-annotated, in which case bindings inside the
+        // primary declaration are routed to that container.
+        enterTypeDecl(name: node.name.text, attributes: node.attributes)
         return .visitChildren
     }
     override func visitPost(_ node: EnumDeclSyntax) {
-        enclosingTypes.removeLast()
+        exitTypeDecl()
+    }
+
+    override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
+        // Resolve the extended type's simple name. For `extension Foo`
+        // and `extension Foo<Bar>`, we want `Foo`. More exotic forms
+        // (`extension Foo.Bar`, where-clauses) fall back to the
+        // trimmed description.
+        let extendedName: String
+        if let identifier = node.extendedType.as(IdentifierTypeSyntax.self) {
+            extendedName = identifier.name.text
+        } else {
+            extendedName = node.extendedType.trimmedDescription
+        }
+        // `@Container extension Foo { ... }` opts the extension into
+        // Foo's container, merging with any other declarations
+        // (primary type or other `@Container` extensions) that target
+        // the same type name. Plain extensions inherit the surrounding
+        // container scope, so bindings inside fall through to the
+        // default graph at top level. Iteration 3's diagnostic gallery
+        // will warn when an unannotated extension's bindings probably
+        // weren't meant to leak into the default graph.
+        enterTypeDecl(name: extendedName, attributes: node.attributes)
+        return .visitChildren
+    }
+    override func visitPost(_ node: ExtensionDeclSyntax) {
+        exitTypeDecl()
     }
 
     // MARK: `@Provides` on variables and functions.
@@ -402,6 +483,29 @@ final class BindingDiscovery: SyntaxVisitor {
 
     // MARK: Helpers
 
+    /// Push the matching scope for a type declaration: the type's name
+    /// onto `enclosingTypes`, and either the type's own name (when the
+    /// declaration is `@Container`-annotated, opening a new container
+    /// scope) or the inherited current container (when it isn't, so
+    /// nested non-container types keep contributing to whatever
+    /// container their outer scope established). The push is symmetric
+    /// with `exitTypeDecl()` regardless of whether the type was
+    /// `@Container`-annotated, so the visitor's `visit`/`visitPost`
+    /// pairs always balance without external bookkeeping.
+    private func enterTypeDecl(name: String, attributes: AttributeListSyntax) {
+        enclosingTypes.append(name)
+        if hasAttribute(attributes, named: "Container") {
+            containerScope.append(name)
+        } else {
+            containerScope.append(currentContainer)
+        }
+    }
+
+    private func exitTypeDecl() {
+        containerScope.removeLast()
+        enclosingTypes.removeLast()
+    }
+
     /// `@Provides` is only recognised at module scope or as a `static`
     /// member of an enclosing type. Instance members and locals inside
     /// function bodies are silently skipped.
@@ -425,7 +529,7 @@ final class BindingDiscovery: SyntaxVisitor {
         guard hasAttribute(attributes, named: "Singleton") else { return }
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
         let dependencies = extractInjectDependencies(from: members)
-        bindings.append(
+        record(
             .singleton(
                 DiscoveredSingleton(
                     typeName: name,
@@ -466,7 +570,7 @@ final class BindingDiscovery: SyntaxVisitor {
 
         let propertyName = pattern.identifier.text
         let accessPath = (enclosingTypes + [propertyName]).joined(separator: ".")
-        bindings.append(
+        record(
             .provider(
                 DiscoveredProvider(
                     boundType: boundType,
@@ -521,7 +625,7 @@ final class BindingDiscovery: SyntaxVisitor {
         }
         let genericParameterNames =
             node.genericParameterClause?.parameters.map { $0.name.text } ?? []
-        bindings.append(
+        record(
             .provider(
                 DiscoveredProvider(
                     boundType: returnClause.type.trimmedDescription,

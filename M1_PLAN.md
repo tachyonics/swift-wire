@@ -51,14 +51,19 @@ Split into two sub-milestones. `@Container` introduces a binding-selection mecha
 ### Iteration 2b — `@Container` with selection
 
 **Scope:**
-- `@Container` macro
-- Build plugin discovers `@Provides` inside `@Container` enums separately from module-scope `@Provides`
-- Selected-container bootstrap: when a `@Container` is named at the entry point, that container's `@Provides` are the graph for that run (module-scope `@Provides` are not merged in), per the README's "selection is atomic" rule
-- Default `bootstrap()` (no container) continues to use only module-scope `@Provides`
+- `@Container` macro, attachable to enum primary declarations *and* to extensions (see "Container composition rules" below)
+- Build plugin discovers `@Provides` declarations and `@Singleton` types inside `@Container`-annotated declarations as that container's bindings; static `@Provides` on non-`@Container` enclosing types continue to feed the default graph (preserves 2a)
+- Per-container `_<ContainerName>WireGraph` struct generated alongside the default `_WireGraph`. Each has its own `bootstrap()` static method; type-based stored-property naming and the free-function delegation pattern from 2a carry through
+- Default `bootstrap()` (no container) continues to use only module-scope `@Provides` and module-scope `@Singleton`s
+- Multiple `@Container` enums with different names → multiple independent selectable graphs
 
-**Open design question:** how the selected-bootstrap is shaped — an overload per container (`bootstrap(container: TestContainer.Type)`), a separately generated struct per container (`_TestContainerWireGraph`), or a single bootstrap that takes a container selector. Decide when starting 2b based on what the `@Container` discovery code actually needs from the call site.
+**Container composition rules** (atomic per the README's "selection is atomic" rule):
+- Container's graph = the `@Provides` declarations and `@Singleton` types declared *inside* `@Container`-annotated declarations targeting the same type name. Nothing leaks in from module scope.
+- A `@Singleton` nested inside a `@Container` declaration belongs to that container's graph, not the default graph.
+- 2b implements **implicit-type-key containers**: a primary `@Container enum Foo { ... }` and any `@Container extension Foo { ... }` declarations all merge their bindings into one container called `Foo`. The opt-in is loud — a plain `extension Foo { @Provides ... }` (no `@Container` annotation) does *not* contribute to the container; its bindings fall through to the default graph with a `Foo.member`-style access path. Iteration 3's diagnostic gallery will warn when this fall-through is likely unintentional.
+- Explicit-key composition (multiple types contributing under a `ContainerKey`) is deferred — see below.
 
-**Validation gate:** test app with a `@Container` enum holding multiple `@Provides`; selecting the container at the entry point produces a graph with the container's bindings (and `@Singleton`s); module-scope `@Provides` are not merged in. Default `bootstrap()` (no container) still works using only module-scope `@Provides`. Multiple `@Container`s in the same target produce a collision error per the README.
+**Validation gate:** test app with a `@Container` enum holding multiple `@Provides` and at least one nested `@Singleton`; `_<ContainerName>WireGraph.bootstrap()` produces a graph with the container's bindings only. Default `bootstrap()` still works using only module-scope `@Provides` and module-scope `@Singleton`s. A `@Container extension Foo` correctly merges into `Foo`'s graph alongside the primary declaration. Two `@Container`s with different names produce two independent generated structs.
 
 ## Iteration 3 — validation diagnostics
 
@@ -71,6 +76,11 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 - Generic specialization (when one binding satisfies a generic constraint, specialise; when multiple do, the explicit-key rule applies)
 - Whitespace normalisation for type-expression matching (M0 finding from Spike 3 — `Router<X, Y>` and `Router<X,Y>` resolve to the same binding)
 - **Extension-init detection on `@Singleton` types.** The macro can't see extensions, so `@Inject` on an extension init is silently ignored and a non-`@Inject` extension init either collides with the macro-generated init (Swift redeclaration) or is silently shadowed by it. The build plugin's whole-file parse can detect both cases and emit Wire-specific diagnostics: "@Inject on an extension init is ignored; move it to the primary declaration of `Foo`" and "extension init conflicts with Wire's generated init for `Foo`; move it to the primary declaration and mark it @Inject if it should be the canonical one." Both diagnostics point at the extension init with the precise remedy, replacing Swift's confusing "invalid redeclaration" or the silent-shadow non-error.
+- **Unannotated-extension `@Provides` warnings.** 2b lets `@Provides` in a plain (un-`@Container`-annotated) `extension Foo { ... }` fall through to the default graph with a `Foo.member` access path. That's correct as a default but is almost certainly *not* what the user wanted when the extended type itself has a `@Container` declaration elsewhere, or when the extended type isn't declared in this module. Two warnings to add:
+  - `@Provides` in an extension of a type that has a `@Container` declaration: "this `@Provides` falls through to the default graph; if you intended it to extend the container, mark the extension `@Container`."
+  - `@Provides` in an extension of a type not declared in this module: "this `@Provides` falls through to the default graph under `<TypeName>`'s namespace; consider declaring at module scope or as a member of a type you own."
+  Both need the type-declaration index iteration 3 will be building anyway for missing-binding errors.
+- **`@Container` combined with a scope annotation on the same type.** A type can technically carry both `@Container` and a scope macro (`@Singleton`, eventually `@RequestScope`/`@JobScope`). 2b doesn't reject the combination — it just routes the type into the default graph as the scoped binding *and* treats the same type's static `@Provides` as a container. That's almost certainly user error: the type ends up as both a node in one graph and a grouping for another. Iteration 3 should warn at the `@Container`-annotated decl with the precise remedy ("split into two types: a `@Singleton` for the instance binding and a separate `@Container` enum for grouping").
 
 **Validation gate:** a "diagnostic gallery" test directory containing intentionally-broken graphs:
 - Missing binding for a primitive type
@@ -81,6 +91,8 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 - Deep generic instantiation across multiple `@Singleton`s
 - `@Inject`-marked init in an extension of a `@Singleton` type
 - Non-marked init in an extension of a `@Singleton` type that Wire is auto-generating an init for
+- `@Provides` in an unannotated extension of a `@Container`-declared type
+- `@Provides` in an extension of a type not declared in this module
 
 Each broken graph produces a precise error pointing at the right source location with a fix-it where applicable. The diagnostic gallery becomes the regression suite for diagnostic quality from this point forward.
 
@@ -232,6 +244,96 @@ Reasons to defer until a real use case appears:
 3. The exact validation rules — particularly around transitive consumers of the library binding inside the library itself — need shaping by a real example, not a hypothetical one.
 
 Decision point: when a concrete adopter (likely the user themselves, integrating a library binding they need to swap) hits the disambiguate-with-keys workaround and finds it insufficient, that's the demand signal to build `@Replaces`. Until then, document the design space here and move on.
+
+### Cross-file `@Container` composition (`ContainerKey`)
+
+Iteration 2b commits to single-declaration containers — every `@Provides`/`@Singleton` belonging to a logical container lives inside that one `@Container enum { ... }` body. `extension TestContainer { @Provides ... }` is silently ignored.
+
+The leading candidate for relaxing this when it bites in real use: an explicit-key mechanism that mirrors iteration 5's `CollectedKey<T>` / `MappedKey<K, V>` / `BuilderKey<B>` pattern.
+
+The shape we'd consider:
+
+```swift
+struct ContainerKey: Sendable, Hashable {
+    let identifier: String
+}
+
+extension ContainerKey {
+    static let logging = ContainerKey(identifier: "logging")
+}
+
+@Container(key: ContainerKey.logging)
+enum CoreLogging {
+    @Provides static let logger = Logger(...)
+}
+
+@Container(key: ContainerKey.logging)
+enum HTTPLogging {
+    @Provides static let httpLogger = HTTPLogger(...)
+}
+
+// Selection at entry point uses the key, not a contributing type:
+let graph = try await _LoggingWireGraph.bootstrap()
+```
+
+Build plugin behaviour:
+- All `@Container`-annotated types referencing the same key contribute their bindings into one logical container, named after the key's accessor (`ContainerKey.logging` → `_LoggingWireGraph`).
+- Within-key duplicate bindings (same type from two contributors) are an error, same rules as iteration 1's duplicate-binding check.
+- Cross-module key sharing extends naturally once iteration 7's plugin walks dependency targets — a library publishes a `ContainerKey` and consumer-target `@Container`s reference it.
+
+Why deferred:
+1. The single-declaration model is the simplest committable shape. Whether the inability to spread containers across files is actually painful needs to be measured by adoption, not anticipated.
+2. Auto-magical extension-based merging (a plain `extension TestContainer { @Provides ... }` joining the container without any annotation) was rejected outright — it would load `extension` syntax with DI semantics that surprise readers who don't know to look for them. 2b's `@Container extension` opt-in covers the same-name cross-file story without that magic; ContainerKey is specifically about cross-*type* contribution.
+3. The exact validation rules around cross-module key sharing want shaping by a real adopter scenario rather than a hypothetical.
+
+Decision point: when an adopter hits the same-name limit (wanting multiple unrelated types — not just multiple declarations of the same enum — to contribute to one logical container), that's the signal to build `ContainerKey`. Until then, document the design space here and move on.
+
+### Container composition / hierarchies (`@Container(includes:)`)
+
+A separate axis from `ContainerKey`: composition lets one container *build from* others by including their bindings, instead of multiple types *contributing to* a single container. The motivating use case is environment-specific configuration — a shared `BaseConfig` plus per-environment overlays:
+
+```swift
+@Container
+enum BaseConfig {
+    @Provides static let logFormat: LogFormat = .json
+    @Provides static let appName: String = "MyApp"
+}
+
+@Container(includes: [BaseConfig.self])
+enum DevContainer {
+    @Provides static let baseURL: URL = URL(string: "https://api.dev.example.com")!
+    @Provides static let dbName: String = "dev_db"
+}
+
+@Container(includes: [BaseConfig.self])
+enum ProdContainer {
+    @Provides static let baseURL: URL = URL(string: "https://api.example.com")!
+    @Provides static let dbName: String = "prod_db"
+}
+
+// Selecting DevContainer at the entry point materialises a graph
+// containing both DevContainer's bindings and BaseConfig's.
+```
+
+Without composition, `BaseConfig`'s bindings would have to be repeated inside every environment container.
+
+Design rules to lock in (so future work doesn't accidentally exclude them):
+
+1. **Composition is additive across all `@Container` declarations of the same logical container.** Just like bindings, `includes:` clauses accumulate. A primary `@Container(includes: [Base.self]) enum DevContainer` plus a `@Container(includes: [Logging.self]) extension DevContainer` mean DevContainer's composition is `{Base, Logging}`. No conflict between annotations is possible because composition is set-valued.
+
+2. **No overriding** — duplicate-binding rules apply within the resolved (post-composition) graph. If `BaseConfig` and `DevContainer` both `@Provides Logger`, that's a duplicate-binding error at validation time. Users design their bindings so each binding has exactly one home in the composed graph.
+
+3. **Relaxed validation: validate the resolved graph, not per-fragment.** A container can have unsatisfied dependencies in isolation (e.g., `BaseConfig` provides `func appLogger(level: LogLevel) -> Logger` but no `LogLevel` binding) as long as the composer fills them. Validation runs on the union of own bindings + transitive `includes:`. A container that's selected (or transitively included by something selected) and ends up with missing bindings is a build error pointing at the entry-point selection.
+
+4. **Fragment opt-out for non-selectable containers.** A container that only makes sense composed (a "fragment" like `BaseConfig` whose standalone graph has open dependencies) needs a way to opt out of bootstrap-struct codegen. Cleanest shape: a parameter on `@Container` — `@Container(selectable: false)` — keeping fragments-are-containers under one annotation. Alternative: a separate `@PartialContainer` / `@ContainerFragment` peer annotation. Either works; the bikeshed is for the actual composition iteration.
+
+What 2b's design preserves so this lands cleanly later:
+
+- `containerBindings: [String: [DiscoveredBinding]]` partitions bindings by container name. Composition adds a *separate* structure (`containerComposition: [String: Set<String>]`) without touching the partition.
+- Per-container graph construction in sitting 2 takes a `[DiscoveredBinding]` for each container. With composition, that vector becomes the union of own bindings plus transitive `includes:` resolution; the graph algorithm doesn't need to know.
+- Codegen emits one `_<Name>WireGraph` per selectable container. Composition doesn't change the per-container output shape, only the binding set fed in.
+
+Decision point: when an adopter hits the "I'm repeating bindings across containers" pattern (most likely the environment-config case described above), that's the signal to build composition. Until then, document the design space here and move on.
 
 ## Estimating
 

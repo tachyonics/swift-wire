@@ -7,5 +7,6 @@ struct WireMacrosPlugin: CompilerPlugin {
         SingletonMacro.self,
         InjectMacro.self,
         ProvidesMacro.self,
+        ContainerMacro.self,
     ]
 }
