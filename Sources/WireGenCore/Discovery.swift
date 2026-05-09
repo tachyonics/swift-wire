@@ -160,11 +160,14 @@ package struct SourceFileDiscovery: Sendable {
     /// module-scope `@Singleton`s, and static `@Provides` on
     /// enclosing types that are *not* `@Container`-annotated.
     package let bindings: [DiscoveredBinding]
-    /// Bindings inside `@Container`-annotated enums, keyed by container
-    /// name. Each container's list contains `@Provides` static members
-    /// and nested `@Singleton` types defined within the container's
-    /// primary enum body. Single-declaration only — extensions of
-    /// `@Container` enums are not collected here in this iteration.
+    /// Bindings inside `@Container`-annotated declarations, keyed by
+    /// container name. Each container's list contains `@Provides`
+    /// static members and nested `@Singleton` types from every
+    /// `@Container`-annotated declaration that targets the same type
+    /// name (a primary `@Container enum Foo` plus any
+    /// `@Container extension Foo` declarations all contribute here).
+    /// Plain (un-`@Container`-annotated) extensions don't contribute;
+    /// their bindings fall through to the default `bindings` list.
     package let containerBindings: [String: [DiscoveredBinding]]
     package let imports: [String]
 
