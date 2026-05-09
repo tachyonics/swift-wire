@@ -335,6 +335,99 @@ What 2b's design preserves so this lands cleanly later:
 
 Decision point: when an adopter hits the "I'm repeating bindings across containers" pattern (most likely the environment-config case described above), that's the signal to build composition. Until then, document the design space here and move on.
 
+## Post-M1 milestone preview: WireConfiguration
+
+The README names `WireHummingbird` as M2 — the first framework adapter, the integration target task-cluster is built around. Working through the M1 design surface (specifically iteration 8's adapter-annotation contract) surfaced a smaller adapter that's a better first real-world test: **WireConfiguration**, a swift-configuration adapter exposing `@Configuration(forKey:default:)`. This section captures the design so the eventual milestone-ordering decision has the work to point at.
+
+### Why ahead of WireHummingbird
+
+1. **Smaller adapter surface, simpler first contract validation.** Hummingbird is the canonical "framework adapter" — type-level + member-level annotations (`@Controller`, `@Get`, `@Post`, `@RoutedBy`) with deeper integration patterns. swift-configuration is comparatively narrow (read a value, pass it through). Validating M1's iteration-8 adapter contract on a smaller surface first surfaces issues before they're tangled up with framework complexity. Same "highest-risk integration first" philosophy the M1 plan applies at the iteration level, applied at the milestone level.
+2. **Universal applicability.** Configuration is a fundamental need in any real app; configuration wiring through DI is high-leverage. WireHummingbird benefits HTTP apps; WireConfiguration benefits everything.
+3. **Concrete migration target in task-cluster.** The current `let port = config.int(forKey: "HTTP_PORT", default: 8080)` line in `TaskCluster.swift` becomes `@Configuration(forKey: "HTTP_PORT", default: 8080) port: Int` at the @Inject site. Another step on the incremental task-cluster migration path the M1 plan calls out.
+
+### Desugaring model
+
+`@Configuration` is **sugar over the existing graph machinery** — not a new adapter-contract form. The build plugin sees the annotation and synthesizes a binding equivalent to:
+
+```swift
+static func _wire_<configKey>(config: ConfigReader) -> <Type> {
+    config.<typedMethod>(forKey: "<configKey>", default: <default>)
+}
+```
+
+The original consumer parameter/property resolves to that synthesized binding via the graph's normal mechanics. **No new adapter form, no contract extension.** The README's three adapter forms (type-level, type-level-with-members, member-level) stay intact — `@Configuration` is purely a build-plugin source transformation that produces existing graph constructs.
+
+### Recognized sites
+
+`@Configuration` is recognized at three sites, all desugaring identically:
+
+```swift
+// 1. @Inject property site (most common — Controller-style consumers)
+@Singleton
+struct TaskController {
+    @Inject @Configuration(forKey: "REQUEST_TIMEOUT", default: 30) var timeout: Int
+    @Inject var repository: any TaskRepository
+}
+
+// 2. @Inject init parameter site
+@Singleton
+struct TaskController {
+    @Inject
+    init(
+        @Configuration(forKey: "REQUEST_TIMEOUT", default: 30) timeout: Int,
+        repository: any TaskRepository
+    ) { ... }
+}
+
+// 3. @Provides func parameter site (multi-field config aggregation)
+@Provides
+static func appConfig(
+    @Configuration(forKey: "HTTP_PORT", default: 8080) port: Int,
+    @Configuration(forKey: "HTTP_HOST", default: "0.0.0.0") host: String
+) -> ApplicationConfiguration {
+    .init(address: .hostname(host, port: port))
+}
+```
+
+A standalone `@Provides @Configuration static let httpPort: Int` form was considered but **deliberately not supported** — Swift's `let`-must-be-initialised rule plus the absence of a "synthesise initializer expression for a stored let" macro role means there's no clean way to ship that syntax without sentinel-value workarounds. The three @Inject/@Provides parameter sites cover the realistic consumer patterns; the standalone form is mostly redundant once those work. Worth revisiting if Swift's macro system grows the capability later.
+
+### Synthesized-binding identity (key-based dedup)
+
+Two `@Configuration` annotations of the same parameter type with the *same* config key resolve to the *same* synthesized binding (natural deduplication). Two with *different* config keys resolve to *different* synthesized bindings — keyed by the config key string (e.g., `BindingKey<Int>(identifier: "HTTP_PORT")` and `BindingKey<Int>(identifier: "TIMEOUT")` are distinct).
+
+This integrates cleanly with iteration 3's explicit-key disambiguation work — `@Configuration` essentially uses iteration 3's machinery internally, just with auto-derived keys instead of user-written ones.
+
+### Disambiguating the underlying ConfigReader
+
+`@Configuration` does **not** take a `configKey:` parameter for selecting which `ConfigReader` binding to use. That'd special-case Configuration when iteration 3 is already shipping a general explicit-key disambiguation mechanism for `@Provides func` / `@Inject init` parameters. Instead, the user combines the general annotation with `@Configuration`:
+
+```swift
+@Provides
+static func appConfig(
+    @Inject(ConfigReader.testKey) @Configuration(forKey: "PORT", default: 8080) port: Int
+) -> ApplicationConfiguration { ... }
+```
+
+Desugaring: the `@Inject(ConfigReader.testKey)` annotation flows through to the synthesized binding's `config: ConfigReader` parameter, where it's just iteration-3's ordinary explicit-key disambiguation. Spec for the flow-through rule: "annotations on the parameter that aren't consumed by the synthesizer (`@Configuration` consumes itself) are forwarded to the synthesized binding's signature." For a synthesizer with one transitive dep (`ConfigReader`), there's no ambiguity about where they land. Future synthesizers with multiple transitive deps can specify per-target if needed; that's a per-synthesizer design question, not architectural.
+
+The user only learns one disambiguation pattern (the iteration-3 annotation), which works the same way regardless of whether the binding is synthesized or hand-written.
+
+### Type → ConfigReader-method dispatch
+
+`@Configuration` needs to call the right typed method on `ConfigReader` based on the annotated parameter's type — `Int` → `config.int(forKey:default:)`, `String` → `config.string(...)`, etc. swift-configuration's surface is constrained enough that a hard-coded mapping for the well-known primitives (`Int`, `String`, `Bool`, `Double`) is the right starting point, with extension hooks for `Codable`-conforming structured config later.
+
+### Validation
+
+Synthesized binding's `ConfigReader` dep resolves against the active graph like any other dep. Missing `ConfigReader` binding → ordinary missing-binding diagnostic at the synthesized site, with a fix-it: "no `ConfigReader` binding satisfies `@Configuration`'s requirement; add `@Provides let configReader = ConfigReader(...)` at module scope, or pin a specific `ConfigReader` via the explicit-key annotation."
+
+### Suggested milestone reorder
+
+- **M2 — WireConfiguration**: smaller surface, validates the iteration-8 adapter contract on a focused adapter, gives task-cluster's port/timeout wiring an obvious migration target.
+- **M3 — WireHummingbird**: framework adapter with type-level + member-level annotations. Bigger integration; lands once the contract has been shaken out by M2.
+- WireSQS, WireOpenAPI, etc. shift one slot accordingly.
+
+The README still names WireHummingbird as M2; that's editing work for after M1 ships, not now. This section captures the case so the decision is informed.
+
 ## Estimating
 
 Hard to be precise; iterations 3 and 8 have the most variance.

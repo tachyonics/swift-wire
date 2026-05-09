@@ -37,7 +37,8 @@
 /// function body that doesn't actually use those capabilities.
 package func renderWireGraph(
     imports: [String],
-    topologicalOrder: [DiscoveredBinding]
+    topologicalOrder: [DiscoveredBinding],
+    containerTopologicalOrders: [String: [DiscoveredBinding]] = [:]
 ) -> String {
     var lines: [String] = []
 
@@ -52,21 +53,66 @@ package func renderWireGraph(
         }
     }
 
+    // Default graph — always emitted, even when empty, so consumers
+    // can call `_WireGraph.bootstrap()` unconditionally.
+    appendStruct(
+        structName: "_WireGraph",
+        bootstrapFunction: "_wireBootstrap",
+        topologicalOrder: topologicalOrder,
+        into: &lines
+    )
+
+    // Per-container graphs — sorted by container name for deterministic
+    // output. Each gets its own struct + free-function pair following
+    // the same delegation pattern as the default. The free-function
+    // discriminator is the container name so multiple containers don't
+    // collide at module scope.
+    for containerName in containerTopologicalOrders.keys.sorted() {
+        let order = containerTopologicalOrders[containerName] ?? []
+        appendStruct(
+            structName: "_\(containerName)WireGraph",
+            bootstrapFunction: "_wireBootstrap\(containerName)",
+            topologicalOrder: order,
+            into: &lines
+        )
+    }
+
+    // Trailing newline at end of file. `appendStruct` is leading-blank
+    // only, so the final struct's closing `}` doesn't end the file
+    // without it.
     lines.append("")
-    lines.append("internal struct _WireGraph: Sendable {")
+
+    return lines.joined(separator: "\n")
+}
+
+/// Emit one `_<Name>WireGraph` struct + matching `_wireBootstrap<Name>`
+/// free function pair. Called once for the default graph and once per
+/// container; the same shape carries through for both.
+private func appendStruct(
+    structName: String,
+    bootstrapFunction: String,
+    topologicalOrder: [DiscoveredBinding],
+    into lines: inout [String]
+) {
+    lines.append("")
+    lines.append("internal struct \(structName): Sendable {")
 
     // Stored properties — one per binding, type-derived name, no
     // prefix. Users access these as `graph.logger`, `graph.userService`.
+    // The annotated type uses `boundTypeReference` so nested
+    // `@Singleton`s inside a `@Container` qualify with the enclosing
+    // path (`TestContainer.MockService`) — required because this
+    // struct lives at module scope.
     for binding in topologicalOrder {
         let property = propertyName(for: binding)
-        lines.append("    let \(property): \(binding.boundType)")
+        lines.append("    let \(property): \(binding.boundTypeReference)")
     }
     if !topologicalOrder.isEmpty {
         lines.append("")
     }
 
-    lines.append("    static func bootstrap() async throws -> _WireGraph {")
-    lines.append("        try await _wireBootstrap()")
+    lines.append("    static func bootstrap() async throws -> \(structName) {")
+    lines.append("        try await \(bootstrapFunction)()")
     lines.append("    }")
     lines.append("}")
 
@@ -74,16 +120,15 @@ package func renderWireGraph(
     // Module-scope context means bare `appName` / `logger` references
     // resolve cleanly to module-scope `@Provides` declarations,
     // bypassing the type-member shadow that would happen inside
-    // `_WireGraph.bootstrap()` directly.
+    // the struct's `static func bootstrap()` directly.
     lines.append("")
-    lines.append("private func _wireBootstrap() async throws -> _WireGraph {")
+    lines.append("private func \(bootstrapFunction)() async throws -> \(structName) {")
 
     guard !topologicalOrder.isEmpty else {
         // Empty graph — no bindings, return the empty memberwise init.
-        lines.append("    _WireGraph()")
+        lines.append("    \(structName)()")
         lines.append("}")
-        lines.append("")
-        return lines.joined(separator: "\n")
+        return
     }
 
     // Construction body — bare local names. `let logger = logger`
@@ -102,12 +147,9 @@ package func renderWireGraph(
         let name = propertyName(for: binding)
         return "\(name): \(name)"
     }.joined(separator: ", ")
-    lines.append("    return _WireGraph(\(returnArgs))")
+    lines.append("    return \(structName)(\(returnArgs))")
 
     lines.append("}")
-    lines.append("")
-
-    return lines.joined(separator: "\n")
 }
 
 /// The stored-property name on `_WireGraph` and the local name in
@@ -129,9 +171,12 @@ private func constructionExpression(
     case .singleton(let singleton):
         // Generic instantiations (`Repository<TaskTable>`) keep their
         // angle brackets at the call site since Swift's syntax accepts
-        // that.
+        // that. `qualifiedTypeName` includes any enclosing-type
+        // prefix (e.g. `TestContainer.MockService`) so a `@Singleton`
+        // nested inside a `@Container` resolves correctly when called
+        // from the module-scope `_wireBootstrap...` free function.
         let args = renderArguments(singleton.dependencies)
-        return "\(singleton.typeName)(\(args))"
+        return "\(singleton.qualifiedTypeName)(\(args))"
     case .provider(let provider):
         switch provider.form {
         case .property:

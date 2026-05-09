@@ -36,10 +36,14 @@ struct WireGen {
         let outputPath = arguments[1]
         let sourcePaths = Array(arguments.dropFirst(2))
 
-        // 1. Discover @Singleton/@Provides bindings and `import`
-        //    declarations across input sources.
+        // 1. Discover bindings, container partitions, and imports
+        //    across input sources. Bindings inside `@Container`
+        //    declarations go into per-container buckets keyed by
+        //    container name; everything else feeds the default graph.
         var perFileDiscovered: [(path: String, items: [DiscoveredBinding])] = []
         var allImports: [String] = []
+        var defaultBindings: [DiscoveredBinding] = []
+        var containerBindings: [String: [DiscoveredBinding]] = [:]
         for path in sourcePaths {
             let url = URL(fileURLWithPath: path)
             let source: String
@@ -52,48 +56,97 @@ struct WireGen {
                 exit(1)
             }
             let result = discover(in: source, sourcePath: path)
-            perFileDiscovered.append((path: path, items: result.bindings))
+
+            // For the discovery report, show all of the file's bindings
+            // (default and container) together — the access path on
+            // provider bindings already encodes the container name, so
+            // a flat per-file view stays informative.
+            let containerBindingsList = result.containerBindings.values.flatMap { $0 }
+            perFileDiscovered.append(
+                (path: path, items: result.bindings + containerBindingsList)
+            )
+
+            defaultBindings.append(contentsOf: result.bindings)
+            for (name, bindings) in result.containerBindings {
+                containerBindings[name, default: []].append(contentsOf: bindings)
+            }
+
             // Only collect imports from files that contribute bindings.
             // Files with no @Singleton/@Provides have nothing to add to
             // the generated file's type-visibility needs — including
             // their imports would just leak unrelated modules into the
             // generated bootstrap.
-            if !result.bindings.isEmpty {
+            if !result.bindings.isEmpty || !result.containerBindings.isEmpty {
                 allImports.append(contentsOf: result.imports)
             }
         }
         print(renderDiscoveryReport(perFile: perFileDiscovered))
 
-        // 2. Build the dependency graph and run topo sort + validation.
-        let allBindings = perFileDiscovered.flatMap { $0.items }
-        let graphResult = buildDependencyGraph(from: allBindings)
+        // 2. Build per-graph dependency graphs: one for the default
+        //    graph and one for each named container. Each is validated
+        //    independently (its bindings are atomic — no cross-graph
+        //    leakage).
+        let defaultGraph = buildDependencyGraph(from: defaultBindings)
+        let containerGraphs = containerBindings.keys.sorted().map {
+            (name: $0, result: buildDependencyGraph(from: containerBindings[$0] ?? []))
+        }
 
-        // 3. Print skipped (generic) bindings if any — informational.
-        let skippedReport = renderSkipped(graphResult.skipped)
+        // 3. Print skipped (generic) bindings, combined across all
+        //    graphs — informational. Keys are sorted in `renderSkipped`
+        //    only by source path, which is fine here.
+        let allSkipped = defaultGraph.skipped + containerGraphs.flatMap { $0.result.skipped }
+        let skippedReport = renderSkipped(allSkipped)
         if !skippedReport.isEmpty {
             print("")
             print(skippedReport)
         }
 
-        // 4. Either-or: success prints topological order and emits the
-        //    real `_WireGraph.swift`; failure writes validation errors
-        //    to stderr, writes no output file, and exits non-zero.
-        switch graphResult.outcome {
-        case .success(let topologicalOrder):
-            print("")
-            print(renderTopologicalOrder(topologicalOrder))
-
-            let generated = renderWireGraph(
-                imports: allImports,
-                topologicalOrder: topologicalOrder
-            )
-            try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
-            print("wrote \(outputPath)")
-        case .validationFailed(let errors):
-            FileHandle.standardError.write(Data("\n".utf8))
-            FileHandle.standardError.write(Data(renderValidationErrors(errors).utf8))
-            FileHandle.standardError.write(Data("\n".utf8))
+        // 4. Validation: any graph failing → write errors per graph
+        //    to stderr, exit non-zero, write no output file. The
+        //    build plugin treats a missing output as a failed step.
+        let allNamedGraphs: [(name: String, result: GraphResult)] =
+            [(name: "default", result: defaultGraph)] + containerGraphs
+        let failures = allNamedGraphs.compactMap {
+            named -> (name: String, errors: GraphResult.ValidationErrors)? in
+            if let errors = named.result.outcome.validationErrors {
+                return (named.name, errors)
+            }
+            return nil
+        }
+        if !failures.isEmpty {
+            for failure in failures {
+                FileHandle.standardError.write(Data("\nin graph '\(failure.name)':\n".utf8))
+                FileHandle.standardError.write(
+                    Data(renderValidationErrors(failure.errors).utf8)
+                )
+                FileHandle.standardError.write(Data("\n".utf8))
+            }
             exit(1)
         }
+
+        // 5. Success — print topological orders for each graph,
+        //    emit the multi-struct `_WireGraph.swift` containing the
+        //    default `_WireGraph` plus one `_<Name>WireGraph` per
+        //    container.
+        let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
+        print("")
+        print("default graph:")
+        print(renderTopologicalOrder(defaultOrder))
+        var containerOrders: [String: [DiscoveredBinding]] = [:]
+        for (name, result) in containerGraphs {
+            let order = result.outcome.topologicalOrder ?? []
+            containerOrders[name] = order
+            print("")
+            print("container '\(name)':")
+            print(renderTopologicalOrder(order))
+        }
+
+        let generated = renderWireGraph(
+            imports: allImports,
+            topologicalOrder: defaultOrder,
+            containerTopologicalOrders: containerOrders
+        )
+        try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
+        print("wrote \(outputPath)")
     }
 }
