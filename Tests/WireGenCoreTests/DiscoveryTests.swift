@@ -515,6 +515,268 @@ struct DiscoveryTests {
         #expect(Set(providers.map { $0.accessPath }) == ["logger", "Config.baseURL"])
     }
 
+    // MARK: - @Container discovery
+
+    @Test func providesInsideContainerRoutedToContainerBucket() {
+        // @Provides inside a @Container enum lands in the container's
+        // bucket, not the default-graph bucket.
+        let source = """
+            @Container
+            enum TestContainer {
+                @Provides static let logger: Logger = Logger()
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        #expect(result.bindings.isEmpty)
+        #expect(result.containerBindings.keys.sorted() == ["TestContainer"])
+        let testContainerBindings = result.containerBindings["TestContainer"] ?? []
+        #expect(testContainerBindings.count == 1)
+        if case .provider(let provider) = testContainerBindings[0] {
+            #expect(provider.boundType == "Logger")
+            #expect(provider.accessPath == "TestContainer.logger")
+        } else {
+            Issue.record("expected provider binding")
+        }
+    }
+
+    @Test func nestedSingletonInsideContainerRoutedToContainerBucket() {
+        // A @Singleton declared inside a @Container belongs to that
+        // container's graph, not the default graph.
+        let source = """
+            @Container
+            enum TestContainer {
+                @Singleton
+                struct MockService {
+                    @Inject var logger: Logger
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        #expect(result.bindings.isEmpty)
+        let testContainerBindings = result.containerBindings["TestContainer"] ?? []
+        #expect(testContainerBindings.count == 1)
+        if case .singleton(let singleton) = testContainerBindings[0] {
+            #expect(singleton.typeName == "MockService")
+            #expect(singleton.dependencies.first?.type == "Logger")
+        } else {
+            Issue.record("expected singleton binding")
+        }
+    }
+
+    @Test func bindingsInNonContainerEnclosingTypeStayInDefaultGraph() {
+        // Static @Provides on a non-@Container enum continues to feed
+        // the default graph (preserves 2a behaviour).
+        let source = """
+            enum Config {
+                @Provides static let baseURL: URL = URL(string: "...")!
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        #expect(result.bindings.count == 1)
+        #expect(result.containerBindings.isEmpty)
+    }
+
+    @Test func multipleContainersProduceIndependentBuckets() {
+        let source = """
+            @Container
+            enum ProdContainer {
+                @Provides static let logger: Logger = Logger()
+            }
+
+            @Container
+            enum TestContainer {
+                @Provides static let logger: Logger = MockLogger()
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        #expect(result.bindings.isEmpty)
+        #expect(result.containerBindings.keys.sorted() == ["ProdContainer", "TestContainer"])
+        #expect(result.containerBindings["ProdContainer"]?.count == 1)
+        #expect(result.containerBindings["TestContainer"]?.count == 1)
+    }
+
+    @Test func mixedContainerAndModuleScopeBindingsArePartitioned() {
+        let source = """
+            @Provides let appName: AppName = AppName(value: "default")
+
+            @Singleton
+            struct UserService {
+                @Inject var logger: Logger
+            }
+
+            @Container
+            enum TestContainer {
+                @Provides static let appName: AppName = AppName(value: "test")
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        // Default graph: module-scope @Provides + module-scope @Singleton
+        #expect(result.bindings.count == 2)
+        // Container: just its @Provides
+        let testBindings = result.containerBindings["TestContainer"] ?? []
+        #expect(testBindings.count == 1)
+        if case .provider(let provider) = testBindings[0] {
+            #expect(provider.accessPath == "TestContainer.appName")
+        } else {
+            Issue.record("expected provider binding")
+        }
+    }
+
+    @Test func providesInUnannotatedExtensionFallsThroughToDefault() {
+        // An extension without its own `@Container` annotation is just
+        // an extension — its bindings fall through to the default
+        // graph with a `Foo.member`-style access path. Even when the
+        // extended type has a `@Container` primary declaration, the
+        // extension itself doesn't carry container semantics.
+        let source = """
+            @Container
+            enum TestContainer {
+                @Provides static let logger: Logger = Logger()
+            }
+
+            extension TestContainer {
+                @Provides static let extra: Extra = Extra()
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        // The container's primary `@Provides` lands in the container.
+        let testBindings = result.containerBindings["TestContainer"] ?? []
+        #expect(testBindings.count == 1)
+        if case .provider(let provider) = testBindings[0] {
+            #expect(provider.accessPath == "TestContainer.logger")
+        } else {
+            Issue.record("expected provider binding")
+        }
+        // The extension's `@Provides` falls through to default with
+        // a dotted access path. (Iteration 3 will surface a warning
+        // here pointing the user at `@Container extension` or moving
+        // the binding into the primary declaration.)
+        #expect(result.bindings.count == 1)
+        if case .provider(let provider) = result.bindings[0] {
+            #expect(provider.accessPath == "TestContainer.extra")
+            #expect(provider.boundType == "Extra")
+        } else {
+            Issue.record("expected provider binding")
+        }
+    }
+
+    @Test func providesInContainerAnnotatedExtensionMergesIntoContainer() {
+        // `@Container extension Foo { ... }` opts the extension into
+        // Foo's container — the extension's bindings merge with the
+        // primary `@Container enum Foo` declaration's bindings.
+        let source = """
+            @Container
+            enum TestContainer {
+                @Provides static let logger: Logger = Logger()
+            }
+
+            @Container
+            extension TestContainer {
+                @Provides static let extra: Extra = Extra()
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        #expect(result.bindings.isEmpty)
+        let testBindings = result.containerBindings["TestContainer"] ?? []
+        #expect(testBindings.count == 2)
+        let accessPaths = Set(
+            testBindings.compactMap { binding -> String? in
+                if case .provider(let provider) = binding {
+                    return provider.accessPath
+                }
+                return nil
+            }
+        )
+        #expect(accessPaths == ["TestContainer.logger", "TestContainer.extra"])
+    }
+
+    @Test func containerOnStructRoutesBindingsToContainer() {
+        // The README's canonical pattern is `@Container enum`, but
+        // any type kind that can carry `static` members works. A
+        // `@Container struct` namespace routes its static `@Provides`
+        // into the container the same way an enum would.
+        let source = """
+            @Container
+            struct AppConfig {
+                @Provides static let logger: Logger = Logger()
+            }
+            """
+        let result = discover(in: source, sourcePath: "AppConfig.swift")
+        #expect(result.bindings.isEmpty)
+        let bindings = result.containerBindings["AppConfig"] ?? []
+        #expect(bindings.count == 1)
+        if case .provider(let provider) = bindings.first {
+            #expect(provider.accessPath == "AppConfig.logger")
+        } else {
+            Issue.record("expected provider binding")
+        }
+    }
+
+    @Test func containerOnClassRoutesBindingsToContainer() {
+        let source = """
+            @Container
+            class TestContainer {
+                @Provides static let mockLogger: Logger = MockLogger()
+            }
+            """
+        let result = discover(in: source, sourcePath: "TestContainer.swift")
+        let bindings = result.containerBindings["TestContainer"] ?? []
+        #expect(bindings.count == 1)
+    }
+
+    @Test func containerOnActorRoutesBindingsToContainer() {
+        let source = """
+            @Container
+            actor RuntimeConfig {
+                @Provides static let buildNumber: Int = 42
+            }
+            """
+        let result = discover(in: source, sourcePath: "RuntimeConfig.swift")
+        let bindings = result.containerBindings["RuntimeConfig"] ?? []
+        #expect(bindings.count == 1)
+    }
+
+    @Test func containerAnnotatedExtensionWithoutPrimaryDeclarationStillContributes() {
+        // The `@Container` annotation on an extension is sufficient on
+        // its own — the extended type doesn't need a primary
+        // `@Container` declaration in the same source. (Whether one
+        // exists in another source file is a cross-file question that
+        // the build plugin handles by aggregating per-file results.)
+        let source = """
+            @Container
+            extension SomeType {
+                @Provides static let value: Value = Value()
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        #expect(result.bindings.isEmpty)
+        let bindings = result.containerBindings["SomeType"] ?? []
+        #expect(bindings.count == 1)
+    }
+
+    @Test func providesInsideHelperTypeNestedInContainerStillRoutesToContainer() {
+        // A non-@Container helper struct nested inside a @Container
+        // inherits the container scope — its bindings still belong to
+        // the enclosing container's graph.
+        let source = """
+            @Container
+            enum TestContainer {
+                struct Helper {
+                    @Provides static let value: Value = Value()
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        #expect(result.bindings.isEmpty)
+        let testBindings = result.containerBindings["TestContainer"] ?? []
+        #expect(testBindings.count == 1)
+        if case .provider(let provider) = testBindings[0] {
+            #expect(provider.accessPath == "TestContainer.Helper.value")
+        } else {
+            Issue.record("expected provider binding")
+        }
+    }
+
     // MARK: - Import discovery
 
     @Test func discoverImportsFindsPlainImports() {
