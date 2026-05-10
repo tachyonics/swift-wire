@@ -541,7 +541,9 @@ struct DiscoveryTests {
 
     @Test func nestedSingletonInsideContainerRoutedToContainerBucket() {
         // A @Singleton declared inside a @Container belongs to that
-        // container's graph, not the default graph.
+        // container's graph, not the default graph. The qualified
+        // type name captures the full enclosing path so codegen can
+        // construct the type from module scope.
         let source = """
             @Container
             enum TestContainer {
@@ -557,10 +559,25 @@ struct DiscoveryTests {
         #expect(testContainerBindings.count == 1)
         if case .singleton(let singleton) = testContainerBindings[0] {
             #expect(singleton.typeName == "MockService")
+            #expect(singleton.qualifiedTypeName == "TestContainer.MockService")
             #expect(singleton.dependencies.first?.type == "Logger")
         } else {
             Issue.record("expected singleton binding")
         }
+    }
+
+    @Test func topLevelSingletonHasQualifiedTypeNameEqualToTypeName() {
+        // For a `@Singleton` at module scope, the qualified type name
+        // is just the simple name — codegen needs no enclosing prefix.
+        let source = """
+            @Singleton
+            struct UserService {
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "UserService.swift")
+        #expect(result.count == 1)
+        #expect(result[0].typeName == "UserService")
+        #expect(result[0].qualifiedTypeName == "UserService")
     }
 
     @Test func bindingsInNonContainerEnclosingTypeStayInDefaultGraph() {

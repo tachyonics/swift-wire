@@ -27,6 +27,21 @@ extension DiscoveredBinding {
         }
     }
 
+    /// The bound type as referenced from the generated `_WireGraph.swift`
+    /// at module scope — qualified with any enclosing type prefix for
+    /// `@Singleton`s nested inside another type (typically a
+    /// `@Container`). `@Provides` bindings use their declared type
+    /// expression as-is; if a user writes a `@Provides` returning a
+    /// nested type, they need to qualify the type annotation
+    /// themselves (limitation we'll surface as a diagnostic in
+    /// iteration 3 if it bites).
+    package var boundTypeReference: String {
+        switch self {
+        case .singleton(let singleton): return singleton.qualifiedTypeName
+        case .provider(let provider): return provider.boundType
+        }
+    }
+
     /// Dependencies the binding needs at construction — `@Inject`
     /// parameters/properties for `@Singleton`, function parameters for
     /// `@Provides func`, empty for `@Provides let`.
@@ -58,8 +73,18 @@ extension DiscoveredBinding {
 /// One `@Singleton`-annotated type found in a source file, with the
 /// dependency declaration extracted from either an `@Inject`-marked init
 /// or from `@Inject` stored properties on the type.
+///
+/// `typeName` is the simple type name (`MockService`); the graph keys
+/// bindings by this. `qualifiedTypeName` is the same name prefixed by
+/// any enclosing types' names (`TestContainer.MockService` for a
+/// `@Singleton` nested inside a `@Container` enum, or just
+/// `MockService` for a top-level `@Singleton`). Code emission uses
+/// `qualifiedTypeName` at the construction site since the generated
+/// `_wireBootstrap...` function lives at module scope and can't see
+/// nested types unqualified.
 package struct DiscoveredSingleton: Sendable {
     package let typeName: String
+    package let qualifiedTypeName: String
     package let typeKind: String
     package let genericParameterNames: [String]
     package let dependencies: [DependencyParameter]
@@ -67,12 +92,17 @@ package struct DiscoveredSingleton: Sendable {
 
     package init(
         typeName: String,
+        qualifiedTypeName: String? = nil,
         typeKind: String,
         genericParameterNames: [String],
         dependencies: [DependencyParameter],
         sourcePath: String
     ) {
         self.typeName = typeName
+        // Default to the simple name so existing call sites that pass
+        // only `typeName` (top-level singletons in tests, etc.) keep
+        // working without explicit qualification.
+        self.qualifiedTypeName = qualifiedTypeName ?? typeName
         self.typeKind = typeKind
         self.genericParameterNames = genericParameterNames
         self.dependencies = dependencies
@@ -529,10 +559,15 @@ final class BindingDiscovery: SyntaxVisitor {
         guard hasAttribute(attributes, named: "Singleton") else { return }
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
         let dependencies = extractInjectDependencies(from: members)
+        // `enclosingTypes` already includes this type's own name (it
+        // was pushed by `enterTypeDecl` before `processSingleton` ran),
+        // so it's the full path including the singleton itself.
+        let qualified = enclosingTypes.joined(separator: ".")
         record(
             .singleton(
                 DiscoveredSingleton(
                     typeName: name,
+                    qualifiedTypeName: qualified,
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
                     dependencies: dependencies,
