@@ -22,39 +22,56 @@ import WireGenCore
 struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
-
-        guard arguments.count >= 2 else {
-            FileHandle.standardError.write(
-                Data("error: WireGen requires at least an output path argument.\n".utf8)
-            )
-            FileHandle.standardError.write(
-                Data("usage: WireGen <output-path> [source-files...]\n".utf8)
-            )
-            exit(1)
-        }
-
+        guard arguments.count >= 2 else { printUsageAndExit() }
         let outputPath = arguments[1]
         let sourcePaths = Array(arguments.dropFirst(2))
 
-        // 1. Discover bindings, container partitions, and imports
-        //    across input sources. Bindings inside `@Container`
-        //    declarations go into per-container buckets keyed by
-        //    container name; everything else feeds the default graph.
-        var perFileDiscovered: [(path: String, items: [DiscoveredBinding])] = []
-        var allImports: [String] = []
+        let aggregate = discoverAllSources(at: sourcePaths)
+        print(renderDiscoveryReport(perFile: aggregate.perFile))
+
+        // One graph per scope — default plus one per `@Container`.
+        // Each is validated independently (atomic; no cross-graph
+        // leakage).
+        let defaultGraph = buildDependencyGraph(from: aggregate.defaultBindings)
+        let containerGraphs = aggregate.containerBindings.keys.sorted().map {
+            (name: $0, result: buildDependencyGraph(from: aggregate.containerBindings[$0] ?? []))
+        }
+
+        printSkippedReport(default: defaultGraph, containers: containerGraphs)
+        failIfAnyGraphInvalid(default: defaultGraph, containers: containerGraphs)
+
+        let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
+        let containerOrders = printAndCollectTopologicalOrders(
+            defaultOrder: defaultOrder,
+            containers: containerGraphs
+        )
+
+        let generated = renderWireGraph(
+            imports: aggregate.imports,
+            topologicalOrder: defaultOrder,
+            containerTopologicalOrders: containerOrders
+        )
+        try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
+        print("wrote \(outputPath)")
+    }
+
+    // MARK: - Helpers
+
+    /// Aggregated per-file discovery: bindings shown together in the
+    /// discovery report (default + container), plus the two separate
+    /// buckets the graph orchestration needs, plus the union of
+    /// imports from binding-bearing files.
+    private struct DiscoveryAggregate {
+        var perFile: [(path: String, items: [DiscoveredBinding])] = []
         var defaultBindings: [DiscoveredBinding] = []
         var containerBindings: [String: [DiscoveredBinding]] = [:]
+        var imports: [String] = []
+    }
+
+    private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
+        var aggregate = DiscoveryAggregate()
         for path in sourcePaths {
-            let url = URL(fileURLWithPath: path)
-            let source: String
-            do {
-                source = try String(contentsOf: url, encoding: .utf8)
-            } catch {
-                FileHandle.standardError.write(
-                    Data("error: failed to read \(path): \(error)\n".utf8)
-                )
-                exit(1)
-            }
+            let source = readSource(at: path)
             let result = discover(in: source, sourcePath: path)
 
             // For the discovery report, show all of the file's bindings
@@ -62,48 +79,58 @@ struct WireGen {
             // provider bindings already encodes the container name, so
             // a flat per-file view stays informative.
             let containerBindingsList = result.containerBindings.values.flatMap { $0 }
-            perFileDiscovered.append(
+            aggregate.perFile.append(
                 (path: path, items: result.bindings + containerBindingsList)
             )
 
-            defaultBindings.append(contentsOf: result.bindings)
+            aggregate.defaultBindings.append(contentsOf: result.bindings)
             for (name, bindings) in result.containerBindings {
-                containerBindings[name, default: []].append(contentsOf: bindings)
+                aggregate.containerBindings[name, default: []].append(contentsOf: bindings)
             }
 
             // Only collect imports from files that contribute bindings.
             // Files with no @Singleton/@Provides have nothing to add to
             // the generated file's type-visibility needs — including
-            // their imports would just leak unrelated modules into the
-            // generated bootstrap.
+            // their imports would just leak unrelated modules.
             if !result.bindings.isEmpty || !result.containerBindings.isEmpty {
-                allImports.append(contentsOf: result.imports)
+                aggregate.imports.append(contentsOf: result.imports)
             }
         }
-        print(renderDiscoveryReport(perFile: perFileDiscovered))
+        return aggregate
+    }
 
-        // 2. Build per-graph dependency graphs: one for the default
-        //    graph and one for each named container. Each is validated
-        //    independently (its bindings are atomic — no cross-graph
-        //    leakage).
-        let defaultGraph = buildDependencyGraph(from: defaultBindings)
-        let containerGraphs = containerBindings.keys.sorted().map {
-            (name: $0, result: buildDependencyGraph(from: containerBindings[$0] ?? []))
+    private static func readSource(at path: String) -> String {
+        do {
+            return try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)
+        } catch {
+            FileHandle.standardError.write(
+                Data("error: failed to read \(path): \(error)\n".utf8)
+            )
+            exit(1)
         }
+    }
 
-        // 3. Print skipped (generic) bindings, combined across all
-        //    graphs — informational. Keys are sorted in `renderSkipped`
-        //    only by source path, which is fine here.
-        let allSkipped = defaultGraph.skipped + containerGraphs.flatMap { $0.result.skipped }
-        let skippedReport = renderSkipped(allSkipped)
-        if !skippedReport.isEmpty {
-            print("")
-            print(skippedReport)
-        }
+    /// Print skipped (generic) bindings combined across all graphs.
+    /// Informational; doesn't affect validation.
+    private static func printSkippedReport(
+        default defaultGraph: GraphResult,
+        containers containerGraphs: [(name: String, result: GraphResult)]
+    ) {
+        let allSkipped =
+            defaultGraph.skipped + containerGraphs.flatMap { $0.result.skipped }
+        let report = renderSkipped(allSkipped)
+        guard !report.isEmpty else { return }
+        print("")
+        print(report)
+    }
 
-        // 4. Validation: any graph failing → write errors per graph
-        //    to stderr, exit non-zero, write no output file. The
-        //    build plugin treats a missing output as a failed step.
+    /// Write validation failures (one block per failing graph) to
+    /// stderr and `exit(1)` if any graph is invalid. The build plugin
+    /// treats a missing output as a failed generation step.
+    private static func failIfAnyGraphInvalid(
+        default defaultGraph: GraphResult,
+        containers containerGraphs: [(name: String, result: GraphResult)]
+    ) {
         let allNamedGraphs: [(name: String, result: GraphResult)] =
             [(name: "default", result: defaultGraph)] + containerGraphs
         let failures = allNamedGraphs.compactMap {
@@ -113,22 +140,25 @@ struct WireGen {
             }
             return nil
         }
-        if !failures.isEmpty {
-            for failure in failures {
-                FileHandle.standardError.write(Data("\nin graph '\(failure.name)':\n".utf8))
-                FileHandle.standardError.write(
-                    Data(renderValidationErrors(failure.errors).utf8)
-                )
-                FileHandle.standardError.write(Data("\n".utf8))
-            }
-            exit(1)
+        guard !failures.isEmpty else { return }
+        for failure in failures {
+            FileHandle.standardError.write(Data("\nin graph '\(failure.name)':\n".utf8))
+            FileHandle.standardError.write(
+                Data(renderValidationErrors(failure.errors).utf8)
+            )
+            FileHandle.standardError.write(Data("\n".utf8))
         }
+        exit(1)
+    }
 
-        // 5. Success — print topological orders for each graph,
-        //    emit the multi-struct `_WireGraph.swift` containing the
-        //    default `_WireGraph` plus one `_<Name>WireGraph` per
-        //    container.
-        let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
+    /// Print the topological order for each successful graph and
+    /// return the per-container orders keyed by name (the default
+    /// order is the caller's responsibility since the caller already
+    /// holds it).
+    private static func printAndCollectTopologicalOrders(
+        defaultOrder: [DiscoveredBinding],
+        containers containerGraphs: [(name: String, result: GraphResult)]
+    ) -> [String: [DiscoveredBinding]] {
         print("")
         print("default graph:")
         print(renderTopologicalOrder(defaultOrder))
@@ -140,13 +170,16 @@ struct WireGen {
             print("container '\(name)':")
             print(renderTopologicalOrder(order))
         }
+        return containerOrders
+    }
 
-        let generated = renderWireGraph(
-            imports: allImports,
-            topologicalOrder: defaultOrder,
-            containerTopologicalOrders: containerOrders
+    private static func printUsageAndExit() -> Never {
+        FileHandle.standardError.write(
+            Data("error: WireGen requires at least an output path argument.\n".utf8)
         )
-        try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
-        print("wrote \(outputPath)")
+        FileHandle.standardError.write(
+            Data("usage: WireGen <output-path> [source-files...]\n".utf8)
+        )
+        exit(1)
     }
 }
