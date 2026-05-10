@@ -42,4 +42,35 @@ struct BootstrapTests {
         #expect(graph.buildNumber.value == 42)
         #expect(graph.banner.text == "IntegrationTests #42")
     }
+
+    // MARK: - @Container bindings
+
+    @Test func testContainerProducesWiredGraphFromOwnBindings() async throws {
+        // Exercises the per-container codegen end-to-end:
+        //   - `_TestContainerWireGraph.bootstrap()` resolves
+        //   - `@Provides static let banner` (primary declaration)
+        //   - nested `@Singleton struct MockBannerService` (also primary)
+        //     with `qualifiedTypeName` "TestContainer.MockBannerService"
+        //   - `@Provides static let testMode` (from the `@Container
+        //     extension`)
+        // All bindings come from the container — module-scope @Provides
+        // and module-scope @Singletons do not leak in.
+        let graph = try await _TestContainerWireGraph.bootstrap()
+        #expect(graph.banner.text == "test container")
+        #expect(graph.testMode.value == "integration-test")
+        #expect(graph.mockBannerService.display() == "mock: test container")
+    }
+
+    @Test func defaultGraphAndTestContainerAreIndependent() async throws {
+        // Both graphs bind the *same* type (`Banner`), but with
+        // different sources: the default graph synthesises it via
+        // `makeBanner(appName:, buildNumber:)`, while the container
+        // provides a fixed value. Proves the two graphs are atomic
+        // and live side-by-side without conflict.
+        let defaultGraph = try await _WireGraph.bootstrap()
+        let testGraph = try await _TestContainerWireGraph.bootstrap()
+
+        #expect(defaultGraph.banner.text == "IntegrationTests #42")
+        #expect(testGraph.banner.text == "test container")
+    }
 }
