@@ -33,9 +33,11 @@ struct WireGen {
         // Each is validated independently (atomic; no cross-graph
         // leakage).
         let defaultGraph = buildDependencyGraph(from: aggregate.defaultBindings)
-        let containerGraphs = aggregate.containerBindings.keys.sorted().map {
-            (name: $0, result: buildDependencyGraph(from: aggregate.containerBindings[$0] ?? []))
-        }
+        let containerGraphs = aggregate.containerBindings
+            .sorted(by: { $0.key < $1.key })
+            .map { name, bindings in
+                (name: name, result: buildDependencyGraph(from: bindings))
+            }
 
         printSkippedReport(default: defaultGraph, containers: containerGraphs)
         failIfAnyGraphInvalid(default: defaultGraph, containers: containerGraphs)

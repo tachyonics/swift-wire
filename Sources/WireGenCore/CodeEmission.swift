@@ -67,8 +67,7 @@ package func renderWireGraph(
     // the same delegation pattern as the default. The free-function
     // discriminator is the container name so multiple containers don't
     // collide at module scope.
-    for containerName in containerTopologicalOrders.keys.sorted() {
-        let order = containerTopologicalOrders[containerName] ?? []
+    for (containerName, order) in containerTopologicalOrders.sorted(by: { $0.key < $1.key }) {
         appendStruct(
             structName: "_\(containerName)WireGraph",
             bootstrapFunction: "_wireBootstrap\(containerName)",
