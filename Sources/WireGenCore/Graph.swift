@@ -129,7 +129,7 @@ private struct BindingIdentity: Hashable, Comparable {
         case (nil, nil): return false
         case (nil, _?): return true
         case (_?, nil): return false
-        case let (l?, r?): return l < r
+        case let (lhsKey?, rhsKey?): return lhsKey < rhsKey
         }
     }
 }
