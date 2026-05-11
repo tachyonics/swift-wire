@@ -119,9 +119,18 @@ private struct BindingIdentity: Hashable, Comparable {
 
     static func < (lhs: Self, rhs: Self) -> Bool {
         if lhs.type != rhs.type { return lhs.type < rhs.type }
-        // Unkeyed sorts before keyed for determinism; among keyed, sort
-        // by key text.
-        return (lhs.key ?? "") < (rhs.key ?? "")
+        // Unkeyed sorts before any keyed identity; among keyed, sort
+        // by key text. `nil` and `""` would otherwise compare as
+        // equivalent under a `?? ""` coalesce while being distinct
+        // under the auto-synthesised `Hashable`, leading to undefined
+        // sort order between them if both ever appeared in the same
+        // collection.
+        switch (lhs.key, rhs.key) {
+        case (nil, nil): return false
+        case (nil, _?): return true
+        case (_?, nil): return false
+        case let (l?, r?): return l < r
+        }
     }
 }
 
