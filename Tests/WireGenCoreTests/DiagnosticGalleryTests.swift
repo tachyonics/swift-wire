@@ -153,7 +153,11 @@ struct DiagnosticGalleryTests {
         let (errors, rendered) = validate(source: source, sourcePath: "Logger.swift")
         let validationErrors = try #require(errors)
         #expect(validationErrors.duplicateBindings.count == 1)
-        #expect(rendered.contains("Logger.swift:2:8: error: type 'Logger' has multiple bindings; the dependency graph is ambiguous"))
+        #expect(
+            rendered.contains(
+                "Logger.swift:2:8: error: type 'Logger' has multiple bindings; the dependency graph is ambiguous"
+            )
+        )
         #expect(rendered.contains("Logger.swift:6:8: note: also bound here"))
     }
 
@@ -172,7 +176,11 @@ struct DiagnosticGalleryTests {
         let (errors, rendered) = validate(source: source, sourcePath: "Loggers.swift")
         let validationErrors = try #require(errors)
         #expect(validationErrors.duplicateBindings.count == 1)
-        #expect(rendered.contains("Loggers.swift:2:8: error: type 'Logger' has multiple bindings; the dependency graph is ambiguous"))
+        #expect(
+            rendered.contains(
+                "Loggers.swift:2:8: error: type 'Logger' has multiple bindings; the dependency graph is ambiguous"
+            )
+        )
         #expect(rendered.contains("Loggers.swift:6:5: note: also bound here"))
     }
 

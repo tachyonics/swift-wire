@@ -489,7 +489,11 @@ struct GraphTests {
         )
         let report = renderValidationErrors(errors)
         // Primary error at the first binding; note(s) at the rest.
-        #expect(report.contains("Logger.swift:1:1: error: type 'Logger' has multiple bindings; the dependency graph is ambiguous"))
+        #expect(
+            report.contains(
+                "Logger.swift:1:1: error: type 'Logger' has multiple bindings; the dependency graph is ambiguous"
+            )
+        )
         #expect(report.contains("loggerProvider.swift:1:1: note: also bound here"))
     }
 }
