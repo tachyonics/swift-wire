@@ -106,6 +106,13 @@ The other two scopes plus the scope-crossing wrapper.
 - `Provider<T>` runtime type — likely a `@Sendable () async throws -> T` closure-backed wrapper that the build plugin populates with the appropriate scope-resolution logic. Decide whether `Provider<T>` needs the `Resolver` protocol (deferred from iteration 1) once we see what the closure-based version costs in practice.
 - Build plugin's check that refuses storing a `@RequestScope` value as a property on a `@Singleton` (compile error with a fix-it suggesting `Provider<...>`)
 
+**Forward-compatibility notes.** `Provider<T>` and `@RequestScope` are the features that would shift shape most if Swift ever gained native effect handlers — they're the scope-crossing cases where a static graph stops fitting and a handler-based implementation would be the natural representation. Two API-framing choices to make deliberately at this iteration so a future migration stays open:
+
+- **`Provider<T>` framed as "request one when you need it,"** not "a captured closure you call." Implementation today is closure capture; the documented contract is the effectful-operation framing. A future handler-based implementation could replace the closure without changing the user-facing surface.
+- **`@RequestScope` framed as a dynamic extent** — `withRequestScope { ... }`-shaped entry points, not mutable graph state or thread-local registries. Same mental model a handler-based implementation would use natively. Avoid baking in any specific concurrency primitive (custom executor, particular actor-isolation shape) at this level.
+
+See also: "Dynamic binding lookup by `Any.Type` (rejected)" under Deferred decisions for the related forward-compatibility commitment.
+
 **Validation gate:** test app with a `@Singleton` injecting `Provider<RequestLogger>`-style; calling `provider()` returns a fresh value each invocation; storing a `@RequestScope` directly on a `@Singleton` produces the expected compile error.
 
 ## Iteration 5 — multibindings
@@ -334,6 +341,18 @@ What 2b's design preserves so this lands cleanly later:
 - Codegen emits one `_<Name>WireGraph` per selectable container. Composition doesn't change the per-container output shape, only the binding set fed in.
 
 Decision point: when an adopter hits the "I'm repeating bindings across containers" pattern (most likely the environment-config case described above), that's the signal to build composition. Until then, document the design space here and move on.
+
+### Dynamic binding lookup by `Any.Type` (rejected)
+
+Wire deliberately does not expose runtime binding lookup by `Any.Type` (or `String`, or any other type-erased key). Generated graphs surface typed accessors only; the binding set is not iterable, queryable, or addressable through an erased lookup at runtime.
+
+Reasons:
+
+1. **Wire's thesis is the static graph.** Resolution is decided at compile time; what's left at runtime is just stored properties (or whatever future backend emits in their place). Type-erased lookup reintroduces the late-binding hazards — missing deps surfacing at runtime, type mismatches, ambiguity — that compile-time validation is designed to eliminate.
+2. **Backend forward-compatibility.** If Swift ever gains native effect handlers, "the graph" becomes more like an evaluation order managed by installed handlers (a Wire-to-handlers migration would mirror Scala's ZLayer-on-ZIO shape). A `lookup(by: Any.Type) -> Any?` surface would lock Wire to a value-typed-graph backend and close off that migration path.
+3. **Read-only introspection is separable.** The runtime `introspect()` use case the README anticipates for M2 (ops/admin dashboards) needs a view of the graph's structure — binding list, dependency edges — not type-erased resolution. The two concerns can be served independently; offering introspection doesn't entail offering dynamic lookup.
+
+If a concrete use case ever appears, the bar is high: it must demand resolution-by-type specifically and not be solvable by adding a typed accessor or surfacing read-only introspection. Until then this isn't deferred — it's intentionally excluded.
 
 ## Post-M1 milestone preview: WireConfiguration
 
