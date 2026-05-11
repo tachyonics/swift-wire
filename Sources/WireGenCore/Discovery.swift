@@ -99,6 +99,16 @@ extension DiscoveredBinding {
     package var sourcePath: String {
         location.file
     }
+
+    /// The binding's key identifier, or `nil` for unkeyed bindings.
+    /// `@Singleton`s are always unkeyed; only `@Provides` can be keyed.
+    /// Graph identity is `(boundType, keyIdentifier?)`.
+    package var keyIdentifier: String? {
+        switch self {
+        case .singleton: return nil
+        case .provider(let provider): return provider.keyIdentifier
+        }
+    }
 }
 
 /// One `@Singleton`-annotated type found in a source file, with the
@@ -163,6 +173,11 @@ package struct DiscoveredProvider: Sendable {
     /// Position of the property/function identifier — what the user
     /// would navigate to from a diagnostic.
     package let location: SourceLocation
+    /// Canonical text of the `@Provides(<expr>)` argument, or `nil` for
+    /// the unkeyed form. Two bindings of the same type with different
+    /// `keyIdentifier`s coexist in the graph; same type with same key
+    /// is a duplicate.
+    package let keyIdentifier: String?
 
     package var sourcePath: String { location.file }
 
@@ -172,7 +187,8 @@ package struct DiscoveredProvider: Sendable {
         form: Form,
         dependencies: [DependencyParameter],
         genericParameterNames: [String],
-        location: SourceLocation
+        location: SourceLocation,
+        keyIdentifier: String? = nil
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -180,6 +196,7 @@ package struct DiscoveredProvider: Sendable {
         self.dependencies = dependencies
         self.genericParameterNames = genericParameterNames
         self.location = location
+        self.keyIdentifier = keyIdentifier
     }
 
     /// Whether the binding source is a property (read its value directly)
@@ -207,17 +224,25 @@ package struct DependencyParameter: Sendable {
     /// `@Inject` site (or `@Provides func` parameter) the diagnostic
     /// should point at when this dependency can't be resolved.
     package let location: SourceLocation
+    /// Canonical text of the `@Inject(<expr>)` argument when the
+    /// consumer is selecting a keyed binding, or `nil` for the unkeyed
+    /// form. Unkeyed deps match only unkeyed bindings; keyed deps
+    /// match only same-key bindings (Dagger-style — keys partition the
+    /// binding space).
+    package let keyIdentifier: String?
 
     package init(
         name: String?,
         type: String,
         kind: DependencyKind,
-        location: SourceLocation
+        location: SourceLocation,
+        keyIdentifier: String? = nil
     ) {
         self.name = name
         self.type = type
         self.kind = kind
         self.location = location
+        self.keyIdentifier = keyIdentifier
     }
 }
 
@@ -668,6 +693,8 @@ final class BindingDiscovery: SyntaxVisitor {
 
         let propertyName = pattern.identifier.text
         let accessPath = (enclosingTypes + [propertyName]).joined(separator: ".")
+        let key = attribute(in: node.attributes, named: "Provides")
+            .flatMap { keyIdentifier(from: $0) }
         record(
             .provider(
                 DiscoveredProvider(
@@ -676,7 +703,8 @@ final class BindingDiscovery: SyntaxVisitor {
                     form: .property,
                     dependencies: [],
                     genericParameterNames: [],
-                    location: location(of: pattern.identifier)
+                    location: location(of: pattern.identifier),
+                    keyIdentifier: key
                 )
             )
         )
@@ -715,15 +743,25 @@ final class BindingDiscovery: SyntaxVisitor {
         let functionName = node.name.text
         let accessPath = (enclosingTypes + [functionName]).joined(separator: ".")
         let dependencies = node.signature.parameterClause.parameters.map { parameter in
-            DependencyParameter(
+            // Per-parameter `@Inject(<key>)` lets a consumer name the
+            // keyed binding it wants. A bare parameter (no attribute)
+            // is an unkeyed dep — same as if the user wrote `@Inject`
+            // with no argument, which is also legal but redundant here
+            // since `@Provides func` parameters are implicitly deps.
+            let parameterKey = attribute(in: parameter.attributes, named: "Inject")
+                .flatMap { keyIdentifier(from: $0) }
+            return DependencyParameter(
                 name: parameterName(parameter),
                 type: parameter.type.trimmedDescription,
                 kind: .providerFunctionParameter,
-                location: location(of: parameter.firstName)
+                location: location(of: parameter.firstName),
+                keyIdentifier: parameterKey
             )
         }
         let genericParameterNames =
             node.genericParameterClause?.parameters.map { $0.name.text } ?? []
+        let key = attribute(in: node.attributes, named: "Provides")
+            .flatMap { keyIdentifier(from: $0) }
         record(
             .provider(
                 DiscoveredProvider(
@@ -732,7 +770,8 @@ final class BindingDiscovery: SyntaxVisitor {
                     form: .function,
                     dependencies: dependencies,
                     genericParameterNames: genericParameterNames,
-                    location: location(of: node.name)
+                    location: location(of: node.name),
+                    keyIdentifier: key
                 )
             )
         )
@@ -753,11 +792,18 @@ final class BindingDiscovery: SyntaxVisitor {
                 if hasAttribute(initDecl.attributes, named: "Inject") {
                     injectInitDependencies = initDecl.signature.parameterClause.parameters.map {
                         parameter in
-                        DependencyParameter(
+                        // Per-parameter `@Inject(<key>)` keys an
+                        // individual dep. The init-level `@Inject` (no
+                        // args) marks the init as canonical; its key —
+                        // if any — applies to nothing.
+                        let parameterKey = attribute(in: parameter.attributes, named: "Inject")
+                            .flatMap { keyIdentifier(from: $0) }
+                        return DependencyParameter(
                             name: parameterName(parameter),
                             type: parameter.type.trimmedDescription,
                             kind: .injectInitParameter,
-                            location: location(of: parameter.firstName)
+                            location: location(of: parameter.firstName),
+                            keyIdentifier: parameterKey
                         )
                     }
                 }
@@ -765,7 +811,9 @@ final class BindingDiscovery: SyntaxVisitor {
             }
 
             guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
-            guard hasAttribute(varDecl.attributes, named: "Inject") else { continue }
+            guard let injectAttribute = attribute(in: varDecl.attributes, named: "Inject")
+            else { continue }
+            let propertyKey = keyIdentifier(from: injectAttribute)
             for binding in varDecl.bindings {
                 guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
                 guard let typeAnnotation = binding.typeAnnotation else { continue }
@@ -774,7 +822,8 @@ final class BindingDiscovery: SyntaxVisitor {
                         name: pattern.identifier.text,
                         type: typeAnnotation.type.trimmedDescription,
                         kind: .injectProperty,
-                        location: location(of: pattern.identifier)
+                        location: location(of: pattern.identifier),
+                        keyIdentifier: propertyKey
                     )
                 )
             }
@@ -809,9 +858,39 @@ final class BindingDiscovery: SyntaxVisitor {
         _ attributes: AttributeListSyntax,
         named name: String
     ) -> Bool {
-        attributes.contains { element in
-            guard let attribute = element.as(AttributeSyntax.self) else { return false }
-            return attribute.attributeName.trimmedDescription == name
+        attribute(in: attributes, named: name) != nil
+    }
+
+    /// Find the first attribute in the list matching `name`, or `nil`.
+    /// Used to reach the attribute's argument list when extracting a key
+    /// identifier from `@Inject(...)` / `@Provides(...)`.
+    private func attribute(
+        in attributes: AttributeListSyntax,
+        named name: String
+    ) -> AttributeSyntax? {
+        for element in attributes {
+            guard let attribute = element.as(AttributeSyntax.self) else { continue }
+            if attribute.attributeName.trimmedDescription == name {
+                return attribute
+            }
         }
+        return nil
+    }
+
+    /// Extract the canonical key identifier from an attribute's argument
+    /// list. Returns `nil` for the unkeyed form (no parentheses or empty
+    /// argument list). For the keyed form `@Inject(<expr>)` returns the
+    /// trimmed text of `<expr>` — `Database.primary` → "Database.primary".
+    ///
+    /// The build plugin matches keyed bindings to keyed consumers by
+    /// canonical text, so what the user writes IS the key. `Foo.primary`
+    /// on one side matches `Foo.primary` on the other; `.primary` does
+    /// not match `Foo.primary` (different canonical text), and Swift's
+    /// type inference for leading-dot is a separate concern handled by
+    /// the macro signature, not the build plugin.
+    private func keyIdentifier(from attribute: AttributeSyntax) -> String? {
+        guard case let .argumentList(args) = attribute.arguments else { return nil }
+        guard let firstArg = args.first else { return nil }
+        return firstArg.expression.trimmedDescription
     }
 }

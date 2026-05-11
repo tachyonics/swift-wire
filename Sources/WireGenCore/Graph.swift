@@ -81,21 +81,61 @@ package struct MissingBinding: Sendable {
     }
 }
 
-/// Two or more bindings claim to produce the same type, leaving the
-/// graph fundamentally ambiguous about which one to use at injection
-/// sites. Iteration 3's explicit-key disambiguation will let users
-/// resolve this; until then it's a hard error.
+/// Two or more bindings claim the same `(type, key)` identity, leaving
+/// the graph fundamentally ambiguous about which one to use at
+/// injection sites. With explicit-key disambiguation, two bindings of
+/// the same type with *different* keys coexist — only same `(type, key)`
+/// fires this error.
 package struct DuplicateBinding: Sendable {
     package let boundType: String
+    /// The key identifier shared by all of the duplicates, or `nil`
+    /// when they're all unkeyed. Surfaced in the diagnostic so the user
+    /// sees which slot is overloaded; also drives the fix-it text
+    /// (suggest adding keys when none of the duplicates carry one).
+    package let keyIdentifier: String?
     package let bindings: [DiscoveredBinding]
 
-    package init(boundType: String, bindings: [DiscoveredBinding]) {
+    package init(
+        boundType: String,
+        keyIdentifier: String? = nil,
+        bindings: [DiscoveredBinding]
+    ) {
         self.boundType = boundType
+        self.keyIdentifier = keyIdentifier
         self.bindings = bindings
     }
 }
 
 // MARK: - Graph construction
+
+/// Compound identity for a binding — `(boundType, keyIdentifier?)`.
+/// Two bindings with the same `type` but different `key`s coexist; same
+/// `type` and same `key` are duplicates. Unkeyed deps (`key == nil`)
+/// match only unkeyed bindings; keyed deps match only same-key bindings
+/// — keys partition the binding space (Dagger semantics).
+private struct BindingIdentity: Hashable, Comparable {
+    let type: String
+    let key: String?
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.type != rhs.type { return lhs.type < rhs.type }
+        // Unkeyed sorts before keyed for determinism; among keyed, sort
+        // by key text.
+        return (lhs.key ?? "") < (rhs.key ?? "")
+    }
+}
+
+extension DiscoveredBinding {
+    fileprivate var identity: BindingIdentity {
+        BindingIdentity(type: boundType, key: keyIdentifier)
+    }
+}
+
+extension DependencyParameter {
+    fileprivate var identity: BindingIdentity {
+        BindingIdentity(type: type, key: keyIdentifier)
+    }
+}
 
 /// Build the dependency graph from the discovered bindings, run a
 /// topological sort, and surface any validation problems found along
@@ -108,33 +148,40 @@ package struct DuplicateBinding: Sendable {
 /// graph can't resolve cleanly. Concrete specialisation is deferred
 /// until a separate substitution pass is implemented.
 ///
-/// Duplicate bindings (two bindings producing the same type) cause an
-/// early-exit failure: without unique bindings, downstream validation
-/// (cycles, missing bindings) can't be interpreted meaningfully.
+/// Duplicate bindings (two bindings producing the same `(type, key)`
+/// identity) cause an early-exit failure: without unique bindings, the
+/// rest of validation isn't trustworthy.
 package func buildDependencyGraph(
     from bindings: [DiscoveredBinding]
 ) -> GraphResult {
-    // Index non-generic bindings by their bound type, capturing
-    // duplicates as we go. Generic bindings are deferred to `skipped`.
-    var groupedByType: [String: [DiscoveredBinding]] = [:]
+    // Index non-generic bindings by their (type, key) identity,
+    // capturing duplicates as we go. Generic bindings are deferred to
+    // `skipped`.
+    var groupedByIdentity: [BindingIdentity: [DiscoveredBinding]] = [:]
     var skipped: [DiscoveredBinding] = []
     for binding in bindings {
         if binding.genericParameterNames.isEmpty {
-            groupedByType[binding.boundType, default: []].append(binding)
+            groupedByIdentity[binding.identity, default: []].append(binding)
         } else {
             skipped.append(binding)
         }
     }
 
-    // Split into uniquely-bound types vs duplicates.
-    var uniqueByType: [String: DiscoveredBinding] = [:]
+    // Split into uniquely-bound identities vs duplicates.
+    var uniqueByIdentity: [BindingIdentity: DiscoveredBinding] = [:]
     var duplicates: [DuplicateBinding] = []
-    for boundType in groupedByType.keys.sorted() {
-        let group = groupedByType[boundType] ?? []
+    for identity in groupedByIdentity.keys.sorted() {
+        let group = groupedByIdentity[identity] ?? []
         if group.count == 1 {
-            uniqueByType[boundType] = group[0]
+            uniqueByIdentity[identity] = group[0]
         } else {
-            duplicates.append(DuplicateBinding(boundType: boundType, bindings: group))
+            duplicates.append(
+                DuplicateBinding(
+                    boundType: identity.type,
+                    keyIdentifier: identity.key,
+                    bindings: group
+                )
+            )
         }
     }
 
@@ -153,30 +200,31 @@ package func buildDependencyGraph(
         )
     }
 
-    // Resolve each binding's dependencies to bound types. Anything that
-    // doesn't resolve is captured as a missing binding.
-    var dependencyEdges: [String: [String]] = [:]
+    // Resolve each binding's dependencies to a `(type, key)` identity.
+    // Anything that doesn't resolve is captured as a missing binding.
+    var dependencyEdges: [BindingIdentity: [BindingIdentity]] = [:]
     var missingBindings: [MissingBinding] = []
 
     // Iterate in deterministic (sorted) order so the output is stable
     // across runs.
-    for boundType in uniqueByType.keys.sorted() {
-        guard let binding = uniqueByType[boundType] else { continue }
-        var resolved: [String] = []
+    for identity in uniqueByIdentity.keys.sorted() {
+        guard let binding = uniqueByIdentity[identity] else { continue }
+        var resolved: [BindingIdentity] = []
         for dependency in binding.dependencies {
-            if uniqueByType[dependency.type] != nil {
-                resolved.append(dependency.type)
+            let depIdentity = dependency.identity
+            if uniqueByIdentity[depIdentity] != nil {
+                resolved.append(depIdentity)
             } else {
                 missingBindings.append(
                     MissingBinding(consumer: binding, dependency: dependency)
                 )
             }
         }
-        dependencyEdges[boundType] = resolved
+        dependencyEdges[identity] = resolved
     }
 
     let sortResult = topologicalSort(
-        nodes: uniqueByType,
+        nodes: uniqueByIdentity,
         edges: dependencyEdges
     )
 
@@ -215,19 +263,19 @@ private enum VisitState {
 /// outcome when validation errors exist; the order is only surfaced on
 /// success.
 private func topologicalSort(
-    nodes: [String: DiscoveredBinding],
-    edges: [String: [String]]
+    nodes: [BindingIdentity: DiscoveredBinding],
+    edges: [BindingIdentity: [BindingIdentity]]
 ) -> (order: [DiscoveredBinding], cycles: [[DiscoveredBinding]]) {
-    var state: [String: VisitState] = [:]
-    for name in nodes.keys {
-        state[name] = .unvisited
+    var state: [BindingIdentity: VisitState] = [:]
+    for identity in nodes.keys {
+        state[identity] = .unvisited
     }
     var order: [DiscoveredBinding] = []
     var cycles: [[DiscoveredBinding]] = []
-    var seenCycleNodeSets: Set<Set<String>> = []
-    var path: [String] = []
+    var seenCycleIdentitySets: Set<Set<BindingIdentity>> = []
+    var path: [BindingIdentity] = []
 
-    func visit(_ node: String) {
+    func visit(_ node: BindingIdentity) {
         switch state[node] ?? .unvisited {
         case .visited:
             return
@@ -236,13 +284,13 @@ private func topologicalSort(
             // the current traversal back to here is the cycle. Append
             // `node` again so the rendered path reads `A → B → A`.
             if let start = path.firstIndex(of: node) {
-                let cycleNames = Array(path[start...]) + [node]
-                let cycleNodeSet = Set(cycleNames)
+                let cyclePath = Array(path[start...]) + [node]
+                let cycleNodeSet = Set(cyclePath)
                 // Dedupe — the same cycle reached from different entry
                 // points produces the same node set.
-                if !seenCycleNodeSets.contains(cycleNodeSet) {
-                    seenCycleNodeSets.insert(cycleNodeSet)
-                    cycles.append(cycleNames.compactMap { nodes[$0] })
+                if !seenCycleIdentitySets.contains(cycleNodeSet) {
+                    seenCycleIdentitySets.insert(cycleNodeSet)
+                    cycles.append(cyclePath.compactMap { nodes[$0] })
                 }
             }
             return
@@ -262,8 +310,8 @@ private func topologicalSort(
         }
     }
 
-    for name in nodes.keys.sorted() {
-        visit(name)
+    for identity in nodes.keys.sorted() {
+        visit(identity)
     }
 
     return (order: order, cycles: cycles)
@@ -312,15 +360,27 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
     var lines: [String] = []
 
     // Duplicate bindings: one error at the first binding's location,
-    // notes at the remaining bindings.
+    // notes at the remaining bindings. When the duplicates are all
+    // unkeyed, append a fix-it note pointing at the key-disambiguation
+    // pattern. Keyed duplicates already named their key, so the user
+    // knows which slot is overloaded — no need to suggest keying.
     for duplicate in errors.duplicateBindings {
         guard let primary = duplicate.bindings.first else { continue }
+        let typeSlot = describeTypeSlot(
+            boundType: duplicate.boundType,
+            key: duplicate.keyIdentifier
+        )
         lines.append(
-            "\(primary.location.formattedPrefix): error: type '\(duplicate.boundType)' has multiple bindings; the dependency graph is ambiguous"
+            "\(primary.location.formattedPrefix): error: type \(typeSlot) has multiple bindings; the dependency graph is ambiguous"
         )
         for binding in duplicate.bindings.dropFirst() {
             lines.append(
                 "\(binding.location.formattedPrefix): note: also bound here"
+            )
+        }
+        if duplicate.keyIdentifier == nil {
+            lines.append(
+                "\(primary.location.formattedPrefix): note: to disambiguate, declare named keys (e.g. `static let primary = BindingKey<\(duplicate.boundType)>()`) and tag each binding/consumer with `@Provides(\(duplicate.boundType).primary)` / `@Inject(\(duplicate.boundType).primary)`"
             )
         }
     }
@@ -343,8 +403,12 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
     // position — we follow Swift compiler convention and keep the
     // message self-contained rather than restating "(required by 'X')".
     for missing in errors.missingBindings {
+        let slot = describeTypeSlot(
+            boundType: missing.dependency.type,
+            key: missing.dependency.keyIdentifier
+        )
         lines.append(
-            "\(missing.dependency.location.formattedPrefix): error: no binding produces '\(missing.dependency.type)'"
+            "\(missing.dependency.location.formattedPrefix): error: no binding produces \(slot)"
         )
     }
 
@@ -358,4 +422,17 @@ private func displayName(_ binding: DiscoveredBinding) -> String {
     case .singleton(let singleton): return singleton.typeName
     case .provider(let provider): return provider.accessPath
     }
+}
+
+/// Human-facing description of a `(type, key)` slot in the graph. Used
+/// in both missing-binding and duplicate-binding diagnostics so the
+/// rendering is consistent and keyed slots are clearly named.
+///
+/// - Unkeyed: `'Database'`
+/// - Keyed:   `'Database' keyed 'Database.primary'`
+private func describeTypeSlot(boundType: String, key: String?) -> String {
+    if let key {
+        return "'\(boundType)' keyed '\(key)'"
+    }
+    return "'\(boundType)'"
 }
