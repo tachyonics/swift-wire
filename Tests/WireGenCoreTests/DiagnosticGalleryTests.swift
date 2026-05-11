@@ -226,4 +226,95 @@ struct DiagnosticGalleryTests {
             )
         }
     }
+
+    // MARK: - Keyed bindings
+
+    @Test func keyedMissingBindingIncludesKeyInMessage() throws {
+        // Consumer asks for a keyed binding; no provider exists for
+        // that exact (type, key) slot. Diagnostic names both the type
+        // and the key so the user can see which slot is unfilled.
+        let source = """
+            @Singleton
+            struct UserRepo {
+                @Inject(Database.primary) var db: Database
+            }
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "UserRepo.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.missingBindings.count == 1)
+        #expect(validationErrors.missingBindings[0].dependency.keyIdentifier == "Database.primary")
+        #expect(
+            rendered.contains(
+                "UserRepo.swift:3:35: error: no binding produces 'Database' keyed 'Database.primary'"
+            )
+        )
+    }
+
+    @Test func keyedDuplicateBindingNamesTheKeyAndOmitsFixItNote() throws {
+        // Two `@Provides` of the same type with the same key — duplicate
+        // at the (type, key) level. The key is already named on both
+        // sides, so the diagnostic just identifies which keyed slot is
+        // overloaded; no fix-it note suggesting "use keys" because the
+        // user already is.
+        let source = """
+            @Provides(Database.primary)
+            let dbA: Database = Database()
+
+            @Provides(Database.primary)
+            let dbB: Database = Database()
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "Loggers.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.duplicateBindings.count == 1)
+        #expect(validationErrors.duplicateBindings[0].keyIdentifier == "Database.primary")
+        #expect(
+            rendered.contains(
+                "error: type 'Database' keyed 'Database.primary' has multiple bindings"
+            )
+        )
+        #expect(!rendered.contains("note: to disambiguate"))
+    }
+
+    @Test func unkeyedDuplicateBindingShowsFixItNote() throws {
+        // Unkeyed duplicate — the original sitting 1a case — now also
+        // gets a fix-it note pointing at the key-disambiguation pattern.
+        // Reuses the gallery's existing duplicate fixture so the note is
+        // the new piece under test.
+        let source = """
+            @Singleton
+            struct Logger {
+            }
+
+            @Singleton
+            struct Logger {
+            }
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "Logger.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.duplicateBindings.count == 1)
+        #expect(validationErrors.duplicateBindings[0].keyIdentifier == nil)
+        #expect(rendered.contains("note: to disambiguate, declare named keys"))
+        #expect(rendered.contains("BindingKey<Logger>()"))
+        #expect(rendered.contains("@Provides(Logger.primary)"))
+        #expect(rendered.contains("@Inject(Logger.primary)"))
+    }
+
+    @Test func keyedProviderSatisfiesKeyedConsumerCleanly() throws {
+        // Positive case — a keyed `@Provides` and a keyed `@Inject` on
+        // the same (type, key) resolve, no validation errors. Confirms
+        // the happy path through the new graph keying. (Also confirms
+        // an unkeyed dep alongside doesn't accidentally match the keyed
+        // binding.)
+        let source = """
+            @Provides(Database.primary)
+            let primaryDB: Database = Database()
+
+            @Singleton
+            struct UserRepo {
+                @Inject(Database.primary) var db: Database
+            }
+            """
+        let (errors, _) = validate(source: source, sourcePath: "App.swift")
+        #expect(errors == nil)
+    }
 }

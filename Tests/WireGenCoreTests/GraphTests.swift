@@ -37,9 +37,39 @@ struct GraphTests {
         )
     }
 
+    /// Build a singleton with one keyed dependency. Keyed-test helper —
+    /// separate from `singleton(_:dependencies:)` to avoid an overload-
+    /// ambiguity trap (Swift can't disambiguate `dependencies: []`
+    /// across two tuple shapes).
+    private func singletonWithKeyedDep(
+        _ name: String,
+        depName: String,
+        depType: String,
+        depKey: String?
+    ) -> DiscoveredBinding {
+        .singleton(
+            DiscoveredSingleton(
+                typeName: name,
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [
+                    DependencyParameter(
+                        name: depName,
+                        type: depType,
+                        kind: .injectProperty,
+                        location: mockLocation("\(name).swift"),
+                        keyIdentifier: depKey
+                    )
+                ],
+                location: mockLocation("\(name).swift")
+            )
+        )
+    }
+
     private func providerProperty(
         _ accessPath: String,
         boundType: String,
+        key: String? = nil,
         sourcePath: String? = nil
     ) -> DiscoveredBinding {
         .provider(
@@ -49,7 +79,8 @@ struct GraphTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                location: mockLocation(sourcePath ?? "\(accessPath).swift")
+                location: mockLocation(sourcePath ?? "\(accessPath).swift"),
+                keyIdentifier: key
             )
         )
     }
@@ -495,5 +526,165 @@ struct GraphTests {
             )
         )
         #expect(report.contains("loggerProvider.swift:1:1: note: also bound here"))
+    }
+
+    // MARK: - Keyed bindings: (type, key?) identity
+
+    @Test func sameTypeWithDifferentKeysCoexist() throws {
+        // Two providers of the same type but different keys — they
+        // have distinct (type, key) identities, so the graph accepts
+        // them both. No duplicate, no ambiguity.
+        let result = buildDependencyGraph(from: [
+            providerProperty("primaryDB", boundType: "Database", key: "Database.primary"),
+            providerProperty("replicaDB", boundType: "Database", key: "Database.replica"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.count == 2)
+    }
+
+    @Test func sameTypeWithSameKeyIsDuplicate() throws {
+        // Two providers with identical (type, key) — duplicate.
+        let result = buildDependencyGraph(from: [
+            providerProperty("dbA", boundType: "Database", key: "Database.primary"),
+            providerProperty("dbB", boundType: "Database", key: "Database.primary"),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+        #expect(errors.duplicateBindings[0].boundType == "Database")
+        #expect(errors.duplicateBindings[0].keyIdentifier == "Database.primary")
+    }
+
+    @Test func keyedAndUnkeyedSameTypeCoexist() throws {
+        // A `@Singleton Database` (unkeyed) and a `@Provides(.replica)`
+        // bind the same type but distinct slots. Both fit.
+        let result = buildDependencyGraph(from: [
+            singleton("Database"),
+            providerProperty("replicaDB", boundType: "Database", key: "Database.replica"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.count == 2)
+    }
+
+    @Test func keyedDependencyResolvesToKeyedBinding() throws {
+        // Consumer asks for `Database` keyed `Database.primary`; a
+        // keyed provider satisfies it.
+        let result = buildDependencyGraph(from: [
+            providerProperty("primaryDB", boundType: "Database", key: "Database.primary"),
+            singletonWithKeyedDep(
+                "UserRepo",
+                depName: "db",
+                depType: "Database",
+                depKey: "Database.primary"
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["Database", "UserRepo"])
+    }
+
+    @Test func keyedDependencyDoesNotMatchUnkeyedBinding() throws {
+        // Dagger-style: keyed dep matches only same-key binding. An
+        // unkeyed `Database` binding doesn't satisfy a keyed `Database`
+        // dep — it's a missing-binding error.
+        let result = buildDependencyGraph(from: [
+            singleton("Database"),
+            singletonWithKeyedDep(
+                "UserRepo",
+                depName: "db",
+                depType: "Database",
+                depKey: "Database.primary"
+            ),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        #expect(errors.missingBindings[0].dependency.keyIdentifier == "Database.primary")
+    }
+
+    @Test func unkeyedDependencyDoesNotMatchKeyedBinding() throws {
+        // The mirror case: unkeyed dep matches only unkeyed binding.
+        // A keyed provider doesn't fill an unkeyed slot.
+        let result = buildDependencyGraph(from: [
+            providerProperty("primaryDB", boundType: "Database", key: "Database.primary"),
+            singletonWithKeyedDep(
+                "UserRepo",
+                depName: "db",
+                depType: "Database",
+                depKey: nil
+            ),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        #expect(errors.missingBindings[0].dependency.keyIdentifier == nil)
+    }
+
+    // MARK: - Diagnostic rendering for keyed slots
+
+    @Test func renderMissingBindingForKeyedSlotIncludesKey() {
+        let consumer = singleton("UserRepo")
+        let dep = DependencyParameter(
+            name: "db",
+            type: "Database",
+            kind: .injectProperty,
+            location: mockLocation("UserRepo.swift", line: 3, column: 17),
+            keyIdentifier: "Database.primary"
+        )
+        let errors = GraphResult.ValidationErrors(
+            cycles: [],
+            missingBindings: [MissingBinding(consumer: consumer, dependency: dep)],
+            duplicateBindings: []
+        )
+        let report = renderValidationErrors(errors)
+        #expect(
+            report.contains(
+                "UserRepo.swift:3:17: error: no binding produces 'Database' keyed 'Database.primary'"
+            )
+        )
+    }
+
+    @Test func renderDuplicateKeyedBindingsNamesTheKey() {
+        let errors = GraphResult.ValidationErrors(
+            cycles: [],
+            missingBindings: [],
+            duplicateBindings: [
+                DuplicateBinding(
+                    boundType: "Database",
+                    keyIdentifier: "Database.primary",
+                    bindings: [
+                        providerProperty("dbA", boundType: "Database", key: "Database.primary"),
+                        providerProperty("dbB", boundType: "Database", key: "Database.primary"),
+                    ]
+                )
+            ]
+        )
+        let report = renderValidationErrors(errors)
+        #expect(
+            report.contains(
+                "error: type 'Database' keyed 'Database.primary' has multiple bindings"
+            )
+        )
+        // Keyed duplicates already say which slot is overloaded —
+        // the fix-it note is only useful for unkeyed duplicates.
+        #expect(!report.contains("note: to disambiguate"))
+    }
+
+    @Test func renderUnkeyedDuplicateAppendsFixItNote() {
+        let errors = GraphResult.ValidationErrors(
+            cycles: [],
+            missingBindings: [],
+            duplicateBindings: [
+                DuplicateBinding(
+                    boundType: "Database",
+                    keyIdentifier: nil,
+                    bindings: [
+                        providerProperty("dbA", boundType: "Database"),
+                        providerProperty("dbB", boundType: "Database"),
+                    ]
+                )
+            ]
+        )
+        let report = renderValidationErrors(errors)
+        #expect(report.contains("note: to disambiguate, declare named keys"))
+        #expect(report.contains("BindingKey<Database>()"))
+        #expect(report.contains("@Provides(Database.primary)"))
+        #expect(report.contains("@Inject(Database.primary)"))
     }
 }

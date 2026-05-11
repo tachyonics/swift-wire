@@ -982,4 +982,117 @@ struct DiscoveryTests {
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
         #expect(report.contains("(no dependencies)"))
     }
+
+    // MARK: - Keyed @Provides / @Inject
+
+    @Test func providesWithoutKeyArgumentHasNilKeyIdentifier() {
+        // Sanity-check the default — unkeyed `@Provides` produces a
+        // binding with `keyIdentifier == nil`. Existing tests cover this
+        // implicitly; making it explicit pins the contract.
+        let source = """
+            @Provides let logger: Logger = Logger()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].keyIdentifier == nil)
+    }
+
+    @Test func providesWithMemberAccessKeyExtractsCanonicalText() {
+        // `@Provides(Database.primary)` — the canonical key is the
+        // trimmed text of the argument expression. That's what other
+        // bindings/consumers must match against.
+        let source = """
+            @Provides(Database.primary)
+            let primaryDB: Database = Database()
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].keyIdentifier == "Database.primary")
+    }
+
+    @Test func providesFunctionWithKeyExtractsCanonicalText() {
+        // Same shape, but on a `@Provides func` — the key annotation
+        // sits on the function declaration, not on individual params.
+        let source = """
+            @Provides(Database.primary)
+            func makePrimaryDB() -> Database {
+                Database()
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].keyIdentifier == "Database.primary")
+    }
+
+    @Test func injectPropertyWithKeyExtractsCanonicalText() {
+        // `@Inject(Database.primary) var db: Database` — the consumer-
+        // side annotation. Should propagate to the resulting
+        // `DependencyParameter.keyIdentifier` so graph resolution can
+        // match keyed slot.
+        let source = """
+            @Singleton
+            struct UserRepo {
+                @Inject(Database.primary) var db: Database
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "UserRepo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].keyIdentifier == "Database.primary")
+    }
+
+    @Test func injectInitParameterWithKeyExtractsCanonicalText() {
+        // Per-parameter `@Inject(<key>)` on an `@Inject`-marked init.
+        // The init-level `@Inject` (no args) marks the init as canonical;
+        // per-parameter `@Inject(<key>)` keys that specific dep.
+        let source = """
+            @Singleton
+            struct UserRepo {
+                @Inject
+                init(@Inject(Database.primary) db: Database, logger: Logger) {
+                }
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "UserRepo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.count == 2)
+        #expect(result[0].dependencies[0].name == "db")
+        #expect(result[0].dependencies[0].keyIdentifier == "Database.primary")
+        // Unkeyed dep stays unkeyed.
+        #expect(result[0].dependencies[1].name == "logger")
+        #expect(result[0].dependencies[1].keyIdentifier == nil)
+    }
+
+    @Test func providesFunctionParameterWithKeyExtractsCanonicalText() {
+        // The same per-parameter `@Inject(<key>)` keying applies to
+        // `@Provides func` parameters — they're deps just like
+        // `@Inject` init parameters.
+        let source = """
+            @Provides
+            func makeRepo(@Inject(Database.primary) db: Database, logger: Logger) -> Repository {
+                Repository(db: db, logger: logger)
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "App.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.count == 2)
+        #expect(result[0].dependencies[0].keyIdentifier == "Database.primary")
+        #expect(result[0].dependencies[1].keyIdentifier == nil)
+    }
+
+    @Test func bareIdentifierKeyExtractsAsIs() {
+        // File-scope key declarations (`let primary = BindingKey<Foo>()`)
+        // referenced bare. Canonical key is just "primary". Cross-file
+        // conflicts on bare keys get reported as duplicates by the
+        // graph; that's the expected behavior.
+        let source = """
+            @Singleton
+            struct UserRepo {
+                @Inject(primary) var db: Database
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "UserRepo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies[0].keyIdentifier == "primary")
+    }
 }

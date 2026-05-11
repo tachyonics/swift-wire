@@ -15,15 +15,30 @@
 @attached(member, names: named(init), named(key))
 public macro Singleton() = #externalMacro(module: "WireMacrosImpl", type: "SingletonMacro")
 
-/// Marks a stored property as an injection point. The enclosing type's
-/// scope macro (`@Singleton`, `@RequestScope`, `@JobScope`) reads these
-/// markers to synthesise its initialiser.
+/// Marks a stored property (or init parameter) as an injection point.
+/// The enclosing type's scope macro (`@Singleton`, `@RequestScope`,
+/// `@JobScope`) reads these markers to synthesise its initialiser, and
+/// the build plugin reads them when discovering dependencies.
 ///
-/// `@Inject` itself contributes no code — it's a marker that other macros
-/// recognise. Putting `@Inject` on a property of a type that has no scope
-/// macro is harmless but pointless.
+/// `@Inject` itself contributes no code — it's a marker that other
+/// macros and the build plugin recognise. Putting `@Inject` on a
+/// property of a type that has no scope macro is harmless but pointless.
+///
+/// Pass a `BindingKey<Value>` to disambiguate when multiple bindings of
+/// the same type exist:
+///
+///     @Inject(Database.primary) var db: Database
+///
+/// The build plugin matches keyed consumers to keyed providers by the
+/// *canonical text* of the key expression (`Database.primary` here).
+/// Unkeyed `@Inject` matches only unkeyed bindings; keyed `@Inject`
+/// matches only same-key bindings.
 @attached(peer)
 public macro Inject() = #externalMacro(module: "WireMacrosImpl", type: "InjectMacro")
+
+@attached(peer)
+public macro Inject<Value>(_ key: BindingKey<Value>) =
+    #externalMacro(module: "WireMacrosImpl", type: "InjectMacro")
 
 /// Declares a binding for the dependency graph at module scope or as a
 /// `static` member of a non-`@Container` enclosing type. Attach to a
@@ -38,8 +53,21 @@ public macro Inject() = #externalMacro(module: "WireMacrosImpl", type: "InjectMa
 ///
 /// `@Provides` itself contributes no code — it's a marker the build
 /// plugin recognises during source scanning.
+///
+/// Pass a `BindingKey<Value>` to declare a keyed binding when the same
+/// type is bound multiple times:
+///
+///     @Provides(Database.primary) static let primaryDB: Database = ...
+///     @Provides(Database.replica) static let replicaDB: Database = ...
+///
+/// Consumers reference the same key at the `@Inject` site to select
+/// which binding to inject.
 @attached(peer)
 public macro Provides() = #externalMacro(module: "WireMacrosImpl", type: "ProvidesMacro")
+
+@attached(peer)
+public macro Provides<Value>(_ key: BindingKey<Value>) =
+    #externalMacro(module: "WireMacrosImpl", type: "ProvidesMacro")
 
 /// Declares a type (or an extension) as a selectable container.
 /// `@Provides` declarations and nested `@Singleton` types inside the
