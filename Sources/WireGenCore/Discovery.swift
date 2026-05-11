@@ -1,6 +1,33 @@
 import SwiftParser
 import SwiftSyntax
 
+// MARK: - Source positions
+
+/// A position in a source file — file path plus 1-based line and column.
+/// Carried by every discovered binding and dependency so diagnostics can
+/// emit `file:line:col: error: ...` output that Swift toolchains
+/// (Xcode, the swiftc-driven build pipeline) surface as clickable
+/// errors. Discovery populates these from `SwiftSyntax`'s
+/// `SourceLocationConverter`; tests construct them directly.
+package struct SourceLocation: Sendable, Hashable {
+    package let file: String
+    package let line: Int
+    package let column: Int
+
+    package init(file: String, line: Int, column: Int) {
+        self.file = file
+        self.line = line
+        self.column = column
+    }
+
+    /// `file:line:col` — the prefix Swift compiler diagnostics use, so
+    /// downstream tools recognise the position and link it back to the
+    /// source.
+    package var formattedPrefix: String {
+        "\(file):\(line):\(column)"
+    }
+}
+
 // MARK: - Discovery model
 
 /// One binding the build plugin found in source — either a `@Singleton`
@@ -62,11 +89,15 @@ extension DiscoveredBinding {
         }
     }
 
-    package var sourcePath: String {
+    package var location: SourceLocation {
         switch self {
-        case .singleton(let singleton): return singleton.sourcePath
-        case .provider(let provider): return provider.sourcePath
+        case .singleton(let singleton): return singleton.location
+        case .provider(let provider): return provider.location
         }
+    }
+
+    package var sourcePath: String {
+        location.file
     }
 }
 
@@ -88,7 +119,11 @@ package struct DiscoveredSingleton: Sendable {
     package let typeKind: String
     package let genericParameterNames: [String]
     package let dependencies: [DependencyParameter]
-    package let sourcePath: String
+    /// Position of the type-name identifier in source — what the user
+    /// would navigate to from a diagnostic.
+    package let location: SourceLocation
+
+    package var sourcePath: String { location.file }
 
     package init(
         typeName: String,
@@ -96,7 +131,7 @@ package struct DiscoveredSingleton: Sendable {
         typeKind: String,
         genericParameterNames: [String],
         dependencies: [DependencyParameter],
-        sourcePath: String
+        location: SourceLocation
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -106,7 +141,7 @@ package struct DiscoveredSingleton: Sendable {
         self.typeKind = typeKind
         self.genericParameterNames = genericParameterNames
         self.dependencies = dependencies
-        self.sourcePath = sourcePath
+        self.location = location
     }
 }
 
@@ -125,7 +160,11 @@ package struct DiscoveredProvider: Sendable {
     package let form: Form
     package let dependencies: [DependencyParameter]
     package let genericParameterNames: [String]
-    package let sourcePath: String
+    /// Position of the property/function identifier — what the user
+    /// would navigate to from a diagnostic.
+    package let location: SourceLocation
+
+    package var sourcePath: String { location.file }
 
     package init(
         boundType: String,
@@ -133,14 +172,14 @@ package struct DiscoveredProvider: Sendable {
         form: Form,
         dependencies: [DependencyParameter],
         genericParameterNames: [String],
-        sourcePath: String
+        location: SourceLocation
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
         self.form = form
         self.dependencies = dependencies
         self.genericParameterNames = genericParameterNames
-        self.sourcePath = sourcePath
+        self.location = location
     }
 
     /// Whether the binding source is a property (read its value directly)
@@ -164,11 +203,21 @@ package struct DependencyParameter: Sendable {
     package let name: String?
     package let type: String
     package let kind: DependencyKind
+    /// Position of the parameter or property identifier in source — the
+    /// `@Inject` site (or `@Provides func` parameter) the diagnostic
+    /// should point at when this dependency can't be resolved.
+    package let location: SourceLocation
 
-    package init(name: String?, type: String, kind: DependencyKind) {
+    package init(
+        name: String?,
+        type: String,
+        kind: DependencyKind,
+        location: SourceLocation
+    ) {
         self.name = name
         self.type = type
         self.kind = kind
+        self.location = location
     }
 }
 
@@ -227,7 +276,8 @@ package func discover(
     sourcePath: String
 ) -> SourceFileDiscovery {
     let syntaxTree = Parser.parse(source: source)
-    let visitor = BindingDiscovery(sourcePath: sourcePath)
+    let converter = SourceLocationConverter(fileName: sourcePath, tree: syntaxTree)
+    let visitor = BindingDiscovery(sourcePath: sourcePath, converter: converter)
     visitor.walk(syntaxTree)
     return SourceFileDiscovery(
         bindings: visitor.bindings,
@@ -363,6 +413,7 @@ final class BindingDiscovery: SyntaxVisitor {
     /// `trimmedDescription` preserves them.
     var imports: [String] = []
     private let sourcePath: String
+    private let converter: SourceLocationConverter
     /// Stack of enclosing type names — top of stack is the immediate
     /// enclosing type. Used to compute `accessPath` for static
     /// `@Provides` members of nested types.
@@ -376,9 +427,21 @@ final class BindingDiscovery: SyntaxVisitor {
     /// preserve scope through nested type declarations.
     private var containerScope: [String?] = [nil]
 
-    init(sourcePath: String) {
+    init(sourcePath: String, converter: SourceLocationConverter) {
         self.sourcePath = sourcePath
+        self.converter = converter
         super.init(viewMode: .sourceAccurate)
+    }
+
+    /// Resolve the 1-based file/line/col of a syntax node's start
+    /// position. Used by everything that needs a `SourceLocation`.
+    private func location(of node: some SyntaxProtocol) -> SourceLocation {
+        let position = node.startLocation(converter: converter)
+        return SourceLocation(
+            file: sourcePath,
+            line: position.line,
+            column: position.column
+        )
     }
 
     /// The container this declaration belongs to, or `nil` for the
@@ -411,7 +474,7 @@ final class BindingDiscovery: SyntaxVisitor {
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "struct",
-            name: node.name.text,
+            nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
             members: node.memberBlock.members
@@ -426,7 +489,7 @@ final class BindingDiscovery: SyntaxVisitor {
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "class",
-            name: node.name.text,
+            nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
             members: node.memberBlock.members
@@ -441,7 +504,7 @@ final class BindingDiscovery: SyntaxVisitor {
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "actor",
-            name: node.name.text,
+            nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
             members: node.memberBlock.members
@@ -551,7 +614,7 @@ final class BindingDiscovery: SyntaxVisitor {
 
     private func processSingleton(
         typeKind: String,
-        name: String,
+        nameToken: TokenSyntax,
         generics: GenericParameterClauseSyntax?,
         attributes: AttributeListSyntax,
         members: MemberBlockItemListSyntax
@@ -566,12 +629,12 @@ final class BindingDiscovery: SyntaxVisitor {
         record(
             .singleton(
                 DiscoveredSingleton(
-                    typeName: name,
+                    typeName: nameToken.text,
                     qualifiedTypeName: qualified,
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
                     dependencies: dependencies,
-                    sourcePath: sourcePath
+                    location: location(of: nameToken)
                 )
             )
         )
@@ -613,7 +676,7 @@ final class BindingDiscovery: SyntaxVisitor {
                     form: .property,
                     dependencies: [],
                     genericParameterNames: [],
-                    sourcePath: sourcePath
+                    location: location(of: pattern.identifier)
                 )
             )
         )
@@ -655,7 +718,8 @@ final class BindingDiscovery: SyntaxVisitor {
             DependencyParameter(
                 name: parameterName(parameter),
                 type: parameter.type.trimmedDescription,
-                kind: .providerFunctionParameter
+                kind: .providerFunctionParameter,
+                location: location(of: parameter.firstName)
             )
         }
         let genericParameterNames =
@@ -668,7 +732,7 @@ final class BindingDiscovery: SyntaxVisitor {
                     form: .function,
                     dependencies: dependencies,
                     genericParameterNames: genericParameterNames,
-                    sourcePath: sourcePath
+                    location: location(of: node.name)
                 )
             )
         )
@@ -692,7 +756,8 @@ final class BindingDiscovery: SyntaxVisitor {
                         DependencyParameter(
                             name: parameterName(parameter),
                             type: parameter.type.trimmedDescription,
-                            kind: .injectInitParameter
+                            kind: .injectInitParameter,
+                            location: location(of: parameter.firstName)
                         )
                     }
                 }
@@ -708,7 +773,8 @@ final class BindingDiscovery: SyntaxVisitor {
                     DependencyParameter(
                         name: pattern.identifier.text,
                         type: typeAnnotation.type.trimmedDescription,
-                        kind: .injectProperty
+                        kind: .injectProperty,
+                        location: location(of: pattern.identifier)
                     )
                 )
             }

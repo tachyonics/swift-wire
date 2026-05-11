@@ -861,7 +861,7 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [],
-                sourcePath: "Found.swift"
+                location: WireGenCore.SourceLocation(file: "Found.swift", line: 1, column: 1)
             )
         )
         let report = renderDiscoveryReport(perFile: [
@@ -880,7 +880,7 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: ["Model"],
                 dependencies: [],
-                sourcePath: "R.swift"
+                location: WireGenCore.SourceLocation(file: "R.swift", line: 1, column: 1)
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "R.swift", items: [item])])
@@ -894,9 +894,14 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [
-                    DependencyParameter(name: "b", type: "B", kind: .injectProperty)
+                    DependencyParameter(
+                        name: "b",
+                        type: "B",
+                        kind: .injectProperty,
+                        location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
+                    )
                 ],
-                sourcePath: "A.swift"
+                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
@@ -911,9 +916,14 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [
-                    DependencyParameter(name: "b", type: "B", kind: .injectInitParameter)
+                    DependencyParameter(
+                        name: "b",
+                        type: "B",
+                        kind: .injectInitParameter,
+                        location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
+                    )
                 ],
-                sourcePath: "A.swift"
+                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
@@ -928,7 +938,7 @@ struct DiscoveryTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                sourcePath: "App.swift"
+                location: WireGenCore.SourceLocation(file: "App.swift", line: 1, column: 1)
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "App.swift", items: [item])])
@@ -945,11 +955,12 @@ struct DiscoveryTests {
                     DependencyParameter(
                         name: "table",
                         type: "TaskTable",
-                        kind: .providerFunctionParameter
+                        kind: .providerFunctionParameter,
+                        location: WireGenCore.SourceLocation(file: "App.swift", line: 1, column: 1)
                     )
                 ],
                 genericParameterNames: [],
-                sourcePath: "App.swift"
+                location: WireGenCore.SourceLocation(file: "App.swift", line: 1, column: 1)
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "App.swift", items: [item])])
@@ -965,7 +976,7 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [],
-                sourcePath: "A.swift"
+                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])

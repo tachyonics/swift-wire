@@ -6,13 +6,25 @@ import Testing
 struct GraphTests {
     // MARK: - Helpers
 
+    /// A stable mock location derived from a file path. Line and column
+    /// default to 1 so synthetic test bindings have something deterministic
+    /// for `formattedPrefix`-style assertions.
+    private func mockLocation(_ file: String, line: Int = 1, column: Int = 1) -> WireGenCore.SourceLocation {
+        WireGenCore.SourceLocation(file: file, line: line, column: column)
+    }
+
     private func singleton(
         _ name: String,
         dependencies: [(name: String, type: String)] = [],
         generics: [String] = []
     ) -> DiscoveredBinding {
         let deps = dependencies.map {
-            DependencyParameter(name: $0.name, type: $0.type, kind: .injectProperty)
+            DependencyParameter(
+                name: $0.name,
+                type: $0.type,
+                kind: .injectProperty,
+                location: mockLocation("\(name).swift")
+            )
         }
         return .singleton(
             DiscoveredSingleton(
@@ -20,7 +32,7 @@ struct GraphTests {
                 typeKind: "struct",
                 genericParameterNames: generics,
                 dependencies: deps,
-                sourcePath: "\(name).swift"
+                location: mockLocation("\(name).swift")
             )
         )
     }
@@ -37,7 +49,7 @@ struct GraphTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                sourcePath: sourcePath ?? "\(accessPath).swift"
+                location: mockLocation(sourcePath ?? "\(accessPath).swift")
             )
         )
     }
@@ -53,7 +65,8 @@ struct GraphTests {
             DependencyParameter(
                 name: $0.name,
                 type: $0.type,
-                kind: .providerFunctionParameter
+                kind: .providerFunctionParameter,
+                location: mockLocation(sourcePath ?? "\(accessPath).swift")
             )
         }
         return .provider(
@@ -63,7 +76,7 @@ struct GraphTests {
                 form: .function,
                 dependencies: deps,
                 genericParameterNames: generics,
-                sourcePath: sourcePath ?? "\(accessPath).swift"
+                location: mockLocation(sourcePath ?? "\(accessPath).swift")
             )
         )
     }
@@ -401,39 +414,49 @@ struct GraphTests {
             duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
-        #expect(report.contains("dependency cycle"))
-        #expect(report.contains("A → B → A"))
-        #expect(!report.contains("missing binding"))
-        #expect(!report.contains("duplicate binding"))
+        // Anchored at the first cycle node's location; the arrow-
+        // separated path renders the edges.
+        #expect(report.contains("A.swift:1:1: error: dependency cycle: A → B → A"))
+        #expect(!report.contains("no binding produces"))
+        #expect(!report.contains("has multiple bindings"))
     }
 
     @Test func renderValidationErrorsMissingBindingsOnly() {
         let consumer = singleton("A")
-        let dep = DependencyParameter(name: "x", type: "Missing", kind: .injectProperty)
+        let dep = DependencyParameter(
+            name: "x",
+            type: "Missing",
+            kind: .injectProperty,
+            location: mockLocation("A.swift", line: 4, column: 9)
+        )
         let errors = GraphResult.ValidationErrors(
             cycles: [],
             missingBindings: [MissingBinding(consumer: consumer, dependency: dep)],
             duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
-        #expect(report.contains("missing binding"))
-        #expect(report.contains("A needs x: Missing"))
+        // Position is the dependency site; the consumer is named in the
+        // message for context.
+        #expect(report.contains("A.swift:4:9: error: no binding produces 'Missing' (required by 'A')"))
         #expect(!report.contains("cycle"))
     }
 
     @Test func renderValidationErrorsBothCyclesAndMissingBindings() {
-        // Exercises the blank-line separator between the error sections
-        // that gets inserted only when prior sections exist.
         let consumer = singleton("A")
-        let dep = DependencyParameter(name: "x", type: "Missing", kind: .injectProperty)
+        let dep = DependencyParameter(
+            name: "x",
+            type: "Missing",
+            kind: .injectProperty,
+            location: mockLocation("A.swift", line: 4, column: 9)
+        )
         let errors = GraphResult.ValidationErrors(
             cycles: [[singleton("A"), singleton("B"), singleton("A")]],
             missingBindings: [MissingBinding(consumer: consumer, dependency: dep)],
             duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
-        #expect(report.contains("dependency cycle"))
-        #expect(report.contains("missing binding"))
+        #expect(report.contains("dependency cycle: A → B → A"))
+        #expect(report.contains("no binding produces 'Missing'"))
     }
 
     @Test func renderValidationErrorsMultipleCyclesEachOnItsOwnLine() {
@@ -446,8 +469,8 @@ struct GraphTests {
             duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
-        #expect(report.contains("A → B → A"))
-        #expect(report.contains("C → D → C"))
+        #expect(report.contains("A.swift:1:1: error: dependency cycle: A → B → A"))
+        #expect(report.contains("C.swift:1:1: error: dependency cycle: C → D → C"))
     }
 
     @Test func renderValidationErrorsDuplicateBindingsListSourcePaths() {
@@ -465,9 +488,8 @@ struct GraphTests {
             ]
         )
         let report = renderValidationErrors(errors)
-        #expect(report.contains("duplicate binding"))
-        #expect(report.contains("Logger is bound by 2 declarations"))
-        #expect(report.contains("Logger.swift"))
-        #expect(report.contains("loggerProvider.swift"))
+        // Primary error at the first binding; note(s) at the rest.
+        #expect(report.contains("Logger.swift:1:1: error: type 'Logger' has multiple bindings; the dependency graph is ambiguous"))
+        #expect(report.contains("loggerProvider.swift:1:1: note: also bound here"))
     }
 }

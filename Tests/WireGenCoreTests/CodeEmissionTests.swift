@@ -4,13 +4,22 @@ import Testing
 
 @Suite("CodeEmission")
 struct CodeEmissionTests {
+    private func mockLocation(_ file: String) -> WireGenCore.SourceLocation {
+        WireGenCore.SourceLocation(file: file, line: 1, column: 1)
+    }
+
     private func singleton(
         _ name: String,
         qualifiedTypeName: String? = nil,
         dependencies: [(name: String?, type: String)] = []
     ) -> DiscoveredBinding {
         let deps = dependencies.map {
-            DependencyParameter(name: $0.name, type: $0.type, kind: .injectInitParameter)
+            DependencyParameter(
+                name: $0.name,
+                type: $0.type,
+                kind: .injectInitParameter,
+                location: mockLocation("\(name).swift")
+            )
         }
         return .singleton(
             DiscoveredSingleton(
@@ -19,7 +28,7 @@ struct CodeEmissionTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: deps,
-                sourcePath: "\(name).swift"
+                location: mockLocation("\(name).swift")
             )
         )
     }
@@ -35,7 +44,7 @@ struct CodeEmissionTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                sourcePath: "\(accessPath).swift"
+                location: mockLocation("\(accessPath).swift")
             )
         )
     }
@@ -49,7 +58,8 @@ struct CodeEmissionTests {
             DependencyParameter(
                 name: $0.name,
                 type: $0.type,
-                kind: .providerFunctionParameter
+                kind: .providerFunctionParameter,
+                location: mockLocation("\(accessPath).swift")
             )
         }
         return .provider(
@@ -59,7 +69,7 @@ struct CodeEmissionTests {
                 form: .function,
                 dependencies: deps,
                 genericParameterNames: [],
-                sourcePath: "\(accessPath).swift"
+                location: mockLocation("\(accessPath).swift")
             )
         )
     }
