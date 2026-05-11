@@ -22,10 +22,12 @@
 ///     @Inject(Database.primary) var db: Database
 ///     @Provides(Database.primary) static let primaryDB: Database = ...
 ///
-/// The generic parameter `Value` is a marker for human readers — it
-/// documents which type the key is intended for. The compiler does not
-/// enforce that the consuming property's type matches `Value`; the
-/// build plugin emits compile-time type assertions for that.
+/// The generic parameter `Value` documents which type the key is
+/// intended for. Swift's type system uses it at the call site to
+/// rule out non-`BindingKey` arguments (`@Inject(42)` fails to
+/// compile), and the build plugin's emitted type-assertion functions
+/// unify it with the consuming binding's type to catch mismatches —
+/// `@Inject(Database.primary) var db: Cache` doesn't type-check.
 public struct BindingKey<Value>: Sendable {
     public init() {}
 }
