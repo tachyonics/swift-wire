@@ -339,10 +339,12 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
     // Missing bindings: anchor at the dependency site (the `@Inject`
     // property/parameter or the `@Provides func` parameter that asked
     // for the type), so the diagnostic lands where the user asked for
-    // the missing thing.
+    // the missing thing. The consumer's identity is implied by the
+    // position — we follow Swift compiler convention and keep the
+    // message self-contained rather than restating "(required by 'X')".
     for missing in errors.missingBindings {
         lines.append(
-            "\(missing.dependency.location.formattedPrefix): error: no binding produces '\(missing.dependency.type)' (required by '\(displayName(missing.consumer))')"
+            "\(missing.dependency.location.formattedPrefix): error: no binding produces '\(missing.dependency.type)'"
         )
     }
 

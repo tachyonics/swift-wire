@@ -435,9 +435,9 @@ struct GraphTests {
             duplicateBindings: []
         )
         let report = renderValidationErrors(errors)
-        // Position is the dependency site; the consumer is named in the
-        // message for context.
-        #expect(report.contains("A.swift:4:9: error: no binding produces 'Missing' (required by 'A')"))
+        // Position is the dependency site; the consumer is implied by
+        // the location, so the message stays self-contained.
+        #expect(report.contains("A.swift:4:9: error: no binding produces 'Missing'"))
         #expect(!report.contains("cycle"))
     }
 

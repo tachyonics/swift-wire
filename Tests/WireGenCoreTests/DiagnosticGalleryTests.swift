@@ -52,7 +52,7 @@ struct DiagnosticGalleryTests {
         // Line 3 = the `@Inject var logger:` line; column 17 = start of
         // `logger` (4-space indent + "@Inject var " = 16 chars; the
         // identifier starts at column 17, 1-based).
-        #expect(rendered.contains("Greeter.swift:3:17: error: no binding produces 'Logger' (required by 'Greeter')"))
+        #expect(rendered.contains("Greeter.swift:3:17: error: no binding produces 'Logger'"))
     }
 
     @Test func missingBindingPointsAtEachUnsatisfiedDependencySeparately() throws {
@@ -68,8 +68,8 @@ struct DiagnosticGalleryTests {
         let (errors, rendered) = validate(source: source, sourcePath: "Service.swift")
         let validationErrors = try #require(errors)
         #expect(validationErrors.missingBindings.count == 2)
-        #expect(rendered.contains("Service.swift:3:17: error: no binding produces 'Alpha' (required by 'Service')"))
-        #expect(rendered.contains("Service.swift:4:17: error: no binding produces 'Beta' (required by 'Service')"))
+        #expect(rendered.contains("Service.swift:3:17: error: no binding produces 'Alpha'"))
+        #expect(rendered.contains("Service.swift:4:17: error: no binding produces 'Beta'"))
     }
 
     // MARK: - Dependency cycles
