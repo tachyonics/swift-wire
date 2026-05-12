@@ -6,25 +6,30 @@ import WireGenCore
 /// Thin CLI wrapper over `WireGenCore`. Discovers `@Singleton` and
 /// `@Provides` bindings in the input source files, builds a dependency
 /// graph, runs topological sort with cycle / missing-binding /
-/// duplicate-binding detection, and on success emits `_WireGraph.swift`
-/// to the output path. On validation failure, writes the errors to
-/// stderr, exits non-zero, and writes no output file — the build
-/// plugin treats a missing output as a failed generation step.
+/// duplicate-binding detection, and on success emits two files:
+///   - `_WireGraph.swift` — the bootstrap struct + free function
+///   - `_WireKeyChecks.swift` — compile-time type assertions for
+///     every keyed `@Inject` / `@Provides` annotation
+///
+/// On validation failure, writes the errors to stderr, exits non-zero,
+/// and writes no output files — the build plugin treats a missing
+/// output as a failed generation step.
 ///
 /// `import` declarations are propagated verbatim from input source
-/// files into the generated bootstrap so any types referenced by
+/// files into both generated files so any types referenced by
 /// bindings remain in scope.
 ///
 /// CLI shape:
 ///
-///     WireGen <output-path> [source-files...]
+///     WireGen <graph-output-path> <key-checks-output-path> [source-files...]
 @main
 struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
-        guard arguments.count >= 2 else { printUsageAndExit() }
-        let outputPath = arguments[1]
-        let sourcePaths = Array(arguments.dropFirst(2))
+        guard arguments.count >= 3 else { printUsageAndExit() }
+        let graphOutputPath = arguments[1]
+        let keyChecksOutputPath = arguments[2]
+        let sourcePaths = Array(arguments.dropFirst(3))
 
         let aggregate = discoverAllSources(at: sourcePaths)
         print(renderDiscoveryReport(perFile: aggregate.perFile))
@@ -53,8 +58,23 @@ struct WireGen {
             topologicalOrder: defaultOrder,
             containerTopologicalOrders: containerOrders
         )
-        try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
-        print("wrote \(outputPath)")
+        try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
+        print("wrote \(graphOutputPath)")
+
+        // Key checks: every binding (default + container) is fair game
+        // for a keyed annotation, and the emitted file is independent
+        // of the graph's topological ordering — it's pure type
+        // assertion scaffolding the Swift compiler runs through when
+        // building the consumer.
+        let allBindings =
+            aggregate.defaultBindings
+            + aggregate.containerBindings.values.flatMap { $0 }
+        let keyChecks = renderWireKeyChecks(
+            imports: aggregate.imports,
+            allBindings: allBindings
+        )
+        try keyChecks.write(toFile: keyChecksOutputPath, atomically: true, encoding: .utf8)
+        print("wrote \(keyChecksOutputPath)")
     }
 
     // MARK: - Helpers
@@ -177,10 +197,16 @@ struct WireGen {
 
     private static func printUsageAndExit() -> Never {
         FileHandle.standardError.write(
-            Data("error: WireGen requires at least an output path argument.\n".utf8)
+            Data(
+                "error: WireGen requires two output path arguments (graph + key checks).\n"
+                    .utf8
+            )
         )
         FileHandle.standardError.write(
-            Data("usage: WireGen <output-path> [source-files...]\n".utf8)
+            Data(
+                "usage: WireGen <graph-output-path> <key-checks-output-path> [source-files...]\n"
+                    .utf8
+            )
         )
         exit(1)
     }

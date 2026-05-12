@@ -39,7 +39,14 @@ struct WireBuildPlugin: BuildToolPlugin {
             return []
         }
 
-        let outputURL = context.pluginWorkDirectoryURL.appendingPathComponent("_WireGraph.swift")
+        let graphURL = context.pluginWorkDirectoryURL.appendingPathComponent("_WireGraph.swift")
+        // Compile-time type assertions for keyed @Inject / @Provides
+        // annotations live in a separate file so the bootstrap stays
+        // focused on wiring. SPM compiles both into the consumer
+        // target automatically.
+        let keyChecksURL = context.pluginWorkDirectoryURL.appendingPathComponent(
+            "_WireKeyChecks.swift"
+        )
         let wireGen = try context.tool(named: "WireGen")
 
         // Soft warning for very large targets. SPM passes these as argv
@@ -59,9 +66,10 @@ struct WireBuildPlugin: BuildToolPlugin {
             .buildCommand(
                 displayName: "WireGen \(target.name)",
                 executable: wireGen.url,
-                arguments: [outputURL.path] + swiftSources.map { $0.path },
+                arguments: [graphURL.path, keyChecksURL.path]
+                    + swiftSources.map { $0.path },
                 inputFiles: swiftSources,
-                outputFiles: [outputURL]
+                outputFiles: [graphURL, keyChecksURL]
             )
         ]
     }
