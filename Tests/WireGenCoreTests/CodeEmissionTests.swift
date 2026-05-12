@@ -947,13 +947,13 @@ struct CodeEmissionTests {
         // A keyed `@Provides Database` paired with the unkeyed
         // `Database`-typed binding has to get a distinct identifier
         // for both the stored property on `_WireGraph` and the local
-        // in `_wireBootstrap()`. `identifierName(forType:key:)` strips
-        // the leading `Database.` from the key so the type doesn't
-        // appear twice in the result — `databasePrimary`, not
-        // `databaseDatabasePrimary`. The integration test exercises
-        // this end-to-end through the real build plugin; this unit
-        // test pins the contract in-process where it counts toward
-        // coverage.
+        // in `_wireBootstrap()`. `identifierName(forType:key:)` inserts
+        // a `Keyed` infix between the type-derived prefix and the
+        // sanitised key suffix — verbose but unambiguous, and the
+        // sentinel infix keeps unkeyed type-named bindings safe from
+        // collision. The integration test exercises this end-to-end
+        // through the real build plugin; this unit test pins the
+        // contract in-process where it counts toward coverage.
         let keyedDB: DiscoveredBinding = .provider(
             DiscoveredProvider(
                 boundType: "Database",
@@ -982,11 +982,11 @@ struct CodeEmissionTests {
         )
         // Both accessors present, named for their identity.
         #expect(output.contains("let database: Database"))
-        #expect(output.contains("let databasePrimary: Database"))
+        #expect(output.contains("let databaseKeyedDatabasePrimary: Database"))
         // Construction locals match the accessor names. RHS is the
         // provider's accessPath, which differs from the identifier.
         #expect(output.contains("let database = defaultDB"))
-        #expect(output.contains("let databasePrimary = primaryDB"))
+        #expect(output.contains("let databaseKeyedDatabasePrimary = primaryDB"))
     }
 
     @Test func keyedBindingWithDottedKeyCapitalizesEachSegment() {
@@ -1012,7 +1012,7 @@ struct CodeEmissionTests {
             imports: [],
             topologicalOrder: [exotic]
         )
-        #expect(output.contains("let databaseModuleSharedPrimary: Database"))
+        #expect(output.contains("let databaseKeyedModuleSharedPrimary: Database"))
     }
 
     @Test func keyedBindingWithBareKeyAppendsCapitalizedSuffix() {
@@ -1037,7 +1037,7 @@ struct CodeEmissionTests {
             imports: [],
             topologicalOrder: [alternateDB]
         )
-        #expect(output.contains("let databaseAlternate: Database"))
+        #expect(output.contains("let databaseKeyedAlternate: Database"))
     }
 
     @Test func keyedDependencyResolvesToKeyedLocalName() {
@@ -1080,7 +1080,7 @@ struct CodeEmissionTests {
         )
         // Argument value uses the keyed local name, not the bare
         // `database` (which doesn't exist in this graph anyway).
-        #expect(output.contains("let userRepo = UserRepo(db: databasePrimary)"))
+        #expect(output.contains("let userRepo = UserRepo(db: databaseKeyedDatabasePrimary)"))
     }
 
     @Test func keyChecksSameFileSitesSortByLineWithinFunction() {

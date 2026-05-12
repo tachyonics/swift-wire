@@ -168,21 +168,23 @@ private func propertyName(for binding: DiscoveredBinding) -> String {
 /// Rules:
 /// - Unkeyed: `lowerCamel(sanitize(type))` — same as before keys
 ///   existed.
-/// - Keyed: `lowerCamel(sanitize(type)) + upperCamel(sanitize(key))`,
-///   but if the key starts with `<type>.` (the idiomatic case, e.g.
-///   `Database.primary` keying a `Database`-typed binding), that
-///   leading `<type>.` is stripped so the type doesn't appear twice
-///   in the identifier (`databasePrimary`, not `databaseDatabasePrimary`).
+/// - Keyed: `lowerCamel(sanitize(type)) + "Keyed" + upperCamel(sanitize(key))`.
+///
+/// The `Keyed` infix is a sentinel segment matching the `Of`/`And`
+/// separator pattern already used for generic instantiations
+/// (`Repository<TaskTable>` → `RepositoryOfTaskTable`). It pushes the
+/// collision space to "type names that literally contain the word
+/// `Keyed` in the matching position," which doesn't happen in real
+/// code. The verbose readout — `databaseKeyedDatabasePrimary` for
+/// `(Database, "Database.primary")` — is a tradeoff: less ergonomic
+/// than a stripped form (`databasePrimary`) but unambiguous, and the
+/// keyed accessor is rarely the user's primary access path anyway
+/// (keyed bindings usually live behind a consumer).
 private func identifierName(forType type: String, key: String?) -> String {
     let typeName = lowerCamelCased(sanitizeIdentifier(type))
     guard let key else { return typeName }
-    var effectiveKey = key
-    let typePrefix = "\(type)."
-    if effectiveKey.hasPrefix(typePrefix) {
-        effectiveKey = String(effectiveKey.dropFirst(typePrefix.count))
-    }
-    let keySuffix = upperCamelCased(sanitizeKeyComponents(effectiveKey))
-    return typeName + keySuffix
+    let keySuffix = upperCamelCased(sanitizeKeyComponents(key))
+    return typeName + "Keyed" + keySuffix
 }
 
 /// Sanitize a key expression for use inside an identifier. Dots are

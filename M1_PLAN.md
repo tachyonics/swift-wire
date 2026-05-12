@@ -81,6 +81,7 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
   - `@Provides` in an extension of a type not declared in this module: "this `@Provides` falls through to the default graph under `<TypeName>`'s namespace; consider declaring at module scope or as a member of a type you own."
   Both need the type-declaration index iteration 3 will be building anyway for missing-binding errors.
 - **`@Container` combined with a scope annotation on the same type.** A type can technically carry both `@Container` and a scope macro (`@Singleton`, eventually `@RequestScope`/`@JobScope`). 2b doesn't reject the combination — it just routes the type into the default graph as the scoped binding *and* treats the same type's static `@Provides` as a container. That's almost certainly user error: the type ends up as both a node in one graph and a grouping for another. Iteration 3 should warn at the `@Container`-annotated decl with the precise remedy ("split into two types: a `@Singleton` for the instance binding and a separate `@Container` enum for grouping").
+- **Generated-identifier collisions across bindings.** Sitting 1c's `identifierName(forType:key:)` uses a `Keyed` infix separator (matching the `Of`/`And` pattern from generic-instantiation sanitisation) to push collisions out to "type names literally containing the word `Keyed` in the matching position" — vanishingly unlikely in real code. But the collision space isn't empty, and a future identifier-mangling rule could narrow it further. Add a codegen-time check: group every binding by its generated identifier; if any group has > 1 member, emit a Wire diagnostic at each contributing binding site listing the collision and suggesting a rename. Catches the "someone is deliberately trying to break the system" case cleanly with a Wire-shaped error pointing at user source, rather than letting Swift's "invalid redeclaration" fire on the generated file.
 
 **Validation gate:** a "diagnostic gallery" test directory containing intentionally-broken graphs:
 - Missing binding for a primitive type
@@ -93,6 +94,7 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 - Non-marked init in an extension of a `@Singleton` type that Wire is auto-generating an init for
 - `@Provides` in an unannotated extension of a `@Container`-declared type
 - `@Provides` in an extension of a type not declared in this module
+- Generated-identifier collision (e.g. an adversarial `@Singleton struct DatabaseKeyedDatabasePrimary` alongside `@Provides(Database.primary) ... : Database`) — Wire diagnostic instead of opaque Swift "invalid redeclaration" on the generated file
 
 Each broken graph produces a precise error pointing at the right source location with a fix-it where applicable. The diagnostic gallery becomes the regression suite for diagnostic quality from this point forward.
 

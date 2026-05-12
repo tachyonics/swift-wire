@@ -88,8 +88,12 @@ struct BootstrapTests {
         let graph = try await _WireGraph.bootstrap()
         #expect(graph.keyedConsumer.describe() == "consumer with alternate")
         // Both unkeyed and keyed AppName bindings are reachable from
-        // the graph under distinct property names.
+        // the graph under distinct property names. The keyed accessor
+        // is verbose by design — the `Keyed` infix separates the type-
+        // derived prefix from the sanitised key suffix and pushes
+        // collisions with unkeyed type names out to "name contains the
+        // word `Keyed`," which doesn't happen in real code.
         #expect(graph.appName.value == "IntegrationTests")
-        #expect(graph.appNameAlternate.value == "alternate")
+        #expect(graph.appNameKeyedAppNameAlternate.value == "alternate")
     }
 }
