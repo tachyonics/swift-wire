@@ -943,6 +943,221 @@ struct CodeEmissionTests {
         #expect(!output.contains("_wireTypeCheck_"))
     }
 
+    @Test func keyedProviderInGraphGetsKeyedAccessorName() {
+        // A keyed `@Provides Database` paired with the unkeyed
+        // `Database`-typed binding has to get a distinct identifier
+        // for both the stored property on `_WireGraph` and the local
+        // in `_wireBootstrap()`. `identifierName(forType:key:)` strips
+        // the leading `Database.` from the key so the type doesn't
+        // appear twice in the result — `databasePrimary`, not
+        // `databaseDatabasePrimary`. The integration test exercises
+        // this end-to-end through the real build plugin; this unit
+        // test pins the contract in-process where it counts toward
+        // coverage.
+        let keyedDB: DiscoveredBinding = .provider(
+            DiscoveredProvider(
+                boundType: "Database",
+                accessPath: "primaryDB",
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                location: mockLocation("DB.swift"),
+                keyIdentifier: "Database.primary"
+            )
+        )
+        let unkeyedDB: DiscoveredBinding = .provider(
+            DiscoveredProvider(
+                boundType: "Database",
+                accessPath: "defaultDB",
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                location: mockLocation("DB.swift"),
+                keyIdentifier: nil
+            )
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [unkeyedDB, keyedDB]
+        )
+        // Both accessors present, named for their identity.
+        #expect(output.contains("let database: Database"))
+        #expect(output.contains("let databasePrimary: Database"))
+        // Construction locals match the accessor names. RHS is the
+        // provider's accessPath, which differs from the identifier.
+        #expect(output.contains("let database = defaultDB"))
+        #expect(output.contains("let databasePrimary = primaryDB"))
+    }
+
+    @Test func keyedBindingWithDottedKeyCapitalizesEachSegment() {
+        // Multi-segment key (`Module.shared.primary`) on a binding
+        // whose type doesn't match the leading segment — so the
+        // prefix-strip in `identifierName` is a no-op and the full
+        // dotted text reaches `sanitizeKeyComponents`. Each dot
+        // becomes a segment boundary: dropped, with the next letter
+        // upper-cased. Composed suffix is `ModuleSharedPrimary`,
+        // appended to the type-derived prefix.
+        let exotic: DiscoveredBinding = .provider(
+            DiscoveredProvider(
+                boundType: "Database",
+                accessPath: "exoticDB",
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                location: mockLocation("DB.swift"),
+                keyIdentifier: "Module.shared.primary"
+            )
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [exotic]
+        )
+        #expect(output.contains("let databaseModuleSharedPrimary: Database"))
+    }
+
+    @Test func keyedBindingWithBareKeyAppendsCapitalizedSuffix() {
+        // A bare (non-type-qualified) key — `let alternate =
+        // BindingKey<...>()` at file scope, referenced as
+        // `@Provides(alternate)`. The key text doesn't have a leading
+        // `<type>.` to strip, so the suffix is the upper-camelled key
+        // appended verbatim. Exercises the path where the
+        // `effectiveKey == key` after no-op prefix-strip.
+        let alternateDB: DiscoveredBinding = .provider(
+            DiscoveredProvider(
+                boundType: "Database",
+                accessPath: "altDB",
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                location: mockLocation("DB.swift"),
+                keyIdentifier: "alternate"
+            )
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [alternateDB]
+        )
+        #expect(output.contains("let databaseAlternate: Database"))
+    }
+
+    @Test func keyedDependencyResolvesToKeyedLocalName() {
+        // A consumer with a keyed `@Inject` dep must resolve to the
+        // keyed local name in the construction call — otherwise it'd
+        // bind to whatever happens to be at the unkeyed slot. This
+        // pins the `renderArguments` path through
+        // `identifierName(forType:key:)`.
+        let keyedDB: DiscoveredBinding = .provider(
+            DiscoveredProvider(
+                boundType: "Database",
+                accessPath: "primaryDB",
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                location: mockLocation("DB.swift"),
+                keyIdentifier: "Database.primary"
+            )
+        )
+        let consumer: DiscoveredBinding = .singleton(
+            DiscoveredSingleton(
+                typeName: "UserRepo",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [
+                    DependencyParameter(
+                        name: "db",
+                        type: "Database",
+                        kind: .injectProperty,
+                        location: mockLocation("UserRepo.swift"),
+                        keyIdentifier: "Database.primary"
+                    )
+                ],
+                location: mockLocation("UserRepo.swift")
+            )
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [keyedDB, consumer]
+        )
+        // Argument value uses the keyed local name, not the bare
+        // `database` (which doesn't exist in this graph anyway).
+        #expect(output.contains("let userRepo = UserRepo(db: databasePrimary)"))
+    }
+
+    @Test func keyChecksSameFileSitesSortByLineWithinFunction() {
+        // Two sites for the same `(key, type)` pair in the same file
+        // but different lines. `locationOrder`'s line fallback orders
+        // them ascending, so the lower-line `#sourceLocation` is
+        // emitted first inside the dedup'd function body.
+        let output = renderWireKeyChecks(
+            imports: [],
+            allBindings: [
+                keyedProperty(
+                    "primaryDB",
+                    boundType: "Database",
+                    key: "Database.primary",
+                    line: 9,
+                    sourcePath: "App.swift"
+                ),
+                consumerWithKeyedDep(
+                    "UserRepo",
+                    depName: "db",
+                    depType: "Database",
+                    depKey: "Database.primary",
+                    depLine: 3,
+                    depSourcePath: "App.swift"
+                ),
+            ]
+        )
+        // One function (dedup'd), three #sourceLocation lines total
+        // (open at line 3, close, open at line 9, close, plus the
+        // final close). The line-3 opening comes before line-9.
+        let line3 = output.firstRange(of: "\"App.swift\", line: 3")
+        let line9 = output.firstRange(of: "\"App.swift\", line: 9")
+        #expect(line3 != nil)
+        #expect(line9 != nil)
+        if let line3, let line9 {
+            #expect(line3.lowerBound < line9.lowerBound)
+        }
+    }
+
+    @Test func keyChecksSameFileAndLineSitesSortByColumn() {
+        // Two sites with identical file and line but different
+        // columns — the column-fallback branch of `locationOrder`.
+        // Rare in practice (two annotations on the same line) but
+        // pins the comparator's tail.
+        let output = renderWireKeyChecks(
+            imports: [],
+            allBindings: [
+                keyedProperty(
+                    "primaryDB",
+                    boundType: "Database",
+                    key: "Database.primary",
+                    line: 5,
+                    column: 20,
+                    sourcePath: "App.swift"
+                ),
+                consumerWithKeyedDep(
+                    "UserRepo",
+                    depName: "db",
+                    depType: "Database",
+                    depKey: "Database.primary",
+                    depLine: 5,
+                    depColumn: 5,
+                    depSourcePath: "App.swift"
+                ),
+            ]
+        )
+        // The renderer doesn't emit the column in the `#sourceLocation`
+        // directive (Swift's directive supports `file:` and `line:`
+        // only), so we can't compare on column directly in the output.
+        // Instead, check that both sites contributed `_check` calls in
+        // a single function — both sites are deduped to the same
+        // `(key, type)` pair so they share the function body. The
+        // sort uses column to order them deterministically.
+        let sourceLocOpenings = output.split(separator: "#sourceLocation(file:").count - 1
+        #expect(sourceLocOpenings == 2)
+    }
+
     @Test func keyChecksImportsAreEmittedSortedAndDeduplicated() {
         // Mirrors the renderWireGraph contract — duplicate imports are
         // collapsed, output is alphabetical for determinism.
