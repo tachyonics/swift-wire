@@ -154,9 +154,73 @@ private func appendStruct(
 /// The stored-property name on `_WireGraph` and the local name in
 /// `_wireBootstrap()` for a given binding. Type-derived: bindings are
 /// identified by what they produce, not by their source-level
-/// declaration name.
+/// declaration name. Keyed bindings append a key-derived suffix so
+/// that two providers of the same type with different keys don't
+/// collide. See `identifierName(forType:key:)` for the rule.
 private func propertyName(for binding: DiscoveredBinding) -> String {
-    lowerCamelCased(sanitizeIdentifier(binding.boundType))
+    identifierName(forType: binding.boundType, key: binding.keyIdentifier)
+}
+
+/// The canonical local/property name for a `(boundType, key?)` pair.
+/// Used for both binding declarations and dependency-resolution sites
+/// so a keyed dependency points at the matching keyed binding's local.
+///
+/// Rules:
+/// - Unkeyed: `lowerCamel(sanitize(type))` — same as before keys
+///   existed.
+/// - Keyed: `lowerCamel(sanitize(type)) + "Keyed" + upperCamel(sanitize(key))`.
+///
+/// The `Keyed` infix is a sentinel segment matching the `Of`/`And`
+/// separator pattern already used for generic instantiations
+/// (`Repository<TaskTable>` → `RepositoryOfTaskTable`). It pushes the
+/// collision space to "type names that literally contain the word
+/// `Keyed` in the matching position," which doesn't happen in real
+/// code. The verbose readout — `databaseKeyedDatabasePrimary` for
+/// `(Database, "Database.primary")` — is a tradeoff: less ergonomic
+/// than a stripped form (`databasePrimary`) but unambiguous, and the
+/// keyed accessor is rarely the user's primary access path anyway
+/// (keyed bindings usually live behind a consumer).
+private func identifierName(forType type: String, key: String?) -> String {
+    let typeName = lowerCamelCased(sanitizeIdentifier(type))
+    guard let key else { return typeName }
+    let keySuffix = upperCamelCased(sanitizeKeyComponents(key))
+    return typeName + "Keyed" + keySuffix
+}
+
+/// Sanitize a key expression for use inside an identifier. Dots are
+/// treated as segment separators — the next letter is upper-cased,
+/// the dot is dropped. Other non-identifier characters are dropped
+/// silently, matching `sanitizeIdentifier`'s posture.
+///
+///     "primary"            → "primary"
+///     "Database.primary"   → "DatabasePrimary"
+///     "Module.Database.x"  → "ModuleDatabaseX"
+private func sanitizeKeyComponents(_ raw: String) -> String {
+    var result = ""
+    var capitalizeNext = false
+    for char in raw {
+        if char == "." {
+            capitalizeNext = true
+            continue
+        }
+        guard char.isLetter || char.isNumber || char == "_" else { continue }
+        if capitalizeNext {
+            result += String(char).uppercased()
+            capitalizeNext = false
+        } else {
+            result.append(char)
+        }
+    }
+    return result
+}
+
+/// Uppercase the first character only — the symmetric counterpart to
+/// `lowerCamelCased`. Used to make a key suffix capitalised so it
+/// reads as a distinct word in the composed identifier
+/// (`appName` + `Alternate` → `appNameAlternate`).
+private func upperCamelCased(_ name: String) -> String {
+    guard let first = name.first else { return name }
+    return first.uppercased() + name.dropFirst()
 }
 
 /// The RHS expression that constructs a single binding inside
@@ -188,12 +252,12 @@ private func constructionExpression(
 }
 
 /// Render a constructor's argument list. Each dependency is resolved
-/// to the local-name for its bound type; the argument label comes from
-/// the dependency's external label (or is omitted entirely for
-/// wildcard labels).
+/// to the local-name for its `(type, key?)` identity; the argument
+/// label comes from the dependency's external label (or is omitted
+/// entirely for wildcard labels).
 private func renderArguments(_ dependencies: [DependencyParameter]) -> String {
     dependencies.map { dependency in
-        let value = lowerCamelCased(sanitizeIdentifier(dependency.type))
+        let value = identifierName(forType: dependency.type, key: dependency.keyIdentifier)
         if let label = dependency.name {
             return "\(label): \(value)"
         }
@@ -244,4 +308,170 @@ private func sanitizeIdentifier(_ raw: String) -> String {
 private func lowerCamelCased(_ name: String) -> String {
     guard let first = name.first else { return name }
     return first.lowercased() + name.dropFirst()
+}
+
+// MARK: - Key check emission
+
+/// Render the `_WireKeyChecks.swift` source the build plugin writes
+/// alongside `_WireGraph.swift`. Contains one `_wireTypeCheck_*`
+/// function per unique `(keyExpression, declaredType)` pair the
+/// discovery found; inside each function, one `_check` call per
+/// source-level usage of that pair, wrapped in `#sourceLocation`
+/// directives so any compile failure is attributed back to the user's
+/// source line.
+///
+/// The generic helper `_check<T>(_: BindingKey<T>, _: T.Type)` forces
+/// Swift's type inference to unify `T` against both arguments. A
+/// mismatch — `@Inject(Database.primary) var db: Cache` where
+/// `Database.primary: BindingKey<Database>` — fails to compile because
+/// no single `T` satisfies both. The compiler emits one error per
+/// failing `_check` call, each attributed via `#sourceLocation` to the
+/// originating user-source line.
+///
+/// Dedup: each `(keyExpression, declaredType)` pair gets one function.
+/// All sites using the same pair are emitted as separate `_check`
+/// calls inside that function. The success case (consistent
+/// pair-usage) keeps the file size bounded; the failure case (the
+/// pair mismatches) produces one Swift compile error per affected
+/// site so the user can fix them all in one editing pass.
+///
+/// `any P` / `some P` existential property types are skipped — the
+/// generic helper needs concrete `T` equality and existentials don't
+/// satisfy it cleanly. Mismatches at those sites are still caught
+/// later by the build plugin's missing-binding diagnostic at codegen.
+///
+/// The file is emitted even when there are no keyed bindings (just a
+/// header comment) so SPM's declared-output-file contract holds
+/// without conditional logic in the plugin.
+package func renderWireKeyChecks(
+    imports: [String],
+    allBindings: [DiscoveredBinding]
+) -> String {
+    var lines: [String] = []
+
+    lines.append("// Generated by WireGen — do not edit.")
+    lines.append("//")
+    lines.append("// Compile-time type assertions for keyed @Inject / @Provides")
+    lines.append("// annotations. The functions below are never called; they")
+    lines.append("// exist purely so the compiler unifies each key's `BindingKey<T>`")
+    lines.append("// generic parameter with the consuming binding's type. A")
+    lines.append("// mismatch surfaces as a Swift compile error attributed via")
+    lines.append("// #sourceLocation to the user's source line.")
+
+    let sortedImports = Array(Set(imports)).sorted()
+    if !sortedImports.isEmpty {
+        lines.append("")
+        for line in sortedImports {
+            lines.append(line)
+        }
+    }
+
+    // Walk every binding, both keyed providers and keyed dependencies,
+    // gathering (keyExpression, declaredType, location) for each.
+    var groupedSites: [KeyCheckPair: [KeyCheckSite]] = [:]
+    for site in collectKeyCheckSites(allBindings) {
+        let pair = KeyCheckPair(key: site.keyExpression, type: site.declaredType)
+        groupedSites[pair, default: []].append(site)
+    }
+
+    // Emit functions in deterministic (sorted) order — sort by type
+    // first, then key — so the file is stable across runs.
+    for (index, pair) in groupedSites.keys.sorted().enumerated() {
+        let sites = (groupedSites[pair] ?? []).sorted(by: locationOrder)
+        let functionName = "_wireTypeCheck_\(index + 1)"
+        lines.append("")
+        lines.append("private func \(functionName)() {")
+        lines.append("    func _check<T>(_: BindingKey<T>, _: T.Type) {}")
+        for site in sites {
+            lines.append("")
+            lines.append(
+                "    #sourceLocation(file: \"\(site.location.file)\", line: \(site.location.line))"
+            )
+            lines.append("    _check(\(pair.key), \(pair.type).self)")
+            lines.append("    #sourceLocation()")
+        }
+        lines.append("}")
+    }
+
+    lines.append("")
+    return lines.joined(separator: "\n")
+}
+
+/// One source-level usage of a `(keyExpression, declaredType)` pair —
+/// either a keyed `@Provides` site or a keyed `@Inject` site.
+private struct KeyCheckSite {
+    let keyExpression: String
+    let declaredType: String
+    let location: SourceLocation
+}
+
+/// Deduplication key for emitted check functions. Two sites with the
+/// same `(key, type)` share a function; each contributes its own
+/// `_check` call inside.
+private struct KeyCheckPair: Hashable, Comparable {
+    let key: String
+    let type: String
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.type != rhs.type { return lhs.type < rhs.type }
+        return lhs.key < rhs.key
+    }
+}
+
+/// Stable ordering for sites within a function — file, then line, then
+/// column. Ensures the emitted file is byte-for-byte deterministic
+/// across runs given the same input set.
+private func locationOrder(_ lhs: KeyCheckSite, _ rhs: KeyCheckSite) -> Bool {
+    if lhs.location.file != rhs.location.file {
+        return lhs.location.file < rhs.location.file
+    }
+    if lhs.location.line != rhs.location.line {
+        return lhs.location.line < rhs.location.line
+    }
+    return lhs.location.column < rhs.location.column
+}
+
+/// Walk every binding and pull out the keyed sites we need to check.
+/// Two sources: the binding side (a keyed `@Provides` claims a slot
+/// `(type, key)`) and the consumer side (each keyed dependency
+/// requests a slot `(type, key)`). Both must type-check against the
+/// same key declaration; both contribute sites.
+private func collectKeyCheckSites(_ bindings: [DiscoveredBinding]) -> [KeyCheckSite] {
+    var sites: [KeyCheckSite] = []
+    for binding in bindings {
+        if case .provider(let provider) = binding,
+            let key = provider.keyIdentifier,
+            shouldEmitCheck(forType: provider.boundType)
+        {
+            sites.append(
+                KeyCheckSite(
+                    keyExpression: key,
+                    declaredType: provider.boundType,
+                    location: provider.location
+                )
+            )
+        }
+        for dependency in binding.dependencies {
+            guard let key = dependency.keyIdentifier else { continue }
+            guard shouldEmitCheck(forType: dependency.type) else { continue }
+            sites.append(
+                KeyCheckSite(
+                    keyExpression: key,
+                    declaredType: dependency.type,
+                    location: dependency.location
+                )
+            )
+        }
+    }
+    return sites
+}
+
+/// `any P` / `some P` existential types break the generic helper's
+/// `T == T` unification — `BindingKey<P>` (concrete) and `(any P).Type`
+/// don't share a `T`. We skip these and rely on the build plugin's
+/// missing-binding diagnostic to catch real mismatches at codegen.
+/// Documented limitation; revisit if existential-typed bindings become
+/// common enough that the loss of compile-time coverage hurts.
+private func shouldEmitCheck(forType type: String) -> Bool {
+    !type.hasPrefix("any ") && !type.hasPrefix("some ")
 }

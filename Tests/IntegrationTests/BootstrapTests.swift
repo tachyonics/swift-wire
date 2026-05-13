@@ -73,4 +73,27 @@ struct BootstrapTests {
         #expect(defaultGraph.banner.text == "IntegrationTests #42")
         #expect(testGraph.banner.text == "test container")
     }
+
+    // MARK: - Explicit-key disambiguation
+
+    @Test func keyedConsumerInjectsTheMatchingKeyedProvider() async throws {
+        // KeyedConsumer has `@Inject(AppName.alternate) var alternate:
+        // AppName`. The matching `@Provides(AppName.alternate)` binds a
+        // distinct `AppName("alternate")` from the unkeyed module-scope
+        // `appName`. Confirms (a) the `(type, key)` graph identity
+        // resolves correctly end-to-end, (b) the generated key-checks
+        // file accepts the matching pairing without compile failure,
+        // and (c) the keyed accessor on `_WireGraph` doesn't collide
+        // with the unkeyed `appName`.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.keyedConsumer.describe() == "consumer with alternate")
+        // Both unkeyed and keyed AppName bindings are reachable from
+        // the graph under distinct property names. The keyed accessor
+        // is verbose by design — the `Keyed` infix separates the type-
+        // derived prefix from the sanitised key suffix and pushes
+        // collisions with unkeyed type names out to "name contains the
+        // word `Keyed`," which doesn't happen in real code.
+        #expect(graph.appName.value == "IntegrationTests")
+        #expect(graph.appNameKeyedAppNameAlternate.value == "alternate")
+    }
 }
