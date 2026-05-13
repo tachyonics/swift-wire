@@ -136,14 +136,31 @@ private struct BindingIdentity: Hashable, Comparable {
 
 extension DiscoveredBinding {
     fileprivate var identity: BindingIdentity {
-        BindingIdentity(type: boundType, key: keyIdentifier)
+        BindingIdentity(type: canonicalTypeName(boundType), key: keyIdentifier)
     }
 }
 
 extension DependencyParameter {
     fileprivate var identity: BindingIdentity {
-        BindingIdentity(type: type, key: keyIdentifier)
+        BindingIdentity(type: canonicalTypeName(type), key: keyIdentifier)
     }
+}
+
+/// Strip whitespace from a type expression so cosmetic variations
+/// resolve to the same graph slot. `Router<X, Y>` and `Router<X,Y>`
+/// both canonicalise to `Router<X,Y>`; `Dictionary<String, [Int]>` and
+/// `Dictionary<String,[Int]>` both canonicalise to
+/// `Dictionary<String,[Int]>`. The M0 spike 3 finding: SwiftSyntax's
+/// `trimmedDescription` preserves internal whitespace verbatim, so two
+/// users writing the same type with different formatting would
+/// previously fail to resolve against each other.
+///
+/// Codegen continues to use the binding's original `boundType` text
+/// (whatever the user wrote) — only the *identity* used for graph
+/// lookup is canonicalised. The generated file keeps idiomatic
+/// formatting; only the resolution layer normalises.
+private func canonicalTypeName(_ raw: String) -> String {
+    raw.filter { !$0.isWhitespace }
 }
 
 /// Build the dependency graph from the discovered bindings, run a

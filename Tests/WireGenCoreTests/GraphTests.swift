@@ -687,4 +687,51 @@ struct GraphTests {
         #expect(report.contains("@Provides(Database.primary)"))
         #expect(report.contains("@Inject(Database.primary)"))
     }
+
+    // MARK: - Whitespace-canonicalised type matching
+
+    @Test func bindingsOfSameTypeWithDifferentWhitespaceAreDuplicates() throws {
+        // `Router<X, Y>` and `Router<X,Y>` are the same type expression
+        // up to whitespace. Both bindings should land in the same
+        // graph identity slot — i.e. detected as duplicates rather
+        // than coexisting as distinct slots.
+        let result = buildDependencyGraph(from: [
+            providerProperty("router1", boundType: "Router<X, Y>"),
+            providerProperty("router2", boundType: "Router<X,Y>"),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+    }
+
+    @Test func consumerWithDifferentWhitespaceResolvesToProvider() throws {
+        // The realistic asymmetry: provider writes the type one way,
+        // consumer the other. Canonical-form identity makes them match
+        // so resolution succeeds end-to-end.
+        let result = buildDependencyGraph(from: [
+            providerProperty("router", boundType: "Router<X, Y>"),
+            singleton(
+                "App",
+                dependencies: [(name: "router", type: "Router<X,Y>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["Router<X, Y>", "App"])
+    }
+
+    @Test func internalAndOuterWhitespaceAreAllStripped() throws {
+        // Variations beyond the trivial post-comma space: leading /
+        // trailing inside the generic clause, spaces around the
+        // bracket. All should canonicalise to the same form. Pin the
+        // contract with a less-typical formatting so a regression
+        // that only strips `, ` → `,` would still get caught.
+        let result = buildDependencyGraph(from: [
+            providerProperty("a", boundType: "Pair< Foo , Bar >"),
+            singleton(
+                "B",
+                dependencies: [(name: "p", type: "Pair<Foo,Bar>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["Pair< Foo , Bar >", "B"])
+    }
 }
