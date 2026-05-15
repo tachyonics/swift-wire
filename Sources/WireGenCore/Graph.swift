@@ -209,21 +209,8 @@ private func specialiseGenericBindings(
     // flag the just-specialised binding as conflicting with the
     // generic it came from.
     let originallyConcrete = Set(uniqueByIdentity.keys)
+    let genericSignatures = precomputedGenericSignatures(genericBindings)
 
-    // Pre-compute signatures for every generic binding once instead
-    // of re-deriving them on every worklist iteration's candidate
-    // filter. `compactMap` drops any that have no signature (shouldn't
-    // happen — non-generic bindings don't reach here — but defensive).
-    let genericSignatures: [(binding: DiscoveredBinding, base: String, paramCount: Int)] =
-        genericBindings.compactMap { binding in
-            guard let signature = genericBindingSignature(binding) else { return nil }
-            return (binding, signature.base, signature.paramCount)
-        }
-
-    // Worklist entry pairs each dep with its parsed type expression.
-    // Pre-parsing on insertion (via `addToWorklist`) means every item
-    // popped from the worklist is already fully prepared — no risk
-    // of forgetting to canonicalise or parse downstream.
     typealias WorkItem = (dep: DependencyParameter, base: String, params: [String])
     var worklist: [WorkItem] = []
     func addToWorklist(_ deps: [DependencyParameter]) {
@@ -234,26 +221,16 @@ private func specialiseGenericBindings(
             }
         )
     }
-
-    // Seed the worklist with the deps of every already-known binding.
     addToWorklist(uniqueByIdentity.values.flatMap { $0.dependencies })
 
     while !worklist.isEmpty {
         let (dep, base, params) = worklist.removeFirst()
-        // Generic candidates must match base + paramCount *and* the
-        // dep's key (so a keyed `@Provides(key) func make<T>() ...`
-        // only satisfies keyed consumers requesting the same key,
-        // and an unkeyed generic only satisfies unkeyed consumers).
-        // Same partition rule as the regular (type, key) identity
-        // match — keys partition the binding space at every layer.
-        let genericCandidates =
-            params.isEmpty
-            ? []
-            : genericSignatures.filter { entry in
-                entry.base == base
-                    && entry.paramCount == params.count
-                    && entry.binding.keyIdentifier == dep.keyIdentifier
-            }.map { $0.binding }
+        let genericCandidates = matchingGenericCandidates(
+            base: base,
+            paramCount: params.count,
+            key: dep.keyIdentifier,
+            in: genericSignatures
+        )
 
         if let concrete = uniqueByIdentity[dep.identity] {
             // Concrete already satisfies. If a generic could also
@@ -268,10 +245,10 @@ private func specialiseGenericBindings(
                 !ambiguitiesReported.contains(dep.identity)
             {
                 ambiguities.append(
-                    DuplicateBinding(
-                        boundType: dep.identity.type,
-                        keyIdentifier: dep.identity.key,
-                        bindings: [concrete] + genericCandidates
+                    ambiguityFor(
+                        dep: dep,
+                        concrete: concrete,
+                        genericCandidates: genericCandidates
                     )
                 )
                 ambiguitiesReported.insert(dep.identity)
@@ -288,9 +265,6 @@ private func specialiseGenericBindings(
             continue
         }
         let specialised = specialiseBinding(genericCandidates[0], with: params)
-        // Specialised bindings inherit the generic binding's
-        // `keyIdentifier` if any. Re-check after substitution to
-        // dedup against any existing entry.
         if uniqueByIdentity[specialised.identity] == nil {
             uniqueByIdentity[specialised.identity] = specialised
             addToWorklist(specialised.dependencies)
@@ -298,6 +272,59 @@ private func specialiseGenericBindings(
     }
 
     return ambiguities
+}
+
+/// Pre-compute `(binding, base, paramCount)` for every generic
+/// binding so the per-iteration candidate filter doesn't redo the
+/// signature extraction. `compactMap` drops bindings with no
+/// signature (shouldn't happen — non-generic bindings don't reach
+/// here — but defensive).
+private func precomputedGenericSignatures(
+    _ genericBindings: [DiscoveredBinding]
+) -> [(binding: DiscoveredBinding, base: String, paramCount: Int)] {
+    genericBindings.compactMap { binding in
+        guard let signature = genericBindingSignature(binding) else { return nil }
+        return (binding, signature.base, signature.paramCount)
+    }
+}
+
+/// Return the generic bindings whose signature matches `(base,
+/// paramCount, key)`. Keys partition the binding space — a keyed
+/// `@Provides(key) func make<T>() ...` only satisfies keyed consumers
+/// requesting the same key, and an unkeyed generic only satisfies
+/// unkeyed consumers. Same partition rule as the regular `(type, key)`
+/// identity match.
+private func matchingGenericCandidates(
+    base: String,
+    paramCount: Int,
+    key: String?,
+    in signatures: [(binding: DiscoveredBinding, base: String, paramCount: Int)]
+) -> [DiscoveredBinding] {
+    guard paramCount > 0 else { return [] }
+    return
+        signatures
+        .filter { entry in
+            entry.base == base
+                && entry.paramCount == paramCount
+                && entry.binding.keyIdentifier == key
+        }
+        .map { $0.binding }
+}
+
+/// Build the `DuplicateBinding` describing a concrete-vs-generic
+/// ambiguity for one `(type, key)` slot. The concrete binding leads
+/// the `bindings` list (primary diagnostic anchor) followed by every
+/// generic candidate that could specialise to the same identity.
+private func ambiguityFor(
+    dep: DependencyParameter,
+    concrete: DiscoveredBinding,
+    genericCandidates: [DiscoveredBinding]
+) -> DuplicateBinding {
+    DuplicateBinding(
+        boundType: dep.identity.type,
+        keyIdentifier: dep.identity.key,
+        bindings: [concrete] + genericCandidates
+    )
 }
 
 /// Extract the (base name, parameter count) signature of a generic
@@ -463,42 +490,12 @@ private func parseGenericType(_ expression: String) -> (base: String, params: [S
 package func buildDependencyGraph(
     from bindings: [DiscoveredBinding]
 ) -> GraphResult {
-    // Index non-generic bindings by their (type, key) identity,
-    // capturing duplicates as we go. Generic bindings go to `skipped`
-    // for the discovery report and are also held in `genericBindings`
-    // as candidates for later specialisation.
-    var groupedByIdentity: [BindingIdentity: [DiscoveredBinding]] = [:]
-    var skipped: [DiscoveredBinding] = []
-    var genericBindings: [DiscoveredBinding] = []
-    for binding in bindings {
-        if binding.genericParameterNames.isEmpty {
-            groupedByIdentity[binding.identity, default: []].append(binding)
-        } else {
-            skipped.append(binding)
-            genericBindings.append(binding)
-        }
-    }
+    let partition = partitionBindings(bindings)
+    let skipped = partition.skipped
 
-    // Split into uniquely-bound identities vs duplicates.
-    var uniqueByIdentity: [BindingIdentity: DiscoveredBinding] = [:]
-    var duplicates: [DuplicateBinding] = []
-    for identity in groupedByIdentity.keys.sorted() {
-        let group = groupedByIdentity[identity] ?? []
-        if group.count == 1 {
-            uniqueByIdentity[identity] = group[0]
-        } else {
-            duplicates.append(
-                DuplicateBinding(
-                    boundType: identity.type,
-                    keyIdentifier: identity.key,
-                    bindings: group
-                )
-            )
-        }
-    }
-
-    // Duplicates short-circuit graph validation — without unique
-    // bindings the rest of the diagnostics aren't trustworthy.
+    let (uniqueByIdentity, duplicates) = splitUniqueFromDuplicates(
+        partition.groupedByIdentity
+    )
     if !duplicates.isEmpty {
         return GraphResult(
             outcome: .validationFailed(
@@ -522,9 +519,10 @@ package func buildDependencyGraph(
     // concrete binding and a generic-specialisation candidate, the
     // result is a duplicate-binding error; the standard fix-it
     // (declare named keys) handles disambiguation.
+    var resolvedBindings = uniqueByIdentity
     let specialisationAmbiguities = specialiseGenericBindings(
-        uniqueByIdentity: &uniqueByIdentity,
-        genericBindings: genericBindings
+        uniqueByIdentity: &resolvedBindings,
+        genericBindings: partition.genericBindings
     )
     if !specialisationAmbiguities.isEmpty {
         return GraphResult(
@@ -539,31 +537,10 @@ package func buildDependencyGraph(
         )
     }
 
-    // Resolve each binding's dependencies to a `(type, key)` identity.
-    // Anything that doesn't resolve is captured as a missing binding.
-    var dependencyEdges: [BindingIdentity: [BindingIdentity]] = [:]
-    var missingBindings: [MissingBinding] = []
-
-    // Iterate in deterministic (sorted) order so the output is stable
-    // across runs.
-    for identity in uniqueByIdentity.keys.sorted() {
-        guard let binding = uniqueByIdentity[identity] else { continue }
-        var resolved: [BindingIdentity] = []
-        for dependency in binding.dependencies {
-            let depIdentity = dependency.identity
-            if uniqueByIdentity[depIdentity] != nil {
-                resolved.append(depIdentity)
-            } else {
-                missingBindings.append(
-                    MissingBinding(consumer: binding, dependency: dependency)
-                )
-            }
-        }
-        dependencyEdges[identity] = resolved
-    }
+    let (dependencyEdges, missingBindings) = resolveDependencies(in: resolvedBindings)
 
     let sortResult = topologicalSort(
-        nodes: uniqueByIdentity,
+        nodes: resolvedBindings,
         edges: dependencyEdges
     )
 
@@ -581,6 +558,89 @@ package func buildDependencyGraph(
     }
 
     return GraphResult(outcome: outcome, skipped: skipped)
+}
+
+/// Bucket every discovered binding by what role it plays in graph
+/// construction: concrete bindings go into `groupedByIdentity` keyed
+/// by their `(type, key)` identity (duplicates within the same key
+/// land in the same group for later detection); generic bindings go
+/// into both `skipped` (reported as informational) and
+/// `genericBindings` (specialisation candidates).
+private func partitionBindings(
+    _ bindings: [DiscoveredBinding]
+) -> (
+    groupedByIdentity: [BindingIdentity: [DiscoveredBinding]],
+    skipped: [DiscoveredBinding],
+    genericBindings: [DiscoveredBinding]
+) {
+    var groupedByIdentity: [BindingIdentity: [DiscoveredBinding]] = [:]
+    var skipped: [DiscoveredBinding] = []
+    var genericBindings: [DiscoveredBinding] = []
+    for binding in bindings {
+        if binding.genericParameterNames.isEmpty {
+            groupedByIdentity[binding.identity, default: []].append(binding)
+        } else {
+            skipped.append(binding)
+            genericBindings.append(binding)
+        }
+    }
+    return (groupedByIdentity, skipped, genericBindings)
+}
+
+/// Split a grouped-by-identity map into uniquely-bound identities
+/// vs identities with multiple bindings. Iterates in sorted key
+/// order so the duplicates list is stable across runs.
+private func splitUniqueFromDuplicates(
+    _ groupedByIdentity: [BindingIdentity: [DiscoveredBinding]]
+) -> (
+    unique: [BindingIdentity: DiscoveredBinding],
+    duplicates: [DuplicateBinding]
+) {
+    var unique: [BindingIdentity: DiscoveredBinding] = [:]
+    var duplicates: [DuplicateBinding] = []
+    for identity in groupedByIdentity.keys.sorted() {
+        let group = groupedByIdentity[identity] ?? []
+        if group.count == 1 {
+            unique[identity] = group[0]
+        } else {
+            duplicates.append(
+                DuplicateBinding(
+                    boundType: identity.type,
+                    keyIdentifier: identity.key,
+                    bindings: group
+                )
+            )
+        }
+    }
+    return (unique, duplicates)
+}
+
+/// Resolve each binding's dependencies to `(type, key)` identities
+/// against the resolved binding set. Identities not present in the
+/// set are captured as missing bindings. Iteration order is sorted
+/// for deterministic output.
+private func resolveDependencies(
+    in resolvedBindings: [BindingIdentity: DiscoveredBinding]
+) -> (
+    edges: [BindingIdentity: [BindingIdentity]],
+    missing: [MissingBinding]
+) {
+    var edges: [BindingIdentity: [BindingIdentity]] = [:]
+    var missing: [MissingBinding] = []
+    for identity in resolvedBindings.keys.sorted() {
+        guard let binding = resolvedBindings[identity] else { continue }
+        var resolved: [BindingIdentity] = []
+        for dependency in binding.dependencies {
+            let depIdentity = dependency.identity
+            if resolvedBindings[depIdentity] != nil {
+                resolved.append(depIdentity)
+            } else {
+                missing.append(MissingBinding(consumer: binding, dependency: dependency))
+            }
+        }
+        edges[identity] = resolved
+    }
+    return (edges, missing)
 }
 
 // MARK: - Topological sort

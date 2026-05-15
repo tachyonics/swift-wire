@@ -120,6 +120,11 @@ final class SingletonMacroTests: XCTestCase {
     // MARK: - Generic types stay generic
 
     func test_singletonOnGenericStruct_specialisesKeyToGenericInstance() {
+        // Generic types can't have `static let` properties that refer
+        // to their generic parameters — Swift errors with "static
+        // stored properties not supported in generic types". The
+        // macro emits a computed `static var` for generic types so
+        // each specialisation gets its own key instance.
         assertMacroExpansion(
             """
             @Singleton
@@ -135,7 +140,9 @@ final class SingletonMacroTests: XCTestCase {
                         self.store = store
                     }
 
-                    static let key = BindingKey<Repository<Model>>()
+                    static var key: BindingKey<Repository<Model>> {
+                        BindingKey<Repository<Model>>()
+                    }
                 }
                 """,
             macros: macros
