@@ -835,6 +835,43 @@ struct GraphTests {
         #expect(provider.genericParameterNames.isEmpty)
     }
 
+    @Test func multipleConsumersOfSameSpecialisationShareOneBinding() throws {
+        // Two singletons both depend on `Repository<DynamoDBTable>`.
+        // The specialisation phase should produce *one* specialised
+        // binding that both consumers resolve against — not two, and
+        // not a false ambiguity. The `originallyConcrete` snapshot
+        // distinguishes "user-written concrete shadowing the generic"
+        // (real ambiguity) from "specialisation just added an entry
+        // and now a second consumer finds it" (legitimate dedup).
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Repository",
+                dependencies: [(name: "table", type: "T")],
+                generics: ["T"]
+            ),
+            singleton("DynamoDBTable"),
+            singleton(
+                "AppA",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+            singleton(
+                "AppB",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+        ])
+        // No ambiguity — both consumers get the same specialised
+        // binding.
+        let order = try #require(result.outcome.topologicalOrder)
+        let repoCount = order.filter {
+            $0.boundType == "Repository<DynamoDBTable>"
+        }.count
+        #expect(repoCount == 1)
+        // Both consumers appear in the order.
+        let names = order.map { $0.boundType }
+        #expect(names.contains("AppA"))
+        #expect(names.contains("AppB"))
+    }
+
     @Test func concreteAndGenericForSameInstantiationIsAmbiguous() throws {
         // A concrete `@Provides static let r: Repository<DynamoDBTable>`
         // exists alongside a generic `Repository<T>` singleton. Both

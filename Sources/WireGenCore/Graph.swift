@@ -200,34 +200,80 @@ private func specialiseGenericBindings(
     var ambiguities: [DuplicateBinding] = []
     var ambiguitiesReported: Set<BindingIdentity> = []
 
+    // Snapshot the identities the user originally wrote (concrete
+    // bindings discovered in source). The specialisation loop adds
+    // newly specialised bindings to `uniqueByIdentity` as it goes —
+    // those are *artifacts of specialisation*, not concrete bindings
+    // shadowing the generic. The ambiguity check below must only fire
+    // when an entry was in the user's original set, otherwise a
+    // second consumer requesting the same instantiation would falsely
+    // flag the just-specialised binding as conflicting with the
+    // generic it came from.
+    let originallyConcrete = Set(uniqueByIdentity.keys)
+
+    // Pre-compute signatures for every generic binding once instead
+    // of re-deriving them on every worklist iteration's candidate
+    // filter. `compactMap` drops any that have no signature (shouldn't
+    // happen — non-generic bindings don't reach here — but defensive).
+    let genericSignatures: [(binding: DiscoveredBinding, base: String, paramCount: Int)] =
+        genericBindings.compactMap { binding in
+            guard let signature = genericBindingSignature(binding) else { return nil }
+            return (binding, signature.base, signature.paramCount)
+        }
+
+    // Worklist entry pairs each dep with its parsed type expression.
+    // Pre-parsing on insertion (via `addToWorklist`) means every item
+    // popped from the worklist is already fully prepared — no risk
+    // of forgetting to canonicalise or parse downstream.
+    struct WorkItem {
+        let dep: DependencyParameter
+        let parsedBase: String
+        let parsedParams: [String]
+    }
+    var worklist: [WorkItem] = []
+    func addToWorklist(_ deps: [DependencyParameter]) {
+        worklist.append(
+            contentsOf: deps.map { dep in
+                let parsed = parseGenericType(canonicalTypeName(dep.type))
+                return WorkItem(
+                    dep: dep,
+                    parsedBase: parsed.base,
+                    parsedParams: parsed.params
+                )
+            }
+        )
+    }
+
     // Seed the worklist with the deps of every already-known binding.
-    var worklist: [DependencyParameter] = uniqueByIdentity.values
-        .flatMap { $0.dependencies }
+    addToWorklist(uniqueByIdentity.values.flatMap { $0.dependencies })
 
     while !worklist.isEmpty {
-        let dep = worklist.removeFirst()
-        let parsed = parseGenericType(canonicalTypeName(dep.type))
+        let item = worklist.removeFirst()
+        let dep = item.dep
         // Generic candidates must match base + paramCount *and* the
         // dep's key (so a keyed `@Provides(key) func make<T>() ...`
         // only satisfies keyed consumers requesting the same key,
         // and an unkeyed generic only satisfies unkeyed consumers).
         // Same partition rule as the regular (type, key) identity
         // match — keys partition the binding space at every layer.
-        let genericCandidates = parsed.params.isEmpty
+        let genericCandidates = item.parsedParams.isEmpty
             ? []
-            : genericBindings.filter { binding in
-                guard let signature = genericBindingSignature(binding) else { return false }
-                return signature.base == parsed.base
-                    && signature.paramCount == parsed.params.count
-                    && binding.keyIdentifier == dep.keyIdentifier
-            }
+            : genericSignatures.filter { entry in
+                entry.base == item.parsedBase
+                    && entry.paramCount == item.parsedParams.count
+                    && entry.binding.keyIdentifier == dep.keyIdentifier
+            }.map { $0.binding }
 
         if let concrete = uniqueByIdentity[dep.identity] {
             // Concrete already satisfies. If a generic could also
-            // satisfy the same `(type, key)` slot, that's ambiguous —
-            // surface it as a duplicate-binding error rather than
-            // silently preferring the concrete.
+            // satisfy the same `(type, key)` slot — *and* the
+            // existing entry came from the user's original input,
+            // not from an earlier specialisation in this loop — flag
+            // ambiguity. Multi-consumer cases where two deps both
+            // request the same specialisation share the single
+            // specialised binding and skip the ambiguity check.
             if !genericCandidates.isEmpty,
+                originallyConcrete.contains(dep.identity),
                 !ambiguitiesReported.contains(dep.identity)
             {
                 ambiguities.append(
@@ -250,13 +296,16 @@ private func specialiseGenericBindings(
             // specific diagnostic for the multi-generic case.
             continue
         }
-        let specialised = specialiseBinding(genericCandidates[0], with: parsed.params)
+        let specialised = specialiseBinding(
+            genericCandidates[0],
+            with: item.parsedParams
+        )
         // Specialised bindings inherit the generic binding's
         // `keyIdentifier` if any. Re-check after substitution to
         // dedup against any existing entry.
         if uniqueByIdentity[specialised.identity] == nil {
             uniqueByIdentity[specialised.identity] = specialised
-            worklist.append(contentsOf: specialised.dependencies)
+            addToWorklist(specialised.dependencies)
         }
     }
 
