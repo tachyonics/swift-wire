@@ -182,9 +182,8 @@ private func canonicalTypeName(_ raw: String) -> String {
 /// Concrete-vs-generic ambiguity: when a dep's `(type, key)` is
 /// satisfied by both an existing concrete binding *and* a generic
 /// candidate that could specialise to the same identity, the result
-/// is a duplicate-binding error rather than a silent concrete-wins
-/// resolution. The user disambiguates with explicit keys (standard
-/// fix-it) or by removing one of the two bindings.
+/// is a duplicate-binding error. The user disambiguates with explicit
+/// keys (standard fix-it) or by removing one of the two bindings.
 ///
 /// Iteration safety: the worklist only grows when a *new* specialised
 /// binding is added (one not already in `uniqueByIdentity`), which
@@ -225,21 +224,13 @@ private func specialiseGenericBindings(
     // Pre-parsing on insertion (via `addToWorklist`) means every item
     // popped from the worklist is already fully prepared — no risk
     // of forgetting to canonicalise or parse downstream.
-    struct WorkItem {
-        let dep: DependencyParameter
-        let parsedBase: String
-        let parsedParams: [String]
-    }
+    typealias WorkItem = (dep: DependencyParameter, base: String, params: [String])
     var worklist: [WorkItem] = []
     func addToWorklist(_ deps: [DependencyParameter]) {
         worklist.append(
             contentsOf: deps.map { dep in
                 let parsed = parseGenericType(canonicalTypeName(dep.type))
-                return WorkItem(
-                    dep: dep,
-                    parsedBase: parsed.base,
-                    parsedParams: parsed.params
-                )
+                return (dep, parsed.base, parsed.params)
             }
         )
     }
@@ -248,19 +239,18 @@ private func specialiseGenericBindings(
     addToWorklist(uniqueByIdentity.values.flatMap { $0.dependencies })
 
     while !worklist.isEmpty {
-        let item = worklist.removeFirst()
-        let dep = item.dep
+        let (dep, base, params) = worklist.removeFirst()
         // Generic candidates must match base + paramCount *and* the
         // dep's key (so a keyed `@Provides(key) func make<T>() ...`
         // only satisfies keyed consumers requesting the same key,
         // and an unkeyed generic only satisfies unkeyed consumers).
         // Same partition rule as the regular (type, key) identity
         // match — keys partition the binding space at every layer.
-        let genericCandidates = item.parsedParams.isEmpty
+        let genericCandidates = params.isEmpty
             ? []
             : genericSignatures.filter { entry in
-                entry.base == item.parsedBase
-                    && entry.paramCount == item.parsedParams.count
+                entry.base == base
+                    && entry.paramCount == params.count
                     && entry.binding.keyIdentifier == dep.keyIdentifier
             }.map { $0.binding }
 
@@ -296,10 +286,7 @@ private func specialiseGenericBindings(
             // specific diagnostic for the multi-generic case.
             continue
         }
-        let specialised = specialiseBinding(
-            genericCandidates[0],
-            with: item.parsedParams
-        )
+        let specialised = specialiseBinding(genericCandidates[0], with: params)
         // Specialised bindings inherit the generic binding's
         // `keyIdentifier` if any. Re-check after substitution to
         // dedup against any existing entry.
@@ -529,14 +516,10 @@ package func buildDependencyGraph(
     // binding whose (base, param count) matches. Exactly one match →
     // specialise (substitute the type parameters through the
     // binding's deps) and add the specialised binding to the graph.
-    //
-    // Concrete-vs-generic ambiguity: when the same `(type, key)` is
-    // satisfied by *both* an existing concrete binding *and* a
-    // generic-specialisation candidate, treat that as a duplicate
-    // rather than silently letting the concrete win. The user can
-    // disambiguate with explicit keys (the standard duplicate-binding
-    // fix-it works here unchanged) or by removing one of the two
-    // bindings.
+    // When the same `(type, key)` is satisfied by both an existing
+    // concrete binding and a generic-specialisation candidate, the
+    // result is a duplicate-binding error; the standard fix-it
+    // (declare named keys) handles disambiguation.
     let specialisationAmbiguities = specialiseGenericBindings(
         uniqueByIdentity: &uniqueByIdentity,
         genericBindings: genericBindings
