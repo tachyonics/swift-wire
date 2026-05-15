@@ -164,6 +164,8 @@ private func propertyName(for binding: DiscoveredBinding) -> String {
 /// The canonical local/property name for a `(boundType, key?)` pair.
 /// Used for both binding declarations and dependency-resolution sites
 /// so a keyed dependency points at the matching keyed binding's local.
+/// Also called from `Graph.swift` to detect generated-accessor-name
+/// collisions before codegen runs.
 ///
 /// Rules:
 /// - Unkeyed: `lowerCamel(sanitize(type))` — same as before keys
@@ -180,7 +182,7 @@ private func propertyName(for binding: DiscoveredBinding) -> String {
 /// than a stripped form (`databasePrimary`) but unambiguous, and the
 /// keyed accessor is rarely the user's primary access path anyway
 /// (keyed bindings usually live behind a consumer).
-private func identifierName(forType type: String, key: String?) -> String {
+func identifierName(forType type: String, key: String?) -> String {
     let typeName = lowerCamelCased(sanitizeIdentifier(type))
     guard let key else { return typeName }
     let keySuffix = upperCamelCased(sanitizeKeyComponents(key))

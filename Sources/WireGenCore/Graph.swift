@@ -37,15 +37,18 @@ package struct GraphResult: Sendable {
         package let cycles: [[DiscoveredBinding]]
         package let missingBindings: [MissingBinding]
         package let duplicateBindings: [DuplicateBinding]
+        package let identifierCollisions: [IdentifierCollision]
 
         package init(
             cycles: [[DiscoveredBinding]],
             missingBindings: [MissingBinding],
-            duplicateBindings: [DuplicateBinding]
+            duplicateBindings: [DuplicateBinding],
+            identifierCollisions: [IdentifierCollision] = []
         ) {
             self.cycles = cycles
             self.missingBindings = missingBindings
             self.duplicateBindings = duplicateBindings
+            self.identifierCollisions = identifierCollisions
         }
     }
 }
@@ -102,6 +105,25 @@ package struct DuplicateBinding: Sendable {
     ) {
         self.boundType = boundType
         self.keyIdentifier = keyIdentifier
+        self.bindings = bindings
+    }
+}
+
+/// Two or more bindings with distinct `(type, key)` identities produce
+/// the same generated accessor name (the lowerCamelCased, sanitised
+/// identifier used for stored properties on `_WireGraph` and locals in
+/// the bootstrap). The graph itself is unambiguous — each binding has
+/// a unique identity — but codegen can't emit two `let X: T` lines with
+/// the same `X`. Distinct from `DuplicateBinding` because the colliding
+/// bindings are otherwise valid; only their *derived* identifier
+/// collides.
+package struct IdentifierCollision: Sendable {
+    /// The generated accessor name shared by the colliding bindings.
+    package let identifier: String
+    package let bindings: [DiscoveredBinding]
+
+    package init(identifier: String, bindings: [DiscoveredBinding]) {
+        self.identifier = identifier
         self.bindings = bindings
     }
 }
@@ -255,13 +277,22 @@ private func specialiseGenericBindings(
             }
             continue
         }
+        guard !genericCandidates.isEmpty else { continue }
         guard genericCandidates.count == 1 else {
-            // 0 candidates → falls through to normal missing-binding
-            // detection in the caller. 2+ candidates → ambiguity
-            // among generics with no concrete to pair against; the
-            // dep stays unresolved and the missing-binding error
-            // fires with the concrete type name. Iteration 3 adds a
-            // specific diagnostic for the multi-generic case.
+            // 2+ generic candidates could specialise to the same
+            // `(type, key)` slot. Emit a duplicate-binding error
+            // listing the candidates so the user picks one (typically
+            // by adding distinct keys via the standard fix-it note).
+            if !ambiguitiesReported.contains(dep.identity) {
+                ambiguities.append(
+                    DuplicateBinding(
+                        boundType: dep.identity.type,
+                        keyIdentifier: dep.identity.key,
+                        bindings: genericCandidates
+                    )
+                )
+                ambiguitiesReported.insert(dep.identity)
+            }
             continue
         }
         let specialised = specialiseBinding(genericCandidates[0], with: params)
@@ -521,6 +552,21 @@ package func buildDependencyGraph(
         )
     }
 
+    let identifierCollisions = detectIdentifierCollisions(in: resolvedBindings)
+    if !identifierCollisions.isEmpty {
+        return GraphResult(
+            outcome: .validationFailed(
+                GraphResult.ValidationErrors(
+                    cycles: [],
+                    missingBindings: [],
+                    duplicateBindings: [],
+                    identifierCollisions: identifierCollisions
+                )
+            ),
+            skipped: skipped
+        )
+    }
+
     let (dependencyEdges, missingBindings) = resolveDependencies(in: resolvedBindings)
 
     let sortResult = topologicalSort(
@@ -597,6 +643,33 @@ private func splitUniqueFromDuplicates(
         }
     }
     return (unique, duplicates)
+}
+
+/// Group the resolved bindings by their generated accessor name and
+/// report any group with more than one entry as a collision. Catches
+/// the residual case where two bindings with distinct `(type, key)`
+/// identities happen to sanitise to the same identifier — `Keyed`
+/// infix + type-derived naming makes this rare but not impossible
+/// (e.g. an adversarial `struct DatabaseKeyedDatabasePrimary` next to
+/// a `@Provides(Database.primary) Database` binding). Catching the
+/// case at graph-validation time produces a Wire diagnostic at user
+/// source rather than letting Swift's "invalid redeclaration" fire
+/// on the generated file.
+private func detectIdentifierCollisions(
+    in bindings: [BindingIdentity: DiscoveredBinding]
+) -> [IdentifierCollision] {
+    var groupedByIdentifier: [String: [DiscoveredBinding]] = [:]
+    for binding in bindings.values {
+        let name = identifierName(forType: binding.boundType, key: binding.keyIdentifier)
+        groupedByIdentifier[name, default: []].append(binding)
+    }
+    return
+        groupedByIdentifier
+        .filter { $0.value.count > 1 }
+        .sorted { $0.key < $1.key }
+        .map { identifier, group in
+            IdentifierCollision(identifier: identifier, bindings: group)
+        }
 }
 
 /// Resolve each binding's dependencies to `(type, key)` identities
@@ -793,6 +866,25 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
         lines.append(
             "\(missing.dependency.location.formattedPrefix): error: no binding produces \(slot)"
         )
+    }
+
+    // Identifier collisions: primary error at the first colliding
+    // binding, notes at the others. The colliding bindings have
+    // distinct `(type, key)` identities — what they share is the
+    // generated accessor name — so the message names the identifier
+    // rather than the type. Fix-it suggestion points at renaming
+    // (the keys-disambiguation fix-it doesn't apply: keys are part
+    // of the identifier and have already been factored in).
+    for collision in errors.identifierCollisions {
+        guard let primary = collision.bindings.first else { continue }
+        lines.append(
+            "\(primary.location.formattedPrefix): error: generated accessor name '\(collision.identifier)' collides across multiple bindings"
+        )
+        for binding in collision.bindings.dropFirst() {
+            lines.append(
+                "\(binding.location.formattedPrefix): note: also generates '\(collision.identifier)'"
+            )
+        }
     }
 
     return lines.joined(separator: "\n")

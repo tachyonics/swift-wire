@@ -317,4 +317,63 @@ struct DiagnosticGalleryTests {
         let (errors, _) = validate(source: source, sourcePath: "App.swift")
         #expect(errors == nil)
     }
+
+    // MARK: - Generic specialisation ambiguity
+
+    @Test func multipleGenericCandidatesEmitDuplicateBindingError() throws {
+        // Two `@Provides func` declarations both produce `Repository<T>`
+        // for any `T`. A consumer asking for `Repository<DynamoDBTable>`
+        // could be satisfied by either — Wire surfaces this as a
+        // duplicate-binding error rather than silently picking one.
+        let source = """
+            @Provides
+            func makeRepoA<T>() -> Repository<T> {
+                Repository<T>()
+            }
+
+            @Provides
+            func makeRepoB<T>() -> Repository<T> {
+                Repository<T>()
+            }
+
+            @Singleton
+            struct App {
+                @Inject var repo: Repository<DynamoDBTable>
+            }
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "Repos.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.duplicateBindings.count == 1)
+        #expect(
+            rendered.contains(
+                "error: type 'Repository<DynamoDBTable>' has multiple bindings"
+            )
+        )
+    }
+
+    // MARK: - Generated-identifier collision
+
+    @Test func identifierCollisionNamesTheConflictingAccessor() throws {
+        // `Logger` and `Logger?` have distinct (type, key) identities
+        // but their generated accessor names both sanitise to `logger`
+        // (the `?` is dropped). Codegen would emit two `let logger:`
+        // lines; Wire catches the collision at graph-validation time
+        // with a clear diagnostic.
+        let source = """
+            @Provides
+            let plainLogger: Logger = Logger()
+
+            @Provides
+            let optionalLogger: Logger? = nil
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "Loggers.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.identifierCollisions.count == 1)
+        #expect(
+            rendered.contains(
+                "error: generated accessor name 'logger' collides across multiple bindings"
+            )
+        )
+        #expect(rendered.contains("note: also generates 'logger'"))
+    }
 }
