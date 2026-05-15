@@ -734,4 +734,332 @@ struct GraphTests {
         let order = try #require(result.outcome.topologicalOrder)
         #expect(order.map { $0.boundType } == ["Pair< Foo , Bar >", "B"])
     }
+
+    // MARK: - Generic specialisation
+
+    @Test func singleParamGenericSingletonSpecialisedForConcreteConsumer() throws {
+        // A generic `Repository<T>` singleton with a dep of type `T`
+        // matched against a consumer asking for `Repository<DynamoDBTable>`.
+        // Specialisation substitutes T → DynamoDBTable in the dep,
+        // emits a concrete `Repository<DynamoDBTable>` binding, and
+        // resolves the consumer's dep against it.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Repository",
+                dependencies: [(name: "table", type: "T")],
+                generics: ["T"]
+            ),
+            singleton("DynamoDBTable"),
+            singleton(
+                "App",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        let names = order.map { $0.boundType }
+        // Specialised binding appears in the resolved graph with its
+        // concrete type expression; DynamoDBTable resolved before it;
+        // App last.
+        #expect(names.contains("Repository<DynamoDBTable>"))
+        #expect(names.contains("DynamoDBTable"))
+        #expect(names.contains("App"))
+        let dynamoIdx = names.firstIndex(of: "DynamoDBTable")!
+        let repoIdx = names.firstIndex(of: "Repository<DynamoDBTable>")!
+        let appIdx = names.firstIndex(of: "App")!
+        #expect(dynamoIdx < repoIdx)
+        #expect(repoIdx < appIdx)
+    }
+
+    @Test func multiParamGenericSingletonSpecialisedForConcreteConsumer() throws {
+        // Two-parameter generic — `Pair<A, B>` with deps `first: A`,
+        // `second: B`. Each parameter substitutes independently.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Pair",
+                dependencies: [
+                    (name: "first", type: "A"),
+                    (name: "second", type: "B"),
+                ],
+                generics: ["A", "B"]
+            ),
+            singleton("Foo"),
+            singleton("Bar"),
+            singleton(
+                "App",
+                dependencies: [(name: "pair", type: "Pair<Foo, Bar>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        let names = order.map { $0.boundType }
+        #expect(names.contains("Pair<Foo, Bar>"))
+        #expect(names.contains("Foo"))
+        #expect(names.contains("Bar"))
+    }
+
+    @Test func genericProviderFunctionSpecialisedCarriesConcreteArguments() throws {
+        // A `@Provides func makeRepo<T>() -> Repository<T>` specialised
+        // for a `Repository<DynamoDBTable>` consumer. The resulting
+        // provider binding has `concreteGenericArguments` populated so
+        // codegen can splice them at the call site
+        // (`makeRepo<DynamoDBTable>()`).
+        let result = buildDependencyGraph(from: [
+            providerFunction(
+                "makeRepo",
+                boundType: "Repository<T>",
+                dependencies: [],
+                generics: ["T"]
+            ),
+            singleton(
+                "App",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        // Find the specialised provider binding and assert on its
+        // concreteGenericArguments. Filter by accessPath to be sure
+        // we're inspecting the provider, not a singleton with a
+        // collide-y type name.
+        let specialised = order.compactMap { binding -> DiscoveredProvider? in
+            if case .provider(let provider) = binding,
+                provider.accessPath == "makeRepo"
+            {
+                return provider
+            }
+            return nil
+        }.first
+        let provider = try #require(specialised)
+        #expect(provider.boundType == "Repository<DynamoDBTable>")
+        #expect(provider.concreteGenericArguments == ["DynamoDBTable"])
+        // genericParameterNames cleared so the binding looks concrete
+        // to the rest of the pipeline.
+        #expect(provider.genericParameterNames.isEmpty)
+    }
+
+    @Test func multipleConsumersOfSameSpecialisationShareOneBinding() throws {
+        // Two singletons both depend on `Repository<DynamoDBTable>`.
+        // The specialisation phase should produce *one* specialised
+        // binding that both consumers resolve against — not two, and
+        // not a false ambiguity. The `originallyConcrete` snapshot
+        // distinguishes "user-written concrete shadowing the generic"
+        // (real ambiguity) from "specialisation just added an entry
+        // and now a second consumer finds it" (legitimate dedup).
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Repository",
+                dependencies: [(name: "table", type: "T")],
+                generics: ["T"]
+            ),
+            singleton("DynamoDBTable"),
+            singleton(
+                "AppA",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+            singleton(
+                "AppB",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+        ])
+        // No ambiguity — both consumers get the same specialised
+        // binding.
+        let order = try #require(result.outcome.topologicalOrder)
+        let repoCount = order.filter {
+            $0.boundType == "Repository<DynamoDBTable>"
+        }.count
+        #expect(repoCount == 1)
+        // Both consumers appear in the order.
+        let names = order.map { $0.boundType }
+        #expect(names.contains("AppA"))
+        #expect(names.contains("AppB"))
+    }
+
+    @Test func concreteAndGenericForSameInstantiationIsAmbiguous() throws {
+        // A concrete `@Provides static let r: Repository<DynamoDBTable>`
+        // exists alongside a generic `Repository<T>` singleton. Both
+        // could satisfy a consumer's `Repository<DynamoDBTable>` dep,
+        // which is ambiguous — Wire surfaces this as a duplicate-
+        // binding error (consistent with how two concrete bindings for
+        // the same type are handled) rather than silently picking one
+        // over the other. User disambiguates by adding a key to one
+        // side, or by removing one of the bindings.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Repository",
+                dependencies: [(name: "table", type: "T")],
+                generics: ["T"]
+            ),
+            providerProperty("explicit", boundType: "Repository<DynamoDBTable>"),
+            singleton(
+                "App",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+        // The duplicate's identity matches the consumer's dep — the
+        // canonical type expression and (in this case) the unkeyed
+        // slot.
+        let duplicate = try #require(errors.duplicateBindings.first)
+        // Canonical type name (whitespace-stripped) — `parseGenericType`
+        // canonicalises while extracting `(base, params)`, and the
+        // identity carries that canonical form through.
+        #expect(duplicate.boundType == "Repository<DynamoDBTable>")
+        #expect(duplicate.keyIdentifier == nil)
+        // Both the concrete provider and the generic singleton appear
+        // in the duplicates list.
+        #expect(duplicate.bindings.count == 2)
+        let kinds = Set(
+            duplicate.bindings.map { binding -> String in
+                switch binding {
+                case .singleton: return "singleton"
+                case .provider: return "provider"
+                }
+            }
+        )
+        #expect(kinds == ["singleton", "provider"])
+    }
+
+    @Test func concreteAndGenericWithDifferentKeysCoexist() throws {
+        // Counterpart to the ambiguity case: a keyed concrete binding
+        // and an unkeyed generic for the same type live happily in
+        // separate `(type, key)` slots. The keyed concrete satisfies
+        // keyed consumers; the generic satisfies unkeyed concrete
+        // requests via specialisation. No ambiguity because the
+        // identities differ.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Repository",
+                dependencies: [(name: "table", type: "T")],
+                generics: ["T"]
+            ),
+            singleton("DynamoDBTable"),
+            // Keyed concrete provider.
+            .provider(
+                DiscoveredProvider(
+                    boundType: "Repository<DynamoDBTable>",
+                    accessPath: "specialRepo",
+                    form: .property,
+                    dependencies: [],
+                    genericParameterNames: [],
+                    location: mockLocation("specialRepo.swift"),
+                    keyIdentifier: "Repository.special"
+                )
+            ),
+            singletonWithKeyedDep(
+                "AppKeyed",
+                depName: "repo",
+                depType: "Repository<DynamoDBTable>",
+                depKey: "Repository.special"
+            ),
+            singleton(
+                "AppUnkeyed",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        // Both Repository<DynamoDBTable> entries land — one keyed,
+        // one specialised-unkeyed. Each consumer resolves to its
+        // matching slot.
+        let repoCount = order.filter {
+            $0.boundType == "Repository<DynamoDBTable>"
+        }.count
+        #expect(repoCount == 2)
+    }
+
+    @Test func specialisedBindingDepThatIsAlsoGenericChainsThroughFixpoint() throws {
+        // Specialisation of `Outer<T>` produces a binding with a dep
+        // typed `T` (substituted to a concrete type). That concrete
+        // type might *itself* be a generic instantiation requiring
+        // specialisation. The iteration-to-fixpoint logic should
+        // handle this — both `Outer<Inner<X>>` and `Inner<X>` resolve.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Outer",
+                dependencies: [(name: "inner", type: "T")],
+                generics: ["T"]
+            ),
+            singleton(
+                "Inner",
+                dependencies: [(name: "value", type: "U")],
+                generics: ["U"]
+            ),
+            singleton("Value"),
+            singleton(
+                "App",
+                dependencies: [(name: "outer", type: "Outer<Inner<Value>>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        let names = order.map { $0.boundType }
+        // Both specialised bindings show up.
+        #expect(names.contains("Outer<Inner<Value>>"))
+        #expect(names.contains("Inner<Value>"))
+        #expect(names.contains("Value"))
+    }
+
+    @Test func nestedSubstitutionInDepTypeStaysUnsubstitutedAndMissingBindingFires() throws {
+        // Generic binding has a dep `box: Box<T>`. The substitution
+        // rule only replaces deps whose type *exactly equals* a
+        // parameter name — `Box<T>` doesn't qualify, so it passes
+        // through. The specialised binding ends up with a dep
+        // `box: Box<T>` (literal), which has no binding → missing-
+        // binding error. Documented limitation; nested substitution
+        // is deferred to a later iteration.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Wrapper",
+                dependencies: [(name: "box", type: "Box<T>")],
+                generics: ["T"]
+            ),
+            singleton(
+                "App",
+                dependencies: [(name: "wrapper", type: "Wrapper<Int>")]
+            ),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        // The unresolved dep is `box: Box<T>` on the specialised
+        // Wrapper<Int> binding.
+        #expect(errors.missingBindings.contains { $0.dependency.type == "Box<T>" })
+    }
+
+    @Test func noMatchingGenericProducesMissingBindingForInstantiation() throws {
+        // Consumer asks for `Repository<X>` but no generic Repository
+        // exists. Standard missing-binding error — the specialisation
+        // phase finds no candidates and the dep falls through to the
+        // existing missing-binding detection.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "App",
+                dependencies: [(name: "repo", type: "Repository<X>")]
+            )
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        #expect(errors.missingBindings[0].dependency.type == "Repository<X>")
+    }
+
+    @Test func specialisationHonoursWhitespaceCanonicalisation() throws {
+        // Provider declares the dep type with spaces; consumer
+        // without (or vice versa). The canonicalised identity should
+        // make them match, just as for non-generic bindings.
+        let result = buildDependencyGraph(from: [
+            singleton(
+                "Pair",
+                dependencies: [
+                    (name: "first", type: "A"),
+                    (name: "second", type: "B"),
+                ],
+                generics: ["A", "B"]
+            ),
+            singleton("Foo"),
+            singleton("Bar"),
+            singleton(
+                "App",
+                // Spaces inside the generic clause — should still
+                // parse and match correctly.
+                dependencies: [(name: "pair", type: "Pair<Foo,  Bar>")]
+            ),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType }.contains { $0.contains("Pair<") })
+    }
 }

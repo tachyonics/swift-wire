@@ -87,9 +87,26 @@ public struct SingletonMacro: MemberMacro {
         if !analysis.hasUserKey {
             // The key's type identity is `Self` via `nameWithGenerics`, so
             // it automatically refers to the correct generic instantiation.
-            let keyDecl: DeclSyntax = """
-                \(raw: typeInfo.accessPrefix)static let key = BindingKey<\(raw: typeInfo.nameWithGenerics)>()
-                """
+            //
+            // Generic types can't have `static let` properties that refer
+            // to their generic parameters — Swift disallows
+            // `static stored properties not supported in generic types`.
+            // For those we emit a `static var key { BindingKey<...>() }`
+            // computed property instead. BindingKey carries no state
+            // (it's a phantom-typed marker), so allocating a fresh
+            // instance per access is free.
+            let keyDecl: DeclSyntax
+            if typeInfo.isGeneric {
+                keyDecl = """
+                    \(raw: typeInfo.accessPrefix)static var key: BindingKey<\(raw: typeInfo.nameWithGenerics)> {
+                        BindingKey<\(raw: typeInfo.nameWithGenerics)>()
+                    }
+                    """
+            } else {
+                keyDecl = """
+                    \(raw: typeInfo.accessPrefix)static let key = BindingKey<\(raw: typeInfo.nameWithGenerics)>()
+                    """
+            }
             members.append(keyDecl)
         }
 
@@ -310,6 +327,7 @@ public struct SingletonMacro: MemberMacro {
 private struct HostTypeInfo {
     let nameWithGenerics: String
     let accessPrefix: String  // e.g. "public " or "" — trailing space included when present
+    let isGeneric: Bool
 
     init?(declaration: some DeclGroupSyntax) {
         let baseName: String
@@ -337,8 +355,10 @@ private struct HostTypeInfo {
                 .map { $0.name.text }
                 .joined(separator: ", ")
             self.nameWithGenerics = "\(baseName)<\(params)>"
+            self.isGeneric = true
         } else {
             self.nameWithGenerics = baseName
+            self.isGeneric = false
         }
 
         self.accessPrefix = HostTypeInfo.accessPrefix(from: modifiers)

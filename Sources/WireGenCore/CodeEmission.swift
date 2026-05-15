@@ -246,6 +246,19 @@ private func constructionExpression(
             return provider.accessPath
         case .function:
             let args = renderArguments(provider.dependencies)
+            // A specialised generic provider function carries the
+            // concrete type arguments to splice in at the call site.
+            // The bare call `makeRepo()` couldn't infer T from
+            // context here (the local has no type annotation), so we
+            // emit them explicitly: `makeRepo<DynamoDBTable>()`.
+            // Non-specialised provider functions have an empty
+            // arguments list and call through as `accessPath(args)`.
+            if !provider.concreteGenericArguments.isEmpty {
+                let generics =
+                    provider.concreteGenericArguments
+                    .joined(separator: ", ")
+                return "\(provider.accessPath)<\(generics)>(\(args))"
+            }
             return "\(provider.accessPath)(\(args))"
         }
     }

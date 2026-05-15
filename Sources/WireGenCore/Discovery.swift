@@ -178,6 +178,14 @@ package struct DiscoveredProvider: Sendable {
     /// `keyIdentifier`s coexist in the graph; same type with same key
     /// is a duplicate.
     package let keyIdentifier: String?
+    /// Concrete type arguments to splice into the call site when this
+    /// provider was produced by specialising a generic provider
+    /// function — e.g. `["DynamoDBTable"]` for a specialised
+    /// `func makeRepo<T>() -> Repository<T>` invoked as
+    /// `makeRepo<DynamoDBTable>()`. Empty for non-specialised
+    /// providers (concrete property and function bindings); only the
+    /// generic-specialisation phase populates this.
+    package let concreteGenericArguments: [String]
 
     package var sourcePath: String { location.file }
 
@@ -188,7 +196,8 @@ package struct DiscoveredProvider: Sendable {
         dependencies: [DependencyParameter],
         genericParameterNames: [String],
         location: SourceLocation,
-        keyIdentifier: String? = nil
+        keyIdentifier: String? = nil,
+        concreteGenericArguments: [String] = []
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -197,6 +206,7 @@ package struct DiscoveredProvider: Sendable {
         self.genericParameterNames = genericParameterNames
         self.location = location
         self.keyIdentifier = keyIdentifier
+        self.concreteGenericArguments = concreteGenericArguments
     }
 
     /// Whether the binding source is a property (read its value directly)

@@ -356,6 +356,26 @@ Reasons:
 
 If a concrete use case ever appears, the bar is high: it must demand resolution-by-type specifically and not be solvable by adding a typed accessor or surfacing read-only introspection. Until then this isn't deferred — it's intentionally excluded.
 
+### Textual type-expression matching (intentional)
+
+Sitting 2 canonicalises type expressions by stripping whitespace, then compares them by text. Sugar variants (`Array<X>` vs `[X]`, `Optional<X>` vs `X?`, `Dictionary<K, V>` vs `[K: V]`) and typealiases (`typealias TaskTable = ...; var x: TaskTable`) do *not* resolve to their underlying types — provider and consumer must use the same textual spelling.
+
+**Architectural reason.** The build plugin runs as a SwiftPM `.buildCommand` plugin — a separate subprocess before `swiftc` compiles consumer source. It parses `.swift` files via SwiftSyntax and operates on syntactic information only. The type checker hasn't run yet; typealiases, sugar, and generic substitution aren't resolved at this layer. Dagger can match on underlying types because it's a JVM annotation processor running *after* `javac`'s type-resolution phase, where Kotlin's typealiases have already erased to their underlying types. Wire sits at a different point in the toolchain by design (no compiled-types dependency, no SourceKit-LSP coupling), and textual matching is what that layer affords.
+
+**Side benefit: typealias-as-discriminator.** What looks like a limitation turns out to map well onto a Swift idiom: typealiases as phantom-typed discriminators. Two `String` bindings can coexist without keys if the user declares `typealias AppName = String` and `typealias AppVersion = String` and writes them consistently on both sides — Wire treats `AppName` and `AppVersion` as distinct types-as-far-as-Wire-is-concerned, even though they're both `String` underneath. Dagger users have to reach for `@Named("appName")`/`@Named("appVersion")` for the same effect. Wire's textual model accepts the user's source-level naming as the source of truth, which is consistent with the canonical-text rule we use for explicit `BindingKey` arguments — *what the user writes IS the identity*.
+
+**Implications for the iteration 3 missing-binding diagnostic.** When a missing-binding error fires for a type name that doesn't appear in the binding set, the diagnostic should mention the textual-match rule neutrally rather than presuming user confusion. A reasonable note: "no binding produces 'TaskTable' — Wire matches by textual type expression; if `TaskTable` is meant to alias a bound type elsewhere, ensure both provider and consumer use the same name." Phrased so it acknowledges both the legitimate-typealias-as-discriminator case (no error, just a tip) and the genuine-mistake case (typo, accidental alias confusion).
+
+**Things we could add later but currently won't.**
+
+1. **Sugar canonicalisation** (`Array<X>` → `[X]`, `Optional<X>` → `X?`, `Dictionary<K, V>` → `[K: V]`). These genuinely refer to the same Swift type — there's no role-discriminator argument against canonicalising them. Defer until concrete demand: it's syntactic surgery on type expressions with the wrinkle of recursive application (`Array<[X]>` needs inner-bracket rewriting too), and mixing forms across providers/consumers is uncommon in real code.
+
+2. **Typealias resolution.** Would require either a semantic-info source (SourceKit-LSP, swiftc dump-ast) or waiting for macro/build-plugin semantic APIs from the toolchain. Adding this *would break* the typealias-as-discriminator pattern, so the migration would need an opt-in flag rather than a hard switch. Not on any roadmap.
+
+3. **Module-qualified spelling normalisation** (`Wire.BindingKey<T>` vs `BindingKey<T>`). Trivial syntactic transform if it ever bites. Probably never bites in practice — Swift's type inference and `import` resolution mean module qualifiers in property annotations are vanishingly rare.
+
+The decision to revisit this section is when someone hits a confusing mismatch that's *not* a typealias-as-discriminator legitimate use. Until then, the textual-matching model holds and is documented as a design feature rather than a limitation.
+
 ## Post-M1 milestone preview: WireConfiguration
 
 The README names `WireHummingbird` as M2 — the first framework adapter, the integration target task-cluster is built around. Working through the M1 design surface (specifically iteration 8's adapter-annotation contract) surfaced a smaller adapter that's a better first real-world test: **WireConfiguration**, a swift-configuration adapter exposing `@Configuration(forKey:default:)`. This section captures the design so the eventual milestone-ordering decision has the work to point at.
