@@ -353,6 +353,46 @@ struct DiagnosticGalleryTests {
 
     // MARK: - Generated-identifier collision
 
+    // MARK: - Warnings
+
+    @Test func containerWithScopeRendersAsWarning() throws {
+        // The warning prefix is `file:line:col: warning:` per Swift
+        // compiler convention. Distinct from errors — render path
+        // is its own function (`renderWarnings`), and WireGen will
+        // not exit non-zero on warnings alone.
+        let source = """
+            @Container
+            @Singleton
+            struct Mixed {
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Mixed.swift")
+        let rendered = renderWarnings(discovery.warnings)
+        #expect(
+            rendered.contains(
+                "Mixed.swift:3:8: warning: 'Mixed' carries both @Container and @Singleton"
+            )
+        )
+    }
+
+    @Test func injectInitInExtensionRendersAsWarning() throws {
+        let source = """
+            @Singleton
+            struct Foo {
+                @Inject var bar: Bar
+            }
+
+            extension Foo {
+                @Inject init(custom: String) {
+                }
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Foo.swift")
+        let rendered = renderWarnings(discovery.warnings)
+        #expect(rendered.contains("warning: @Inject on an extension init is ignored"))
+        #expect(rendered.contains("'Foo'"))
+    }
+
     @Test func identifierCollisionNamesTheConflictingAccessor() throws {
         // `Logger` and `Logger?` have distinct (type, key) identities
         // but their generated accessor names both sanitise to `logger`

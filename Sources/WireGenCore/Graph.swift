@@ -109,6 +109,38 @@ package struct DuplicateBinding: Sendable {
     }
 }
 
+/// One source-pattern warning surfaced by discovery or graph
+/// validation. Warnings are informational — they don't block codegen
+/// and don't cause WireGen to exit non-zero — but they render to
+/// stderr in the standard `file:line:col: warning: ...` format so
+/// build tools surface them inline.
+///
+/// `notes` carry related-source pointers (e.g. "also bound here"
+/// secondary locations), rendered as `file:line:col: note: ...`
+/// lines immediately following the warning. Both follow Swift
+/// compiler convention.
+package struct Warning: Sendable {
+    package let location: SourceLocation
+    package let message: String
+    package let notes: [Note]
+
+    package init(location: SourceLocation, message: String, notes: [Note] = []) {
+        self.location = location
+        self.message = message
+        self.notes = notes
+    }
+
+    package struct Note: Sendable {
+        package let location: SourceLocation
+        package let message: String
+
+        package init(location: SourceLocation, message: String) {
+            self.location = location
+            self.message = message
+        }
+    }
+}
+
 /// Two or more bindings with distinct `(type, key)` identities produce
 /// the same generated accessor name (the lowerCamelCased, sanitised
 /// identifier used for stored properties on `_WireGraph` and locals in
@@ -801,6 +833,26 @@ package func renderSkipped(_ skipped: [DiscoveredBinding]) -> String {
     for binding in skipped {
         let generics = "<\(binding.genericParameterNames.joined(separator: ", "))>"
         lines.append("  \(displayName(binding))\(generics)")
+    }
+    return lines.joined(separator: "\n")
+}
+
+/// Render a list of warnings in the Swift-compiler
+/// `file:line:col: warning: ...` form, one per line, with optional
+/// `note:` lines for related-source pointers. Returns an empty
+/// string for an empty input so callers can guard with
+/// `.isEmpty` before printing.
+package func renderWarnings(_ warnings: [Warning]) -> String {
+    var lines: [String] = []
+    for warning in warnings {
+        lines.append(
+            "\(warning.location.formattedPrefix): warning: \(warning.message)"
+        )
+        for note in warning.notes {
+            lines.append(
+                "\(note.location.formattedPrefix): note: \(note.message)"
+            )
+        }
     }
     return lines.joined(separator: "\n")
 }

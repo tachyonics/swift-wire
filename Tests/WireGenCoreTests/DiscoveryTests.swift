@@ -1095,4 +1095,89 @@ struct DiscoveryTests {
         #expect(result.count == 1)
         #expect(result[0].dependencies[0].keyIdentifier == "primary")
     }
+
+    // MARK: - Warnings
+
+    @Test func containerCombinedWithSingletonEmitsWarning() {
+        // A type with both `@Container` and `@Singleton` ends up as
+        // both a binding in the default graph and a grouping for its
+        // own container — almost always a user error. Warn at the
+        // type's name with a remedy suggestion.
+        let source = """
+            @Container
+            @Singleton
+            struct Mixed {
+                @Inject var x: X
+            }
+            """
+        let result = discover(in: source, sourcePath: "Mixed.swift")
+        #expect(result.warnings.count == 1)
+        #expect(result.warnings[0].message.contains("@Container and @Singleton"))
+        #expect(result.warnings[0].location.file == "Mixed.swift")
+    }
+
+    @Test func plainTypeDeclWithoutContainerEmitsNoWarning() {
+        // Sanity check — a normal `@Singleton struct Foo` with no
+        // `@Container` doesn't fire the warning.
+        let source = """
+            @Singleton
+            struct Foo {
+                @Inject var bar: Bar
+            }
+            """
+        let result = discover(in: source, sourcePath: "Foo.swift")
+        #expect(result.warnings.isEmpty)
+    }
+
+    @Test func injectInitInExtensionEmitsWarning() {
+        // `@Inject` on an extension init is silently ignored by the
+        // `@Singleton` macro (which only sees the primary declaration).
+        // Warn at the init site with a fix-it suggestion.
+        let source = """
+            @Singleton
+            struct Foo {
+                @Inject var bar: Bar
+            }
+
+            extension Foo {
+                @Inject init(custom: String) {
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Foo.swift")
+        #expect(result.warnings.count == 1)
+        #expect(result.warnings[0].message.contains("@Inject on an extension init"))
+        #expect(result.warnings[0].message.contains("'Foo'"))
+    }
+
+    @Test func unannotatedExtensionProvidesIsRecordedAsCandidate() {
+        // The visitor records `@Provides` inside unannotated
+        // extensions as candidate warnings — WireGen does the cross-
+        // file resolution against the `@Container`-name set. This
+        // test pins the candidate-collection step.
+        let source = """
+            extension AppConfig {
+                @Provides static let logLevel: String = "info"
+            }
+            """
+        let result = discover(in: source, sourcePath: "AppConfig.swift")
+        #expect(result.unannotatedExtensionProvides.count == 1)
+        let candidate = result.unannotatedExtensionProvides[0]
+        #expect(candidate.extendedType == "AppConfig")
+        #expect(candidate.providerName == "logLevel")
+    }
+
+    @Test func containerAnnotatedExtensionProvidesIsNotACandidate() {
+        // `@Container extension Foo { @Provides ... }` is the
+        // user's explicit opt-in to contribute to Foo's container —
+        // no warning. The candidate list stays empty for this case.
+        let source = """
+            @Container
+            extension AppConfig {
+                @Provides static let logLevel: String = "info"
+            }
+            """
+        let result = discover(in: source, sourcePath: "AppConfig.swift")
+        #expect(result.unannotatedExtensionProvides.isEmpty)
+    }
 }
