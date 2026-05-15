@@ -663,7 +663,8 @@ private func detectIdentifierCollisions(
         let name = identifierName(forType: binding.boundType, key: binding.keyIdentifier)
         groupedByIdentifier[name, default: []].append(binding)
     }
-    return groupedByIdentifier
+    return
+        groupedByIdentifier
         .filter { $0.value.count > 1 }
         .sorted { $0.key < $1.key }
         .map { identifier, group in
