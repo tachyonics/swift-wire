@@ -163,6 +163,251 @@ private func canonicalTypeName(_ raw: String) -> String {
     raw.filter { !$0.isWhitespace }
 }
 
+/// Drive the specialisation phase: walk each binding's deps, attempt
+/// to specialise a generic binding for any unresolved concrete
+/// instantiation, and add the resulting specialised binding to
+/// `uniqueByIdentity`. Iterates until no further specialisations
+/// happen — a specialised binding's deps may themselves be unresolved
+/// concrete instantiations that need another round.
+///
+/// Scope of substitution: a dep whose type *exactly equals* one of
+/// the generic binding's type-parameter names is substituted with the
+/// matching concrete type. Nested forms (`Box<T>`, `[T]`, `T?`) are
+/// passed through unchanged — the specialised binding inherits them
+/// verbatim, and the normal missing-binding detection in the caller
+/// reports an error if the resulting type isn't bound. Wider
+/// substitution is deferred until a real use case justifies the
+/// type-expression-rewriting machinery.
+///
+/// Concrete-vs-generic ambiguity: when a dep's `(type, key)` is
+/// satisfied by both an existing concrete binding *and* a generic
+/// candidate that could specialise to the same identity, the result
+/// is a duplicate-binding error rather than a silent concrete-wins
+/// resolution. The user disambiguates with explicit keys (standard
+/// fix-it) or by removing one of the two bindings.
+///
+/// Iteration safety: the worklist only grows when a *new* specialised
+/// binding is added (one not already in `uniqueByIdentity`), which
+/// can happen at most once per `(base, param-list)` combination. The
+/// number of distinct generic types in the graph is finite, so the
+/// loop terminates.
+private func specialiseGenericBindings(
+    uniqueByIdentity: inout [BindingIdentity: DiscoveredBinding],
+    genericBindings: [DiscoveredBinding]
+) -> [DuplicateBinding] {
+    guard !genericBindings.isEmpty else { return [] }
+
+    var ambiguities: [DuplicateBinding] = []
+    var ambiguitiesReported: Set<BindingIdentity> = []
+
+    // Seed the worklist with the deps of every already-known binding.
+    var worklist: [DependencyParameter] = uniqueByIdentity.values
+        .flatMap { $0.dependencies }
+
+    while !worklist.isEmpty {
+        let dep = worklist.removeFirst()
+        let parsed = parseGenericType(canonicalTypeName(dep.type))
+        // Generic candidates must match base + paramCount *and* the
+        // dep's key (so a keyed `@Provides(key) func make<T>() ...`
+        // only satisfies keyed consumers requesting the same key,
+        // and an unkeyed generic only satisfies unkeyed consumers).
+        // Same partition rule as the regular (type, key) identity
+        // match — keys partition the binding space at every layer.
+        let genericCandidates = parsed.params.isEmpty
+            ? []
+            : genericBindings.filter { binding in
+                guard let signature = genericBindingSignature(binding) else { return false }
+                return signature.base == parsed.base
+                    && signature.paramCount == parsed.params.count
+                    && binding.keyIdentifier == dep.keyIdentifier
+            }
+
+        if let concrete = uniqueByIdentity[dep.identity] {
+            // Concrete already satisfies. If a generic could also
+            // satisfy the same `(type, key)` slot, that's ambiguous —
+            // surface it as a duplicate-binding error rather than
+            // silently preferring the concrete.
+            if !genericCandidates.isEmpty,
+                !ambiguitiesReported.contains(dep.identity)
+            {
+                ambiguities.append(
+                    DuplicateBinding(
+                        boundType: dep.identity.type,
+                        keyIdentifier: dep.identity.key,
+                        bindings: [concrete] + genericCandidates
+                    )
+                )
+                ambiguitiesReported.insert(dep.identity)
+            }
+            continue
+        }
+        guard genericCandidates.count == 1 else {
+            // 0 candidates → falls through to normal missing-binding
+            // detection in the caller. 2+ candidates → ambiguity
+            // among generics with no concrete to pair against; the
+            // dep stays unresolved and the missing-binding error
+            // fires with the concrete type name. Iteration 3 adds a
+            // specific diagnostic for the multi-generic case.
+            continue
+        }
+        let specialised = specialiseBinding(genericCandidates[0], with: parsed.params)
+        // Specialised bindings inherit the generic binding's
+        // `keyIdentifier` if any. Re-check after substitution to
+        // dedup against any existing entry.
+        if uniqueByIdentity[specialised.identity] == nil {
+            uniqueByIdentity[specialised.identity] = specialised
+            worklist.append(contentsOf: specialised.dependencies)
+        }
+    }
+
+    return ambiguities
+}
+
+/// Extract the (base name, parameter count) signature of a generic
+/// binding for specialisation matching. For `@Singleton` types the
+/// base is the bare `typeName` and the params come from
+/// `genericParameterNames`. For `@Provides` functions the base is
+/// parsed out of the (parameter-bearing) `boundType` expression.
+/// Returns `nil` for non-generic bindings.
+private func genericBindingSignature(
+    _ binding: DiscoveredBinding
+) -> (base: String, paramCount: Int)? {
+    guard !binding.genericParameterNames.isEmpty else { return nil }
+    switch binding {
+    case .singleton(let singleton):
+        return (singleton.typeName, binding.genericParameterNames.count)
+    case .provider(let provider):
+        let parsed = parseGenericType(canonicalTypeName(provider.boundType))
+        return (parsed.base, binding.genericParameterNames.count)
+    }
+}
+
+/// Substitute the generic binding's type parameters with the
+/// `concreteArguments` and return a new binding ready for the graph.
+/// `genericParameterNames` is cleared on the result so the binding
+/// looks concrete to the rest of the pipeline (codegen, topological
+/// sort, missing-binding detection).
+///
+/// Substitution rule: a dep whose `type` *exactly equals* one of the
+/// generic parameter names becomes the matching concrete type.
+/// Anything else passes through unchanged.
+private func specialiseBinding(
+    _ binding: DiscoveredBinding,
+    with concreteArguments: [String]
+) -> DiscoveredBinding {
+    let parameterNames = binding.genericParameterNames
+    let substitutions = Dictionary(
+        uniqueKeysWithValues: zip(parameterNames, concreteArguments)
+    )
+    let substitutedDependencies = binding.dependencies.map { dep -> DependencyParameter in
+        guard let replacement = substitutions[dep.type] else { return dep }
+        return DependencyParameter(
+            name: dep.name,
+            type: replacement,
+            kind: dep.kind,
+            location: dep.location,
+            keyIdentifier: dep.keyIdentifier
+        )
+    }
+    switch binding {
+    case .singleton(let singleton):
+        // The specialised concrete type expression replaces both
+        // `typeName` and `qualifiedTypeName` so codegen renders the
+        // construction call as `Repository<DynamoDBTable>(...)` and
+        // the stored-property type annotation matches.
+        let concreteType = "\(singleton.typeName)<\(concreteArguments.joined(separator: ", "))>"
+        let enclosingPrefix = singleton.qualifiedTypeName.hasSuffix(singleton.typeName)
+            ? String(
+                singleton.qualifiedTypeName.dropLast(singleton.typeName.count)
+            )
+            : ""
+        return .singleton(
+            DiscoveredSingleton(
+                typeName: concreteType,
+                qualifiedTypeName: enclosingPrefix + concreteType,
+                typeKind: singleton.typeKind,
+                genericParameterNames: [],
+                dependencies: substitutedDependencies,
+                location: singleton.location
+            )
+        )
+    case .provider(let provider):
+        // For functions, splice the concrete arguments at the call
+        // site via `concreteGenericArguments` and update `boundType`
+        // to the concrete instantiation so identity matching picks
+        // up the specialised binding.
+        let parsedReturn = parseGenericType(canonicalTypeName(provider.boundType))
+        let concreteType = "\(parsedReturn.base)<\(concreteArguments.joined(separator: ", "))>"
+        return .provider(
+            DiscoveredProvider(
+                boundType: concreteType,
+                accessPath: provider.accessPath,
+                form: provider.form,
+                dependencies: substitutedDependencies,
+                genericParameterNames: [],
+                location: provider.location,
+                keyIdentifier: provider.keyIdentifier,
+                concreteGenericArguments: provider.form == .function
+                    ? concreteArguments
+                    : []
+            )
+        )
+    }
+}
+
+/// Decompose a type expression into its base name and generic-argument
+/// list. Used by generic-specialisation matching to identify candidate
+/// generic bindings for a given concrete instantiation.
+///
+///     "Repository"                 → ("Repository", [])
+///     "Repository<DynamoDBTable>"  → ("Repository", ["DynamoDBTable"])
+///     "Pair<A, B>"                 → ("Pair", ["A", "B"])
+///     "Box<Pair<X, Y>>"            → ("Box", ["Pair<X,Y>"])
+///
+/// Bracket depth counted so nested generics in a parameter slot are
+/// kept intact. Commas at depth 0 split the parameter list. Whitespace
+/// is canonicalised away as a side effect — the inputs `Pair<A, B>`
+/// and `Pair<A,B>` parse to the same `(base, params)` pair.
+///
+/// Malformed input (unbalanced brackets, etc.) returns whatever was
+/// accumulated so far. The build plugin trusts its inputs to be parsed
+/// Swift type expressions and doesn't need to validate.
+private func parseGenericType(_ expression: String) -> (base: String, params: [String]) {
+    let canonical = canonicalTypeName(expression)
+    guard let openIndex = canonical.firstIndex(of: "<") else {
+        return (canonical, [])
+    }
+    let base = String(canonical[..<openIndex])
+    let innerStart = canonical.index(after: openIndex)
+    var params: [String] = []
+    var current = ""
+    var depth = 0
+    for char in canonical[innerStart...] {
+        switch char {
+        case "<":
+            depth += 1
+            current.append(char)
+        case ">" where depth == 0:
+            // Matching close — finalise the current param (if any)
+            // and return. Any trailing characters after this `>` are
+            // ignored; well-formed type expressions don't have them.
+            if !current.isEmpty { params.append(current) }
+            return (base, params)
+        case ">":
+            depth -= 1
+            current.append(char)
+        case "," where depth == 0:
+            params.append(current)
+            current = ""
+        default:
+            current.append(char)
+        }
+    }
+    // Unbalanced brackets — return what we have.
+    if !current.isEmpty { params.append(current) }
+    return (base, params)
+}
+
 /// Build the dependency graph from the discovered bindings, run a
 /// topological sort, and surface any validation problems found along
 /// the way.
@@ -181,15 +426,18 @@ package func buildDependencyGraph(
     from bindings: [DiscoveredBinding]
 ) -> GraphResult {
     // Index non-generic bindings by their (type, key) identity,
-    // capturing duplicates as we go. Generic bindings are deferred to
-    // `skipped`.
+    // capturing duplicates as we go. Generic bindings go to `skipped`
+    // for the discovery report and are also held in `genericBindings`
+    // as candidates for later specialisation.
     var groupedByIdentity: [BindingIdentity: [DiscoveredBinding]] = [:]
     var skipped: [DiscoveredBinding] = []
+    var genericBindings: [DiscoveredBinding] = []
     for binding in bindings {
         if binding.genericParameterNames.isEmpty {
             groupedByIdentity[binding.identity, default: []].append(binding)
         } else {
             skipped.append(binding)
+            genericBindings.append(binding)
         }
     }
 
@@ -220,6 +468,37 @@ package func buildDependencyGraph(
                     cycles: [],
                     missingBindings: [],
                     duplicateBindings: duplicates
+                )
+            ),
+            skipped: skipped
+        )
+    }
+
+    // Generic specialisation: walk every binding's deps; for each
+    // unresolved concrete-instantiation dep (a dep whose type is
+    // something like `Repository<DynamoDBTable>`), look for a generic
+    // binding whose (base, param count) matches. Exactly one match →
+    // specialise (substitute the type parameters through the
+    // binding's deps) and add the specialised binding to the graph.
+    //
+    // Concrete-vs-generic ambiguity: when the same `(type, key)` is
+    // satisfied by *both* an existing concrete binding *and* a
+    // generic-specialisation candidate, treat that as a duplicate
+    // rather than silently letting the concrete win. The user can
+    // disambiguate with explicit keys (the standard duplicate-binding
+    // fix-it works here unchanged) or by removing one of the two
+    // bindings.
+    let specialisationAmbiguities = specialiseGenericBindings(
+        uniqueByIdentity: &uniqueByIdentity,
+        genericBindings: genericBindings
+    )
+    if !specialisationAmbiguities.isEmpty {
+        return GraphResult(
+            outcome: .validationFailed(
+                GraphResult.ValidationErrors(
+                    cycles: [],
+                    missingBindings: [],
+                    duplicateBindings: specialisationAmbiguities
                 )
             ),
             skipped: skipped

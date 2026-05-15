@@ -76,6 +76,25 @@ struct BootstrapTests {
 
     // MARK: - Explicit-key disambiguation
 
+    @Test func genericSingletonSpecialisedForConcreteConsumer() async throws {
+        // `Container<T>` is generic; `GenericConsumer` asks for
+        // `Container<DataPoint>`. The build plugin specialises the
+        // generic binding with `T = DataPoint`, substitutes the dep
+        // `item: T` to `item: DataPoint`, and emits a concrete
+        // `Container<DataPoint>` binding the consumer resolves
+        // against — confirming sitting 2b's generic-specialisation
+        // phase wires through end-to-end (graph specialisation +
+        // codegen with the concrete type expression at the call
+        // site).
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.genericConsumer.describe() == "Container(DataPoint(value: 42))")
+        // The specialised binding is reachable from the graph under
+        // the type-derived accessor name.
+        #expect(graph.containerOfDataPoint.describe() == "Container(DataPoint(value: 42))")
+    }
+
+    // MARK: - Explicit-key disambiguation
+
     @Test func keyedConsumerInjectsTheMatchingKeyedProvider() async throws {
         // KeyedConsumer has `@Inject(AppName.alternate) var alternate:
         // AppName`. The matching `@Provides(AppName.alternate)` binds a
