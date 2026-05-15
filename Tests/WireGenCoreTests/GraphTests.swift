@@ -1037,6 +1037,81 @@ struct GraphTests {
         #expect(errors.missingBindings[0].dependency.type == "Repository<X>")
     }
 
+    @Test func multipleGenericCandidatesProduceAmbiguityError() throws {
+        // Two generic bindings of the same `(base, paramCount, key)`
+        // shape both match a consumer's concrete instantiation. Wire
+        // can't pick — emits a duplicate-binding error listing the
+        // candidates so the user disambiguates (typically with keys).
+        let result = buildDependencyGraph(from: [
+            providerFunction(
+                "makeRepoA",
+                boundType: "Repository<T>",
+                dependencies: [],
+                generics: ["T"]
+            ),
+            providerFunction(
+                "makeRepoB",
+                boundType: "Repository<T>",
+                dependencies: [],
+                generics: ["T"]
+            ),
+            singleton(
+                "App",
+                dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
+            ),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+        let duplicate = try #require(errors.duplicateBindings.first)
+        #expect(duplicate.boundType == "Repository<DynamoDBTable>")
+        #expect(duplicate.bindings.count == 2)
+    }
+
+    // MARK: - Generated-identifier collisions
+
+    @Test func bindingsWithCollidingAccessorNamesAreReported() throws {
+        // `Logger` and `Logger?` are distinct `(type, key)` identities
+        // (different textual type expressions → different identity
+        // slots → they coexist in the graph), but `sanitizeIdentifier`
+        // strips the `?` from `Logger?`, leaving both with the same
+        // generated accessor name `logger`. Codegen can't emit two
+        // `let logger:` lines, so Wire surfaces the collision as a
+        // validation error.
+        let result = buildDependencyGraph(from: [
+            providerProperty("plainLogger", boundType: "Logger"),
+            providerProperty("optionalLogger", boundType: "Logger?"),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.identifierCollisions.count == 1)
+        let collision = try #require(errors.identifierCollisions.first)
+        #expect(collision.identifier == "logger")
+        #expect(collision.bindings.count == 2)
+    }
+
+    @Test func renderIdentifierCollisionNamesTheGeneratedAccessor() {
+        let errors = GraphResult.ValidationErrors(
+            cycles: [],
+            missingBindings: [],
+            duplicateBindings: [],
+            identifierCollisions: [
+                IdentifierCollision(
+                    identifier: "logger",
+                    bindings: [
+                        providerProperty("a", boundType: "Logger"),
+                        providerProperty("b", boundType: "Logger?"),
+                    ]
+                )
+            ]
+        )
+        let report = renderValidationErrors(errors)
+        #expect(
+            report.contains(
+                "error: generated accessor name 'logger' collides across multiple bindings"
+            )
+        )
+        #expect(report.contains("note: also generates 'logger'"))
+    }
+
     @Test func specialisationHonoursWhitespaceCanonicalisation() throws {
         // Provider declares the dep type with spaces; consumer
         // without (or vice versa). The canonicalised identity should
