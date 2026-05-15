@@ -246,7 +246,8 @@ private func specialiseGenericBindings(
         // and an unkeyed generic only satisfies unkeyed consumers).
         // Same partition rule as the regular (type, key) identity
         // match — keys partition the binding space at every layer.
-        let genericCandidates = params.isEmpty
+        let genericCandidates =
+            params.isEmpty
             ? []
             : genericSignatures.filter { entry in
                 entry.base == base
@@ -352,7 +353,8 @@ private func specialiseBinding(
         // construction call as `Repository<DynamoDBTable>(...)` and
         // the stored-property type annotation matches.
         let concreteType = "\(singleton.typeName)<\(concreteArguments.joined(separator: ", "))>"
-        let enclosingPrefix = singleton.qualifiedTypeName.hasSuffix(singleton.typeName)
+        let enclosingPrefix =
+            singleton.qualifiedTypeName.hasSuffix(singleton.typeName)
             ? String(
                 singleton.qualifiedTypeName.dropLast(singleton.typeName.count)
             )
