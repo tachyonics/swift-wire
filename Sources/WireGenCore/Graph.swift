@@ -245,10 +245,10 @@ private func specialiseGenericBindings(
                 !ambiguitiesReported.contains(dep.identity)
             {
                 ambiguities.append(
-                    ambiguityFor(
-                        dep: dep,
-                        concrete: concrete,
-                        genericCandidates: genericCandidates
+                    DuplicateBinding(
+                        boundType: dep.identity.type,
+                        keyIdentifier: dep.identity.key,
+                        bindings: [concrete] + genericCandidates
                     )
                 )
                 ambiguitiesReported.insert(dep.identity)
@@ -309,22 +309,6 @@ private func matchingGenericCandidates(
                 && entry.binding.keyIdentifier == key
         }
         .map { $0.binding }
-}
-
-/// Build the `DuplicateBinding` describing a concrete-vs-generic
-/// ambiguity for one `(type, key)` slot. The concrete binding leads
-/// the `bindings` list (primary diagnostic anchor) followed by every
-/// generic candidate that could specialise to the same identity.
-private func ambiguityFor(
-    dep: DependencyParameter,
-    concrete: DiscoveredBinding,
-    genericCandidates: [DiscoveredBinding]
-) -> DuplicateBinding {
-    DuplicateBinding(
-        boundType: dep.identity.type,
-        keyIdentifier: dep.identity.key,
-        bindings: [concrete] + genericCandidates
-    )
 }
 
 /// Extract the (base name, parameter count) signature of a generic
