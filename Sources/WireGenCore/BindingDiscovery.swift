@@ -115,6 +115,11 @@ final class BindingDiscovery: SyntaxVisitor {
             nameToken: node.name,
             attributes: node.attributes
         )
+        emitStrayInjectMemberWarningsIfNeeded(
+            nameToken: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
+        )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "struct",
@@ -134,6 +139,11 @@ final class BindingDiscovery: SyntaxVisitor {
             nameToken: node.name,
             attributes: node.attributes
         )
+        emitStrayInjectMemberWarningsIfNeeded(
+            nameToken: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
+        )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
             typeKind: "class",
@@ -152,6 +162,11 @@ final class BindingDiscovery: SyntaxVisitor {
         emitContainerWithScopeWarningIfNeeded(
             nameToken: node.name,
             attributes: node.attributes
+        )
+        emitStrayInjectMemberWarningsIfNeeded(
+            nameToken: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
@@ -176,6 +191,11 @@ final class BindingDiscovery: SyntaxVisitor {
         emitContainerWithScopeWarningIfNeeded(
             nameToken: node.name,
             attributes: node.attributes
+        )
+        emitStrayInjectMemberWarningsIfNeeded(
+            nameToken: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         return .visitChildren
@@ -224,6 +244,7 @@ final class BindingDiscovery: SyntaxVisitor {
         {
             extractProvidesProperty(node)
         }
+        emitStrayInjectAtModuleScopeWarningIfNeeded(node)
         return .skipChildren
     }
 
@@ -496,6 +517,77 @@ final class BindingDiscovery: SyntaxVisitor {
                 extendedType: extendedType,
                 providerName: providerName,
                 location: location
+            )
+        )
+    }
+
+    /// Surface `@Inject` on members of a type that isn't annotated
+    /// with a scope macro (`@Singleton`/`@RequestScope`/`@JobScope`).
+    /// The macro is a peer marker that does nothing on its own; it
+    /// only contributes when a scope macro reads it. A user writing
+    /// `struct Plain { @Inject var x: X }` thinking it'll auto-wire
+    /// gets silent nothing, so the warning makes the no-op visible.
+    ///
+    /// Both stored-property and init `@Inject` on the same type are
+    /// flagged. Nested type members are reached via separate visit
+    /// calls — this method only scans the direct members of the
+    /// type passed in.
+    private func emitStrayInjectMemberWarningsIfNeeded(
+        nameToken: TokenSyntax,
+        attributes: AttributeListSyntax,
+        members: MemberBlockItemListSyntax
+    ) {
+        let isScopeAnnotated = scopeMacroNames.contains {
+            hasAttribute(attributes, named: $0)
+        }
+        guard !isScopeAnnotated else { return }
+        for member in members {
+            if let varDecl = member.decl.as(VariableDeclSyntax.self),
+                let injectAttribute = attribute(in: varDecl.attributes, named: "Inject")
+            {
+                let propertyName =
+                    varDecl.bindings.first?.pattern
+                    .as(IdentifierPatternSyntax.self)?.identifier.text ?? "?"
+                warnings.append(
+                    Warning(
+                        location: location(of: injectAttribute.atSign),
+                        message:
+                            "@Inject on '\(propertyName)' has no effect — the enclosing type '\(nameToken.text)' isn't annotated with a scope macro (@Singleton, @RequestScope, @JobScope). Add a scope macro to the type, or remove @Inject."
+                    )
+                )
+            }
+            if let initDecl = member.decl.as(InitializerDeclSyntax.self),
+                let injectAttribute = attribute(in: initDecl.attributes, named: "Inject")
+            {
+                warnings.append(
+                    Warning(
+                        location: location(of: injectAttribute.atSign),
+                        message:
+                            "@Inject on this initialiser has no effect — the enclosing type '\(nameToken.text)' isn't annotated with a scope macro (@Singleton, @RequestScope, @JobScope). Add a scope macro to the type, or remove @Inject."
+                    )
+                )
+            }
+        }
+    }
+
+    /// Surface `@Inject` on a module-scope `let`/`var`. `@Inject` is
+    /// only meaningful inside scope-annotated types or as a per-
+    /// parameter key annotation; at module scope it's a no-op. The
+    /// likely user intent is `@Provides`, so the message points at
+    /// that as the alternative.
+    private func emitStrayInjectAtModuleScopeWarningIfNeeded(_ node: VariableDeclSyntax) {
+        guard enclosingTypes.isEmpty else { return }
+        guard let injectAttribute = attribute(in: node.attributes, named: "Inject") else {
+            return
+        }
+        let name =
+            node.bindings.first?.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+            ?? "?"
+        warnings.append(
+            Warning(
+                location: location(of: injectAttribute.atSign),
+                message:
+                    "@Inject on '\(name)' at module scope has no effect — @Inject is only meaningful inside scope-annotated types or as a per-parameter key annotation. Use @Provides for module-scope bindings, or remove @Inject."
             )
         )
     }

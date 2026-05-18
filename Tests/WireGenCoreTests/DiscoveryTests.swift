@@ -1167,6 +1167,89 @@ struct DiscoveryTests {
         #expect(candidate.providerName == "logLevel")
     }
 
+    @Test func strayInjectOnNonScopeAnnotatedTypePropertyEmitsWarning() {
+        // `Plain` isn't @Singleton/@RequestScope/@JobScope, so the
+        // @Inject on a stored property is a silent no-op without the
+        // warning. Surfacing it lets the user understand they need a
+        // scope macro to get wiring.
+        let source = """
+            struct Plain {
+                @Inject var logger: Logger
+            }
+            """
+        let result = discover(in: source, sourcePath: "Plain.swift")
+        #expect(result.warnings.count == 1)
+        #expect(result.warnings[0].message.contains("@Inject on 'logger' has no effect"))
+        #expect(result.warnings[0].message.contains("'Plain'"))
+    }
+
+    @Test func strayInjectOnNonScopeAnnotatedTypeInitEmitsWarning() {
+        // Same idea, init form. The user might think @Inject on the
+        // init marks it as canonical, but without a scope macro on
+        // the type there's no macro to read the marker.
+        let source = """
+            struct Plain {
+                @Inject init(x: X) {
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Plain.swift")
+        #expect(result.warnings.count == 1)
+        #expect(
+            result.warnings[0].message.contains(
+                "@Inject on this initialiser has no effect"
+            )
+        )
+    }
+
+    @Test func injectOnSingletonTypeMemberDoesNotEmitWarning() {
+        // Negative case — @Inject on a @Singleton's property IS
+        // meaningful (read by the macro for init synthesis). No
+        // warning. Pin the contract so a regression that over-warns
+        // gets caught.
+        let source = """
+            @Singleton
+            struct UserRepo {
+                @Inject var logger: Logger
+            }
+            """
+        let result = discover(in: source, sourcePath: "UserRepo.swift")
+        #expect(result.warnings.isEmpty)
+    }
+
+    @Test func strayInjectAtModuleScopeEmitsWarning() {
+        // `@Inject let foo: Foo` at file scope is a no-op — there's
+        // no enclosing type for the macro to read it from. Suggest
+        // @Provides as the likely intent.
+        let source = """
+            @Inject let logger: Logger = Logger()
+            """
+        let result = discover(in: source, sourcePath: "Logger.swift")
+        #expect(result.warnings.count == 1)
+        #expect(
+            result.warnings[0].message.contains(
+                "@Inject on 'logger' at module scope has no effect"
+            )
+        )
+        #expect(result.warnings[0].message.contains("Use @Provides"))
+    }
+
+    @Test func injectOnProvidesFuncParameterDoesNotEmitWarning() {
+        // `@Provides func make(@Inject(Key) x: X) -> T` uses
+        // per-parameter @Inject for keyed disambiguation — meaningful,
+        // not stray. The parameter @Inject is inside a func decl,
+        // not a top-level var, so the module-scope check doesn't
+        // fire either.
+        let source = """
+            @Provides
+            func makeRepo(@Inject(.primary) db: Database) -> Repository {
+                Repository(db: db)
+            }
+            """
+        let result = discover(in: source, sourcePath: "Repos.swift")
+        #expect(result.warnings.isEmpty)
+    }
+
     @Test func containerAnnotatedExtensionProvidesIsNotACandidate() {
         // `@Container extension Foo { @Provides ... }` is the
         // user's explicit opt-in to contribute to Foo's container —
