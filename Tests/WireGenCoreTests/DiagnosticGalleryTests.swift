@@ -384,6 +384,36 @@ struct DiagnosticGalleryTests {
         )
     }
 
+    @Test func strayInjectOnNonScopeTypeMemberRendersAsWarning() throws {
+        // The full rendered line includes prefix + message. Pin both
+        // halves so the warning text doesn't drift silently.
+        let source = """
+            struct Plain {
+                @Inject var logger: Logger
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Plain.swift")
+        let rendered = renderWarnings(discovery.warnings)
+        #expect(rendered.contains("Plain.swift:2:5: warning:"))
+        #expect(rendered.contains("@Inject on 'logger' has no effect"))
+        #expect(rendered.contains("Add a scope macro to the type"))
+    }
+
+    @Test func strayInjectAtModuleScopeRendersAsWarning() throws {
+        let source = """
+            @Inject let logger: Logger = Logger()
+            """
+        let discovery = discover(in: source, sourcePath: "Logger.swift")
+        let rendered = renderWarnings(discovery.warnings)
+        #expect(rendered.contains("Logger.swift:1:1: warning:"))
+        #expect(
+            rendered.contains(
+                "@Inject on 'logger' at module scope has no effect"
+            )
+        )
+        #expect(rendered.contains("Use @Provides for module-scope bindings"))
+    }
+
     @Test func injectInitInExtensionRendersAsWarning() throws {
         let source = """
             @Singleton
