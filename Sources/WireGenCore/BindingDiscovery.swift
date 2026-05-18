@@ -310,7 +310,11 @@ final class BindingDiscovery: SyntaxVisitor {
     ) {
         guard hasAttribute(attributes, named: "Singleton") else { return }
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
-        let dependencies = extractInjectDependencies(from: members)
+        let dependencies = extractInjectDependencies(
+            from: members,
+            sourcePath: sourcePath,
+            converter: converter
+        )
         // `enclosingTypes` already includes this type's own name (it
         // was pushed by `enterTypeDecl` before `processSingleton` ran),
         // so it's the full path including the singleton itself.
@@ -427,192 +431,72 @@ final class BindingDiscovery: SyntaxVisitor {
         )
     }
 
-    private func extractInjectDependencies(
-        from members: MemberBlockItemListSyntax
-    ) -> [DependencyParameter] {
-        // Single pass: collect both candidate dependency lists. Choose
-        // at the end based on the same priority rule as
-        // `SingletonMacro`: an `@Inject`-marked init's parameter list
-        // takes precedence over `@Inject` properties.
-        var injectInitDependencies: [DependencyParameter]?
-        var propertyDependencies: [DependencyParameter] = []
-
-        for member in members {
-            if let initDecl = member.decl.as(InitializerDeclSyntax.self) {
-                if hasAttribute(initDecl.attributes, named: "Inject") {
-                    injectInitDependencies = initDecl.signature.parameterClause.parameters.map {
-                        parameter in
-                        // Per-parameter `@Inject(<key>)` keys an
-                        // individual dep. The init-level `@Inject` (no
-                        // args) marks the init as canonical; its key —
-                        // if any — applies to nothing.
-                        let parameterKey = attribute(in: parameter.attributes, named: "Inject")
-                            .flatMap { keyIdentifier(from: $0) }
-                        return DependencyParameter(
-                            name: parameterName(parameter),
-                            type: parameter.type.trimmedDescription,
-                            kind: .injectInitParameter,
-                            location: location(of: parameter.firstName),
-                            keyIdentifier: parameterKey
-                        )
-                    }
-                }
-                continue
-            }
-
-            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
-            guard let injectAttribute = attribute(in: varDecl.attributes, named: "Inject")
-            else { continue }
-            let propertyKey = keyIdentifier(from: injectAttribute)
-            for binding in varDecl.bindings {
-                guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
-                guard let typeAnnotation = binding.typeAnnotation else { continue }
-                propertyDependencies.append(
-                    DependencyParameter(
-                        name: pattern.identifier.text,
-                        type: typeAnnotation.type.trimmedDescription,
-                        kind: .injectProperty,
-                        location: location(of: pattern.identifier),
-                        keyIdentifier: propertyKey
-                    )
-                )
-            }
-        }
-
-        return injectInitDependencies ?? propertyDependencies
-    }
-
     private func emitContainerWithScopeWarningIfNeeded(
         nameToken: TokenSyntax,
         attributes: AttributeListSyntax
     ) {
-        guard hasAttribute(attributes, named: "Container") else { return }
-        guard
-            let scope = scopeMacroNames.first(where: {
-                hasAttribute(attributes, named: $0)
-            })
-        else { return }
-        warnings.append(
-            Warning(
-                location: location(of: nameToken),
-                message:
-                    "'\(nameToken.text)' carries both @Container and @\(scope); the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
-            )
-        )
+        if let warning = containerWithScopeWarning(
+            nameToken: nameToken,
+            attributes: attributes,
+            sourcePath: sourcePath,
+            converter: converter
+        ) {
+            warnings.append(warning)
+        }
     }
 
-    /// When the current parse position is directly inside an
-    /// unannotated extension, record a candidate site for the
-    /// `@Provides`-in-unannotated-extension warning. The build plugin
-    /// resolves these into real warnings after the module-wide
-    /// `@Container`-name set is known — without that cross-file view
-    /// the visitor can't tell whether the warning should fire.
     private func recordUnannotatedExtensionProvidesIfNeeded(
         providerName: String,
         location: SourceLocation
     ) {
-        guard let extendedType = unannotatedExtensionStack.last ?? nil else { return }
-        unannotatedExtensionProvides.append(
-            UnannotatedExtensionProvides(
-                extendedType: extendedType,
-                providerName: providerName,
-                location: location
-            )
-        )
+        if let candidate = unannotatedExtensionProvidesCandidate(
+            providerName: providerName,
+            location: location,
+            extendedType: unannotatedExtensionStack.last ?? nil
+        ) {
+            unannotatedExtensionProvides.append(candidate)
+        }
     }
 
-    /// Surface `@Inject` on members of a type that isn't annotated
-    /// with a scope macro (`@Singleton`/`@RequestScope`/`@JobScope`).
-    /// The macro is a peer marker that does nothing on its own; it
-    /// only contributes when a scope macro reads it. A user writing
-    /// `struct Plain { @Inject var x: X }` thinking it'll auto-wire
-    /// gets silent nothing, so the warning makes the no-op visible.
-    ///
-    /// Both stored-property and init `@Inject` on the same type are
-    /// flagged. Nested type members are reached via separate visit
-    /// calls — this method only scans the direct members of the
-    /// type passed in.
     private func emitStrayInjectMemberWarningsIfNeeded(
         nameToken: TokenSyntax,
         attributes: AttributeListSyntax,
         members: MemberBlockItemListSyntax
     ) {
-        let isScopeAnnotated = scopeMacroNames.contains {
-            hasAttribute(attributes, named: $0)
-        }
-        guard !isScopeAnnotated else { return }
-        for member in members {
-            if let varDecl = member.decl.as(VariableDeclSyntax.self),
-                let injectAttribute = attribute(in: varDecl.attributes, named: "Inject")
-            {
-                let propertyName =
-                    varDecl.bindings.first?.pattern
-                    .as(IdentifierPatternSyntax.self)?.identifier.text ?? "?"
-                warnings.append(
-                    Warning(
-                        location: location(of: injectAttribute.atSign),
-                        message:
-                            "@Inject on '\(propertyName)' has no effect — the enclosing type '\(nameToken.text)' isn't annotated with a scope macro (@Singleton, @RequestScope, @JobScope). Add a scope macro to the type, or remove @Inject."
-                    )
-                )
-            }
-            if let initDecl = member.decl.as(InitializerDeclSyntax.self),
-                let injectAttribute = attribute(in: initDecl.attributes, named: "Inject")
-            {
-                warnings.append(
-                    Warning(
-                        location: location(of: injectAttribute.atSign),
-                        message:
-                            "@Inject on this initialiser has no effect — the enclosing type '\(nameToken.text)' isn't annotated with a scope macro (@Singleton, @RequestScope, @JobScope). Add a scope macro to the type, or remove @Inject."
-                    )
-                )
-            }
-        }
-    }
-
-    /// Surface `@Inject` on a module-scope `let`/`var`. `@Inject` is
-    /// only meaningful inside scope-annotated types or as a per-
-    /// parameter key annotation; at module scope it's a no-op. The
-    /// likely user intent is `@Provides`, so the message points at
-    /// that as the alternative.
-    private func emitStrayInjectAtModuleScopeWarningIfNeeded(_ node: VariableDeclSyntax) {
-        guard enclosingTypes.isEmpty else { return }
-        guard let injectAttribute = attribute(in: node.attributes, named: "Inject") else {
-            return
-        }
-        let name =
-            node.bindings.first?.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
-            ?? "?"
         warnings.append(
-            Warning(
-                location: location(of: injectAttribute.atSign),
-                message:
-                    "@Inject on '\(name)' at module scope has no effect — @Inject is only meaningful inside scope-annotated types or as a per-parameter key annotation. Use @Provides for module-scope bindings, or remove @Inject."
+            contentsOf: strayInjectMemberWarnings(
+                nameToken: nameToken,
+                attributes: attributes,
+                members: members,
+                sourcePath: sourcePath,
+                converter: converter
             )
         )
     }
 
-    /// Surface `@Inject` on an extension init. The `@Singleton` macro
-    /// only sees the primary declaration's members, so an `@Inject`
-    /// init in an extension is silently dropped — Wire never picks it
-    /// up as the canonical initialiser. The remedy is moving the init
-    /// into the primary declaration. The warning points at the init
-    /// site itself so the user lands on the offending code.
+    private func emitStrayInjectAtModuleScopeWarningIfNeeded(_ node: VariableDeclSyntax) {
+        guard enclosingTypes.isEmpty else { return }
+        if let warning = strayInjectAtModuleScopeWarning(
+            for: node,
+            sourcePath: sourcePath,
+            converter: converter
+        ) {
+            warnings.append(warning)
+        }
+    }
+
     private func emitInjectInitInExtensionWarningIfNeeded(
         extension extensionNode: ExtensionDeclSyntax,
         extendedName: String
     ) {
-        for member in extensionNode.memberBlock.members {
-            guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { continue }
-            guard hasAttribute(initDecl.attributes, named: "Inject") else { continue }
-            warnings.append(
-                Warning(
-                    location: location(of: initDecl.initKeyword),
-                    message:
-                        "@Inject on an extension init is ignored — the @Singleton macro only sees the primary declaration. Move this init into the primary declaration of '\(extendedName)' if it's meant to be Wire's canonical initialiser."
-                )
+        warnings.append(
+            contentsOf: injectInitInExtensionWarnings(
+                extension: extensionNode,
+                extendedName: extendedName,
+                sourcePath: sourcePath,
+                converter: converter
             )
-        }
+        )
     }
 }
 
@@ -710,4 +594,224 @@ private func inferTypeFromConstructorCall(_ expr: ExprSyntax?) -> String? {
     let text = called.trimmedDescription
     guard let first = text.first, first.isUppercase else { return nil }
     return text
+}
+
+private func makeSourceLocation(
+    of node: some SyntaxProtocol,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> SourceLocation {
+    let position = node.startLocation(converter: converter)
+    return SourceLocation(file: sourcePath, line: position.line, column: position.column)
+}
+
+/// Collect the `@Singleton` type's dependencies. Same priority rule as
+/// `SingletonMacro`: an `@Inject`-marked init's parameter list wins
+/// over `@Inject` properties; if neither is present the result is
+/// empty.
+private func extractInjectDependencies(
+    from members: MemberBlockItemListSyntax,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> [DependencyParameter] {
+    var injectInitDependencies: [DependencyParameter]?
+    var propertyDependencies: [DependencyParameter] = []
+    for member in members {
+        if let initDecl = member.decl.as(InitializerDeclSyntax.self) {
+            if hasAttribute(initDecl.attributes, named: "Inject") {
+                injectInitDependencies = initDecl.signature.parameterClause.parameters.map {
+                    parameter in
+                    let parameterKey = attribute(in: parameter.attributes, named: "Inject")
+                        .flatMap { keyIdentifier(from: $0) }
+                    return DependencyParameter(
+                        name: parameterName(parameter),
+                        type: parameter.type.trimmedDescription,
+                        kind: .injectInitParameter,
+                        location: makeSourceLocation(
+                            of: parameter.firstName,
+                            sourcePath: sourcePath,
+                            converter: converter
+                        ),
+                        keyIdentifier: parameterKey
+                    )
+                }
+            }
+            continue
+        }
+        guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
+        guard let injectAttribute = attribute(in: varDecl.attributes, named: "Inject")
+        else { continue }
+        let propertyKey = keyIdentifier(from: injectAttribute)
+        for binding in varDecl.bindings {
+            guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
+            guard let typeAnnotation = binding.typeAnnotation else { continue }
+            propertyDependencies.append(
+                DependencyParameter(
+                    name: pattern.identifier.text,
+                    type: typeAnnotation.type.trimmedDescription,
+                    kind: .injectProperty,
+                    location: makeSourceLocation(
+                        of: pattern.identifier,
+                        sourcePath: sourcePath,
+                        converter: converter
+                    ),
+                    keyIdentifier: propertyKey
+                )
+            )
+        }
+    }
+    return injectInitDependencies ?? propertyDependencies
+}
+
+/// `@Container` plus a scope macro on the same type is almost always a
+/// user error: `@Container` routes the type's static members into a
+/// separate graph, while a scope macro makes the type a binding in the
+/// *default* graph — the two roles can't both happen on one type, and
+/// neither does what the user probably wants. Warn with a fix-it
+/// pointing at the split.
+private func containerWithScopeWarning(
+    nameToken: TokenSyntax,
+    attributes: AttributeListSyntax,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> Warning? {
+    guard hasAttribute(attributes, named: "Container") else { return nil }
+    guard let scope = scopeMacroNames.first(where: { hasAttribute(attributes, named: $0) })
+    else { return nil }
+    return Warning(
+        location: makeSourceLocation(
+            of: nameToken,
+            sourcePath: sourcePath,
+            converter: converter
+        ),
+        message:
+            "'\(nameToken.text)' carries both @Container and @\(scope); the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
+    )
+}
+
+/// Build a candidate when the `@Provides` was found inside an
+/// unannotated extension (i.e. the immediate enclosing scope's
+/// extended-type entry on `unannotatedExtensionStack` is non-nil).
+/// WireGen resolves candidates against the module-wide `@Container`
+/// name set in a later pass.
+private func unannotatedExtensionProvidesCandidate(
+    providerName: String,
+    location: SourceLocation,
+    extendedType: String?
+) -> UnannotatedExtensionProvides? {
+    guard let extendedType else { return nil }
+    return UnannotatedExtensionProvides(
+        extendedType: extendedType,
+        providerName: providerName,
+        location: location
+    )
+}
+
+/// `@Inject` on the members of a non-scope-annotated type is a silent
+/// no-op — there's no macro on the enclosing type to read it. Emit a
+/// warning per `@Inject`-marked init or stored property so the user
+/// understands they need a scope macro to get wiring.
+private func strayInjectMemberWarnings(
+    nameToken: TokenSyntax,
+    attributes: AttributeListSyntax,
+    members: MemberBlockItemListSyntax,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> [Warning] {
+    // If the type itself carries a scope macro, `@Inject` on its
+    // members IS meaningful — the scope macro reads them. Skip.
+    if scopeMacroNames.contains(where: { hasAttribute(attributes, named: $0) }) {
+        return []
+    }
+    var warnings: [Warning] = []
+    for member in members {
+        if let initDecl = member.decl.as(InitializerDeclSyntax.self),
+            let injectAttr = attribute(in: initDecl.attributes, named: "Inject")
+        {
+            warnings.append(
+                Warning(
+                    location: makeSourceLocation(
+                        of: injectAttr,
+                        sourcePath: sourcePath,
+                        converter: converter
+                    ),
+                    message:
+                        "@Inject on this initialiser has no effect — '\(nameToken.text)' has no scope macro. Add a scope macro to the type (@Singleton, @RequestScope, or @JobScope) to enable wiring."
+                )
+            )
+            continue
+        }
+        guard let varDecl = member.decl.as(VariableDeclSyntax.self),
+            let injectAttr = attribute(in: varDecl.attributes, named: "Inject")
+        else { continue }
+        for binding in varDecl.bindings {
+            guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
+            warnings.append(
+                Warning(
+                    location: makeSourceLocation(
+                        of: injectAttr,
+                        sourcePath: sourcePath,
+                        converter: converter
+                    ),
+                    message:
+                        "@Inject on '\(pattern.identifier.text)' has no effect — '\(nameToken.text)' has no scope macro. Add a scope macro to the type (@Singleton, @RequestScope, or @JobScope) to enable wiring."
+                )
+            )
+        }
+    }
+    return warnings
+}
+
+/// `@Inject let foo = ...` at module scope is a silent no-op — there's
+/// no enclosing type for any macro to read it from. Most often the
+/// user meant `@Provides`.
+private func strayInjectAtModuleScopeWarning(
+    for node: VariableDeclSyntax,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> Warning? {
+    guard let injectAttr = attribute(in: node.attributes, named: "Inject") else { return nil }
+    guard let binding = node.bindings.first,
+        let pattern = binding.pattern.as(IdentifierPatternSyntax.self)
+    else { return nil }
+    return Warning(
+        location: makeSourceLocation(
+            of: injectAttr,
+            sourcePath: sourcePath,
+            converter: converter
+        ),
+        message:
+            "@Inject on '\(pattern.identifier.text)' at module scope has no effect. Use @Provides for module-scope bindings."
+    )
+}
+
+/// `@Inject` on an init declared in an extension is ignored by the
+/// `@Singleton` macro — peer macros only see the primary declaration's
+/// members. Warn so the user knows to move the init back to the
+/// primary type.
+private func injectInitInExtensionWarnings(
+    extension extensionNode: ExtensionDeclSyntax,
+    extendedName: String,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> [Warning] {
+    var warnings: [Warning] = []
+    for member in extensionNode.memberBlock.members {
+        guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { continue }
+        guard let injectAttr = attribute(in: initDecl.attributes, named: "Inject") else {
+            continue
+        }
+        warnings.append(
+            Warning(
+                location: makeSourceLocation(
+                    of: injectAttr,
+                    sourcePath: sourcePath,
+                    converter: converter
+                ),
+                message:
+                    "@Inject on an extension init is ignored — move the init into the primary declaration of '\(extendedName)' so the @Singleton macro can see it."
+            )
+        )
+    }
+    return warnings
 }
