@@ -45,6 +45,11 @@ struct WireGen {
             }
 
         printSkippedReport(default: defaultGraph, containers: containerGraphs)
+        let crossFileWarnings = unannotatedExtensionContainerWarnings(
+            candidates: aggregate.unannotatedExtensionProvides,
+            containerNames: Set(aggregate.containerBindings.keys)
+        )
+        printWarnings(aggregate.warnings + crossFileWarnings)
         failIfAnyGraphInvalid(default: defaultGraph, containers: containerGraphs)
 
         let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
@@ -88,6 +93,8 @@ struct WireGen {
         var defaultBindings: [DiscoveredBinding] = []
         var containerBindings: [String: [DiscoveredBinding]] = [:]
         var imports: [String] = []
+        var warnings: [Warning] = []
+        var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
     }
 
     private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
@@ -117,8 +124,45 @@ struct WireGen {
             if !result.bindings.isEmpty || !result.containerBindings.isEmpty {
                 aggregate.imports.append(contentsOf: result.imports)
             }
+
+            aggregate.warnings.append(contentsOf: result.warnings)
+            aggregate.unannotatedExtensionProvides.append(
+                contentsOf: result.unannotatedExtensionProvides
+            )
         }
         return aggregate
+    }
+
+    /// Cross-reference the `unannotatedExtensionProvides` candidates
+    /// collected during discovery against the module-wide
+    /// `@Container`-name set. Each candidate whose extended type
+    /// matches a discovered `@Container` produces a warning — the
+    /// user probably meant `@Container extension Foo` but wrote a
+    /// plain `extension Foo`, and the `@Provides` inside is silently
+    /// falling through to the default graph.
+    private static func unannotatedExtensionContainerWarnings(
+        candidates: [UnannotatedExtensionProvides],
+        containerNames: Set<String>
+    ) -> [Warning] {
+        candidates.compactMap { candidate -> Warning? in
+            guard containerNames.contains(candidate.extendedType) else { return nil }
+            return Warning(
+                location: candidate.location,
+                message:
+                    "@Provides '\(candidate.providerName)' in an unannotated extension of '\(candidate.extendedType)' falls through to the default graph; mark the extension `@Container` to contribute to '\(candidate.extendedType)'s container instead, or move the declaration outside this extension (module scope, or a static member of a non-`@Container` type) if the fall-through is intentional"
+            )
+        }
+    }
+
+    /// Emit warnings to stderr in the `file:line:col: warning:` form.
+    /// Warnings are informational — they don't fail the build — but
+    /// they need to surface to the user. WireGen prints them before
+    /// any validation-error block so a failing build's error message
+    /// remains the last thing on stderr.
+    private static func printWarnings(_ warnings: [Warning]) {
+        guard !warnings.isEmpty else { return }
+        FileHandle.standardError.write(Data(renderWarnings(warnings).utf8))
+        FileHandle.standardError.write(Data("\n".utf8))
     }
 
     private static func readSource(at path: String) -> String {
