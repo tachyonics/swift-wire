@@ -111,14 +111,22 @@ final class BindingDiscovery: SyntaxVisitor {
     // `@Singleton` if applicable.
 
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
-        emitContainerWithScopeWarningIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes
+        warnings.append(
+            contentsOf: containerWithScopeWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
-        emitStrayInjectMemberWarningsIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes,
-            members: node.memberBlock.members
+        warnings.append(
+            contentsOf: strayInjectMemberWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                members: node.memberBlock.members,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
@@ -135,14 +143,22 @@ final class BindingDiscovery: SyntaxVisitor {
     }
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
-        emitContainerWithScopeWarningIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes
+        warnings.append(
+            contentsOf: containerWithScopeWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
-        emitStrayInjectMemberWarningsIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes,
-            members: node.memberBlock.members
+        warnings.append(
+            contentsOf: strayInjectMemberWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                members: node.memberBlock.members,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
@@ -159,14 +175,22 @@ final class BindingDiscovery: SyntaxVisitor {
     }
 
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
-        emitContainerWithScopeWarningIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes
+        warnings.append(
+            contentsOf: containerWithScopeWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
-        emitStrayInjectMemberWarningsIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes,
-            members: node.memberBlock.members
+        warnings.append(
+            contentsOf: strayInjectMemberWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                members: node.memberBlock.members,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         processSingleton(
@@ -188,14 +212,22 @@ final class BindingDiscovery: SyntaxVisitor {
         // caseless-enum-as-namespace pattern. They can also be
         // `@Container`-annotated, in which case bindings inside the
         // primary declaration are routed to that container.
-        emitContainerWithScopeWarningIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes
+        warnings.append(
+            contentsOf: containerWithScopeWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
-        emitStrayInjectMemberWarningsIfNeeded(
-            nameToken: node.name,
-            attributes: node.attributes,
-            members: node.memberBlock.members
+        warnings.append(
+            contentsOf: strayInjectMemberWarnings(
+                nameToken: node.name,
+                attributes: node.attributes,
+                members: node.memberBlock.members,
+                sourcePath: sourcePath,
+                converter: converter
+            )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
         return .visitChildren
@@ -215,7 +247,14 @@ final class BindingDiscovery: SyntaxVisitor {
         } else {
             extendedName = node.extendedType.trimmedDescription
         }
-        emitInjectInitInExtensionWarningIfNeeded(extension: node, extendedName: extendedName)
+        warnings.append(
+            contentsOf: injectInitInExtensionWarnings(
+                extension: node,
+                extendedName: extendedName,
+                sourcePath: sourcePath,
+                converter: converter
+            )
+        )
         // `@Container extension Foo { ... }` opts the extension into
         // Foo's container, merging with any other declarations
         // (primary type or other `@Container` extensions) that target
@@ -244,7 +283,15 @@ final class BindingDiscovery: SyntaxVisitor {
         {
             extractProvidesProperty(node)
         }
-        emitStrayInjectAtModuleScopeWarningIfNeeded(node)
+        if enclosingTypes.isEmpty {
+            warnings.append(
+                contentsOf: strayInjectAtModuleScopeWarnings(
+                    for: node,
+                    sourcePath: sourcePath,
+                    converter: converter
+                )
+            )
+        }
         return .skipChildren
     }
 
@@ -377,9 +424,12 @@ final class BindingDiscovery: SyntaxVisitor {
                 )
             )
         )
-        recordUnannotatedExtensionProvidesIfNeeded(
-            providerName: propertyName,
-            location: providerLocation
+        unannotatedExtensionProvides.append(
+            contentsOf: unannotatedExtensionProvidesCandidates(
+                providerName: propertyName,
+                location: providerLocation,
+                extendedType: unannotatedExtensionStack.last ?? nil
+            )
         )
     }
 
@@ -412,9 +462,12 @@ final class BindingDiscovery: SyntaxVisitor {
         let key = attribute(in: node.attributes, named: "Provides")
             .flatMap { keyIdentifier(from: $0) }
         let providerLocation = location(of: node.name)
-        recordUnannotatedExtensionProvidesIfNeeded(
-            providerName: functionName,
-            location: providerLocation
+        unannotatedExtensionProvides.append(
+            contentsOf: unannotatedExtensionProvidesCandidates(
+                providerName: functionName,
+                location: providerLocation,
+                extendedType: unannotatedExtensionStack.last ?? nil
+            )
         )
         record(
             .provider(
@@ -431,73 +484,6 @@ final class BindingDiscovery: SyntaxVisitor {
         )
     }
 
-    private func emitContainerWithScopeWarningIfNeeded(
-        nameToken: TokenSyntax,
-        attributes: AttributeListSyntax
-    ) {
-        if let warning = containerWithScopeWarning(
-            nameToken: nameToken,
-            attributes: attributes,
-            sourcePath: sourcePath,
-            converter: converter
-        ) {
-            warnings.append(warning)
-        }
-    }
-
-    private func recordUnannotatedExtensionProvidesIfNeeded(
-        providerName: String,
-        location: SourceLocation
-    ) {
-        if let candidate = unannotatedExtensionProvidesCandidate(
-            providerName: providerName,
-            location: location,
-            extendedType: unannotatedExtensionStack.last ?? nil
-        ) {
-            unannotatedExtensionProvides.append(candidate)
-        }
-    }
-
-    private func emitStrayInjectMemberWarningsIfNeeded(
-        nameToken: TokenSyntax,
-        attributes: AttributeListSyntax,
-        members: MemberBlockItemListSyntax
-    ) {
-        warnings.append(
-            contentsOf: strayInjectMemberWarnings(
-                nameToken: nameToken,
-                attributes: attributes,
-                members: members,
-                sourcePath: sourcePath,
-                converter: converter
-            )
-        )
-    }
-
-    private func emitStrayInjectAtModuleScopeWarningIfNeeded(_ node: VariableDeclSyntax) {
-        guard enclosingTypes.isEmpty else { return }
-        if let warning = strayInjectAtModuleScopeWarning(
-            for: node,
-            sourcePath: sourcePath,
-            converter: converter
-        ) {
-            warnings.append(warning)
-        }
-    }
-
-    private func emitInjectInitInExtensionWarningIfNeeded(
-        extension extensionNode: ExtensionDeclSyntax,
-        extendedName: String
-    ) {
-        warnings.append(
-            contentsOf: injectInitInExtensionWarnings(
-                extension: extensionNode,
-                extendedName: extendedName,
-                sourcePath: sourcePath,
-                converter: converter
-            )
-        )
-    }
 }
 
 // MARK: - File-private helpers
@@ -669,24 +655,26 @@ private func extractInjectDependencies(
 /// *default* graph — the two roles can't both happen on one type, and
 /// neither does what the user probably wants. Warn with a fix-it
 /// pointing at the split.
-private func containerWithScopeWarning(
+private func containerWithScopeWarnings(
     nameToken: TokenSyntax,
     attributes: AttributeListSyntax,
     sourcePath: String,
     converter: SourceLocationConverter
-) -> Warning? {
-    guard hasAttribute(attributes, named: "Container") else { return nil }
+) -> [Warning] {
+    guard hasAttribute(attributes, named: "Container") else { return [] }
     guard let scope = scopeMacroNames.first(where: { hasAttribute(attributes, named: $0) })
-    else { return nil }
-    return Warning(
-        location: makeSourceLocation(
-            of: nameToken,
-            sourcePath: sourcePath,
-            converter: converter
-        ),
-        message:
-            "'\(nameToken.text)' carries both @Container and @\(scope); the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
-    )
+    else { return [] }
+    return [
+        Warning(
+            location: makeSourceLocation(
+                of: nameToken,
+                sourcePath: sourcePath,
+                converter: converter
+            ),
+            message:
+                "'\(nameToken.text)' carries both @Container and @\(scope); the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
+        )
+    ]
 }
 
 /// Build a candidate when the `@Provides` was found inside an
@@ -694,17 +682,19 @@ private func containerWithScopeWarning(
 /// extended-type entry on `unannotatedExtensionStack` is non-nil).
 /// WireGen resolves candidates against the module-wide `@Container`
 /// name set in a later pass.
-private func unannotatedExtensionProvidesCandidate(
+private func unannotatedExtensionProvidesCandidates(
     providerName: String,
     location: SourceLocation,
     extendedType: String?
-) -> UnannotatedExtensionProvides? {
-    guard let extendedType else { return nil }
-    return UnannotatedExtensionProvides(
-        extendedType: extendedType,
-        providerName: providerName,
-        location: location
-    )
+) -> [UnannotatedExtensionProvides] {
+    guard let extendedType else { return [] }
+    return [
+        UnannotatedExtensionProvides(
+            extendedType: extendedType,
+            providerName: providerName,
+            location: location
+        )
+    ]
 }
 
 /// `@Inject` on the members of a non-scope-annotated type is a silent
@@ -765,24 +755,26 @@ private func strayInjectMemberWarnings(
 /// `@Inject let foo = ...` at module scope is a silent no-op — there's
 /// no enclosing type for any macro to read it from. Most often the
 /// user meant `@Provides`.
-private func strayInjectAtModuleScopeWarning(
+private func strayInjectAtModuleScopeWarnings(
     for node: VariableDeclSyntax,
     sourcePath: String,
     converter: SourceLocationConverter
-) -> Warning? {
-    guard let injectAttr = attribute(in: node.attributes, named: "Inject") else { return nil }
+) -> [Warning] {
+    guard let injectAttr = attribute(in: node.attributes, named: "Inject") else { return [] }
     guard let binding = node.bindings.first,
         let pattern = binding.pattern.as(IdentifierPatternSyntax.self)
-    else { return nil }
-    return Warning(
-        location: makeSourceLocation(
-            of: injectAttr,
-            sourcePath: sourcePath,
-            converter: converter
-        ),
-        message:
-            "@Inject on '\(pattern.identifier.text)' at module scope has no effect. Use @Provides for module-scope bindings."
-    )
+    else { return [] }
+    return [
+        Warning(
+            location: makeSourceLocation(
+                of: injectAttr,
+                sourcePath: sourcePath,
+                converter: converter
+            ),
+            message:
+                "@Inject on '\(pattern.identifier.text)' at module scope has no effect. Use @Provides for module-scope bindings."
+        )
+    ]
 }
 
 /// `@Inject` on an init declared in an extension is ignored by the
