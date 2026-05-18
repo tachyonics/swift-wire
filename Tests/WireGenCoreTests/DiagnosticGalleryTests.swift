@@ -359,7 +359,10 @@ struct DiagnosticGalleryTests {
         // The warning prefix is `file:line:col: warning:` per Swift
         // compiler convention. Distinct from errors — render path
         // is its own function (`renderWarnings`), and WireGen will
-        // not exit non-zero on warnings alone.
+        // not exit non-zero on warnings alone. Beyond the prefix the
+        // test pins both halves of the message: the "why" clause
+        // (two roles, separate graphs) and the fix-it (split into
+        // two declarations with explicit role assignment).
         let source = """
             @Container
             @Singleton
@@ -371,6 +374,12 @@ struct DiagnosticGalleryTests {
         #expect(
             rendered.contains(
                 "Mixed.swift:3:8: warning: 'Mixed' carries both @Container and @Singleton"
+            )
+        )
+        #expect(rendered.contains("the two roles end up in separate graphs"))
+        #expect(
+            rendered.contains(
+                "Split into two declarations: a @Singleton type for the binding, and a separate @Container type for the grouping."
             )
         )
     }

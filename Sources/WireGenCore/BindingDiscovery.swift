@@ -475,7 +475,7 @@ final class BindingDiscovery: SyntaxVisitor {
             Warning(
                 location: location(of: nameToken),
                 message:
-                    "'\(nameToken.text)' carries both @Container and @\(scope); @Container's bindings live in a separate graph and the @\(scope) instance lives in the default graph — split into two declarations to avoid surprise"
+                    "'\(nameToken.text)' carries both @Container and @\(scope); the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
             )
         )
     }
