@@ -1231,7 +1231,7 @@ struct DiscoveryTests {
                 "@Inject on 'logger' at module scope has no effect"
             )
         )
-        #expect(result.warnings[0].message.contains("Use @Provides"))
+        #expect(result.warnings[0].message.contains("use @Provides"))
     }
 
     @Test func injectOnProvidesFuncParameterDoesNotEmitWarning() {

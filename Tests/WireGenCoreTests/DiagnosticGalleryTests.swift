@@ -411,7 +411,7 @@ struct DiagnosticGalleryTests {
                 "@Inject on 'logger' at module scope has no effect"
             )
         )
-        #expect(rendered.contains("Use @Provides for module-scope bindings"))
+        #expect(rendered.contains("use @Provides for module-scope bindings"))
     }
 
     @Test func injectInitInExtensionRendersAsWarning() throws {
@@ -428,7 +428,7 @@ struct DiagnosticGalleryTests {
             """
         let discovery = discover(in: source, sourcePath: "Foo.swift")
         let rendered = renderWarnings(discovery.warnings)
-        #expect(rendered.contains("warning: @Inject on an extension init is ignored"))
+        #expect(rendered.contains("warning: @Inject on an extension init has no effect"))
         #expect(rendered.contains("'Foo'"))
     }
 

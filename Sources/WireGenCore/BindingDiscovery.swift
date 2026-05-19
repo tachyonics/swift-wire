@@ -672,7 +672,7 @@ private func containerWithScopeWarnings(
                 converter: converter
             ),
             message:
-                "'\(nameToken.text)' carries both @Container and @\(scope); the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
+                "'\(nameToken.text)' carries both @Container and @\(scope) — the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
         )
     ]
 }
@@ -772,7 +772,7 @@ private func strayInjectAtModuleScopeWarnings(
                 converter: converter
             ),
             message:
-                "@Inject on '\(pattern.identifier.text)' at module scope has no effect. Use @Provides for module-scope bindings."
+                "@Inject on '\(pattern.identifier.text)' at module scope has no effect — use @Provides for module-scope bindings."
         )
     ]
 }
@@ -801,7 +801,7 @@ private func injectInitInExtensionWarnings(
                     converter: converter
                 ),
                 message:
-                    "@Inject on an extension init is ignored — move the init into the primary declaration of '\(extendedName)' so the @Singleton macro can see it."
+                    "@Inject on an extension init has no effect — move the init into the primary declaration of '\(extendedName)' so the @Singleton macro can see it."
             )
         )
     }
