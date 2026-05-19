@@ -149,7 +149,7 @@ struct WireGen {
             return Warning(
                 location: candidate.location,
                 message:
-                    "@Provides '\(candidate.providerName)' in an unannotated extension of '\(candidate.extendedType)' falls through to the default graph; mark the extension `@Container` to contribute to '\(candidate.extendedType)'s container instead, or move the declaration outside this extension (module scope, or a static member of a non-`@Container` type) if the fall-through is intentional"
+                    "@Provides '\(candidate.providerName)' in an unannotated extension of '\(candidate.extendedType)' falls through to the default graph — mark the extension @Container to contribute to '\(candidate.extendedType)'s container instead."
             )
         }
     }
