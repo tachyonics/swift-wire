@@ -27,7 +27,10 @@ struct DiagnosticGalleryTests {
         sourcePath: String
     ) -> (errors: GraphResult.ValidationErrors?, rendered: String) {
         let discovery = discover(in: source, sourcePath: sourcePath)
-        let result = buildDependencyGraph(from: discovery.bindings)
+        let result = buildDependencyGraph(
+            from: discovery.bindings,
+            typealiases: discovery.typealiases
+        )
         let errors = result.outcome.validationErrors
         let rendered = errors.map { renderValidationErrors($0) } ?? ""
         return (errors, rendered)
@@ -70,6 +73,27 @@ struct DiagnosticGalleryTests {
         #expect(validationErrors.missingBindings.count == 2)
         #expect(rendered.contains("Service.swift:3:17: error: no binding produces 'Alpha'"))
         #expect(rendered.contains("Service.swift:4:17: error: no binding produces 'Beta'"))
+    }
+
+    @Test func missingBindingForTypealiasRendersNoteAtUnderlyingType() throws {
+        // `@Inject var userID: UserID` doesn't match the binding for
+        // `UUID` even though `UserID` is a typealias of `UUID`. The
+        // error stands, but a `note:` line points the user at the
+        // underlying type and the typealias-not-unwrapped behaviour.
+        let source = """
+            typealias UserID = UUID
+
+            @Provides let uuid: UUID = UUID()
+
+            @Singleton
+            struct Service {
+                @Inject var userID: UserID
+            }
+            """
+        let (_, rendered) = validate(source: source, sourcePath: "Service.swift")
+        #expect(rendered.contains("error: no binding produces 'UserID'"))
+        #expect(rendered.contains("note: 'UserID' is a typealias of 'UUID'"))
+        #expect(rendered.contains("typealiases aren't unwrapped"))
     }
 
     // MARK: - Dependency cycles

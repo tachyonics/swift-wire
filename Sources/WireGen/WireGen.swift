@@ -37,11 +37,20 @@ struct WireGen {
         // One graph per scope — default plus one per `@Container`.
         // Each is validated independently (atomic; no cross-graph
         // leakage).
-        let defaultGraph = buildDependencyGraph(from: aggregate.defaultBindings)
+        let defaultGraph = buildDependencyGraph(
+            from: aggregate.defaultBindings,
+            typealiases: aggregate.typealiases
+        )
         let containerGraphs = aggregate.containerBindings
             .sorted(by: { $0.key < $1.key })
             .map { name, bindings in
-                (name: name, result: buildDependencyGraph(from: bindings))
+                (
+                    name: name,
+                    result: buildDependencyGraph(
+                        from: bindings,
+                        typealiases: aggregate.typealiases
+                    )
+                )
             }
 
         printSkippedReport(default: defaultGraph, containers: containerGraphs)
@@ -95,6 +104,7 @@ struct WireGen {
         var imports: [String] = []
         var warnings: [Warning] = []
         var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
+        var typealiases: [DiscoveredTypealias] = []
     }
 
     private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
@@ -129,6 +139,7 @@ struct WireGen {
             aggregate.unannotatedExtensionProvides.append(
                 contentsOf: result.unannotatedExtensionProvides
             )
+            aggregate.typealiases.append(contentsOf: result.typealiases)
         }
         return aggregate
     }

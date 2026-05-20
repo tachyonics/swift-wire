@@ -1263,4 +1263,36 @@ struct DiscoveryTests {
         let result = discover(in: source, sourcePath: "AppConfig.swift")
         #expect(result.unannotatedExtensionProvides.isEmpty)
     }
+
+    @Test func moduleScopeTypealiasIsCaptured() {
+        let source = """
+            typealias UserID = UUID
+            """
+        let result = discover(in: source, sourcePath: "Types.swift")
+        #expect(result.typealiases.count == 1)
+        #expect(result.typealiases[0].name == "UserID")
+        #expect(result.typealiases[0].underlyingType == "UUID")
+    }
+
+    @Test func nestedTypealiasIsNotCaptured() {
+        // Nested typealiases are deferred for the missing-binding
+        // hint; only module-scope declarations are surfaced.
+        let source = """
+            enum Names {
+                typealias UserID = UUID
+            }
+            """
+        let result = discover(in: source, sourcePath: "Names.swift")
+        #expect(result.typealiases.isEmpty)
+    }
+
+    @Test func genericTypealiasIsNotCaptured() {
+        // Generic typealiases are deferred — substituting through
+        // them at the missing-binding hint isn't designed yet.
+        let source = """
+            typealias Repo<T> = Repository<T>
+            """
+        let result = discover(in: source, sourcePath: "Repo.swift")
+        #expect(result.typealiases.isEmpty)
+    }
 }

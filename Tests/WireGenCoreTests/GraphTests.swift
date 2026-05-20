@@ -249,6 +249,58 @@ struct GraphTests {
         #expect(errors.missingBindings.count == 2)
     }
 
+    @Test func missingBindingForTypealiasAttachesHintWhenUnderlyingIsBound() throws {
+        // `@Inject var userID: UserID` where `UserID` is a typealias of
+        // `UUID` and `UUID` IS bound. The missing binding stands (we
+        // don't unwrap), but the diagnostic carries a hint pointing at
+        // the underlying type.
+        let result = buildDependencyGraph(
+            from: [
+                singleton("A", dependencies: [(name: "userID", type: "UserID")]),
+                .provider(
+                    DiscoveredProvider(
+                        boundType: "UUID",
+                        accessPath: "uuid",
+                        form: .property,
+                        dependencies: [],
+                        genericParameterNames: [],
+                        location: mockLocation("UUID.swift")
+                    )
+                ),
+            ],
+            typealiases: [
+                DiscoveredTypealias(
+                    name: "UserID",
+                    underlyingType: "UUID",
+                    location: mockLocation("Types.swift", line: 3, column: 1)
+                )
+            ]
+        )
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        let hint = try #require(errors.missingBindings[0].typealiasHint)
+        #expect(hint.typealiasName == "UserID")
+        #expect(hint.underlyingType == "UUID")
+    }
+
+    @Test func missingBindingWithTypealiasButUnboundUnderlyingHasNoHint() throws {
+        // Typealias exists but underlying type isn't bound either —
+        // adding a hint would mislead the user. No hint attached.
+        let result = buildDependencyGraph(
+            from: [singleton("A", dependencies: [(name: "userID", type: "UserID")])],
+            typealiases: [
+                DiscoveredTypealias(
+                    name: "UserID",
+                    underlyingType: "UUID",
+                    location: mockLocation("Types.swift")
+                )
+            ]
+        )
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        #expect(errors.missingBindings[0].typealiasHint == nil)
+    }
+
     // MARK: - @Provides bindings participate in the graph
 
     @Test func providerPropertyParticipatesInTopologicalOrder() throws {
