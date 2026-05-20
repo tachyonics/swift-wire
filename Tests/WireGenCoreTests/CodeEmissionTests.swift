@@ -4,10 +4,6 @@ import Testing
 
 @Suite("CodeEmission")
 struct CodeEmissionTests {
-    private func mockLocation(_ file: String) -> WireGenCore.SourceLocation {
-        WireGenCore.SourceLocation(file: file, line: 1, column: 1)
-    }
-
     private func singleton(
         _ name: String,
         qualifiedTypeName: String? = nil,
