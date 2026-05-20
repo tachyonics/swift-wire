@@ -1295,4 +1295,133 @@ struct DiscoveryTests {
         let result = discover(in: source, sourcePath: "Repo.swift")
         #expect(result.typealiases.isEmpty)
     }
+
+    @Test func declaredTypeNamesCapturesPrimaryDeclarations() {
+        let source = """
+            struct Alpha {}
+            class Beta {}
+            actor Gamma {}
+            enum Delta {}
+            protocol Epsilon {}
+            """
+        let result = discover(in: source, sourcePath: "Types.swift")
+        #expect(Set(result.declaredTypeNames) == ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"])
+    }
+
+    @Test func declaredTypeNamesExcludesExtensionTargets() {
+        // Extensions aren't primary declarations — `extension Foo`
+        // doesn't *declare* Foo, it adds to whatever Foo is. The
+        // cross-module-extension warning depends on this distinction.
+        let source = """
+            extension SomeImportedType {
+                @Provides static let value: Int = 42
+            }
+            """
+        let result = discover(in: source, sourcePath: "Ext.swift")
+        #expect(result.declaredTypeNames.isEmpty)
+    }
+
+    @Test func crossModuleExtensionWarningFiresForUndeclaredType() {
+        // `Logger` isn't declared in this module — the `@Provides` in
+        // its extension probably wasn't meant to silently land in the
+        // default graph.
+        let source = """
+            extension Logger {
+                @Provides static let appLogger: Logger = Logger()
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "LoggerExt.swift")
+        let warnings = crossModuleExtensionWarnings(
+            candidates: discovery.unannotatedExtensionProvides,
+            containerNames: [],
+            declaredTypeNames: Set(discovery.declaredTypeNames)
+        )
+        #expect(warnings.count == 1)
+        #expect(warnings[0].message.contains("'Logger' isn't declared in this module"))
+    }
+
+    @Test func crossModuleExtensionWarningSkipsLocallyDeclaredType() {
+        // `LocalType` is declared in this same module, so an
+        // extension on it with @Provides is fine — it lands in the
+        // default graph the same as a primary-decl static @Provides
+        // would.
+        let source = """
+            struct LocalType {}
+
+            extension LocalType {
+                @Provides static let value: Int = 42
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Local.swift")
+        let warnings = crossModuleExtensionWarnings(
+            candidates: discovery.unannotatedExtensionProvides,
+            containerNames: [],
+            declaredTypeNames: Set(discovery.declaredTypeNames)
+        )
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func crossModuleExtensionWarningDefersToContainerWarning() {
+        // `AppConfig` is a @Container — the existing container-aware
+        // warning handles this case; the cross-module helper stays
+        // silent so we don't double-warn.
+        let source = """
+            @Container
+            enum AppConfig {}
+
+            extension AppConfig {
+                @Provides static let logLevel: String = "info"
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "AppConfig.swift")
+        let warnings = crossModuleExtensionWarnings(
+            candidates: discovery.unannotatedExtensionProvides,
+            containerNames: ["AppConfig"],
+            declaredTypeNames: Set(discovery.declaredTypeNames)
+        )
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func crossModuleExtensionWarningSkipsMemberTypeTargets() {
+        // `Foo.Bar` resolves to the trimmedDescription form ("Foo.Bar")
+        // since it isn't an IdentifierTypeSyntax. Without a real name
+        // lookup we can't tell whether `Foo.Bar` refers to a local
+        // type, so we err toward silence.
+        let source = """
+            extension Foo.Bar {
+                @Provides static let value: Int = 42
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Complex.swift")
+        let warnings = crossModuleExtensionWarnings(
+            candidates: discovery.unannotatedExtensionProvides,
+            containerNames: [],
+            declaredTypeNames: Set(discovery.declaredTypeNames)
+        )
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func crossModuleExtensionWarningTreatsGenericExtensionAsBaseName() {
+        // `extension Array<Int>` parses as an IdentifierTypeSyntax
+        // whose `.name.text` is `Array`; the generic argument clause
+        // is a separate child. So the candidate's extendedType is
+        // `Array`, the warning sees an unknown out-of-module name,
+        // and fires. Pin the contract so a discovery change that
+        // preserves the generic form (and would yield `Array<Int>`)
+        // surfaces as a test failure rather than a silent behaviour
+        // shift.
+        let source = """
+            extension Array<Int> {
+                @Provides static let empty: [Int] = []
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "ArrayExt.swift")
+        let warnings = crossModuleExtensionWarnings(
+            candidates: discovery.unannotatedExtensionProvides,
+            containerNames: [],
+            declaredTypeNames: Set(discovery.declaredTypeNames)
+        )
+        #expect(warnings.count == 1)
+        #expect(warnings[0].message.contains("'Array' isn't declared in this module"))
+    }
 }

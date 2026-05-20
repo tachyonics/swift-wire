@@ -302,6 +302,12 @@ package struct SourceFileDiscovery: Sendable {
     /// missing-binding diagnostics use to point at the underlying type
     /// when a typealias was injected but its underlying type IS bound.
     package let typealiases: [DiscoveredTypealias]
+    /// Simple names of every primary type declaration (struct, class,
+    /// actor, enum, protocol) found in this file. Aggregated across the
+    /// module by `WireGen` to drive the cross-module-extension warning
+    /// — an unannotated `extension Foo` whose `Foo` isn't in this set
+    /// is probably extending an imported type.
+    package let declaredTypeNames: [String]
 
     package init(
         bindings: [DiscoveredBinding],
@@ -309,7 +315,8 @@ package struct SourceFileDiscovery: Sendable {
         imports: [String],
         warnings: [Warning] = [],
         unannotatedExtensionProvides: [UnannotatedExtensionProvides] = [],
-        typealiases: [DiscoveredTypealias] = []
+        typealiases: [DiscoveredTypealias] = [],
+        declaredTypeNames: [String] = []
     ) {
         self.bindings = bindings
         self.containerBindings = containerBindings
@@ -317,6 +324,7 @@ package struct SourceFileDiscovery: Sendable {
         self.warnings = warnings
         self.unannotatedExtensionProvides = unannotatedExtensionProvides
         self.typealiases = typealiases
+        self.declaredTypeNames = declaredTypeNames
     }
 }
 
@@ -387,7 +395,8 @@ package func discover(
         imports: visitor.imports,
         warnings: visitor.warnings,
         unannotatedExtensionProvides: visitor.unannotatedExtensionProvides,
-        typealiases: visitor.typealiases
+        typealiases: visitor.typealiases,
+        declaredTypeNames: visitor.declaredTypeNames
     )
 }
 

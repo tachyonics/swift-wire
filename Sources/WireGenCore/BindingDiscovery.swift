@@ -52,6 +52,12 @@ final class BindingDiscovery: SyntaxVisitor {
     /// (`enum Names { typealias UserID = UUID }`) and generic
     /// typealiases are deferred.
     var typealiases: [DiscoveredTypealias] = []
+    /// Simple names of every primary type declaration (struct, class,
+    /// actor, enum, protocol) walked in this file — not extensions.
+    /// Drives the cross-module-extension warning: a `@Provides` inside
+    /// `extension Foo` where `Foo` isn't in this set across the whole
+    /// module is probably extending an imported type.
+    var declaredTypeNames: [String] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
     /// Stack of enclosing type names — top of stack is the immediate
@@ -116,6 +122,7 @@ final class BindingDiscovery: SyntaxVisitor {
     // `@Singleton` if applicable.
 
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
+        declaredTypeNames.append(node.name.text)
         warnings.append(
             contentsOf: containerWithScopeWarnings(
                 nameToken: node.name,
@@ -148,6 +155,7 @@ final class BindingDiscovery: SyntaxVisitor {
     }
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+        declaredTypeNames.append(node.name.text)
         warnings.append(
             contentsOf: containerWithScopeWarnings(
                 nameToken: node.name,
@@ -180,6 +188,7 @@ final class BindingDiscovery: SyntaxVisitor {
     }
 
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
+        declaredTypeNames.append(node.name.text)
         warnings.append(
             contentsOf: containerWithScopeWarnings(
                 nameToken: node.name,
@@ -217,6 +226,7 @@ final class BindingDiscovery: SyntaxVisitor {
         // caseless-enum-as-namespace pattern. They can also be
         // `@Container`-annotated, in which case bindings inside the
         // primary declaration are routed to that container.
+        declaredTypeNames.append(node.name.text)
         warnings.append(
             contentsOf: containerWithScopeWarnings(
                 nameToken: node.name,
@@ -241,17 +251,22 @@ final class BindingDiscovery: SyntaxVisitor {
         exitTypeDecl()
     }
 
+    override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
+        // Protocols can't be @Singleton/@Provides, but their names
+        // belong in `declaredTypeNames` so extensions on locally
+        // declared protocols don't trip the cross-module warning.
+        declaredTypeNames.append(node.name.text)
+        return .skipChildren
+    }
+
     override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
         // Resolve the extended type's simple name. For `extension Foo`
         // and `extension Foo<Bar>`, we want `Foo`. More exotic forms
         // (`extension Foo.Bar`, where-clauses) fall back to the
         // trimmed description.
-        let extendedName: String
-        if let identifier = node.extendedType.as(IdentifierTypeSyntax.self) {
-            extendedName = identifier.name.text
-        } else {
-            extendedName = node.extendedType.trimmedDescription
-        }
+        let extendedName =
+            node.extendedType.as(IdentifierTypeSyntax.self)?.name.text
+            ?? node.extendedType.trimmedDescription
         warnings.append(
             contentsOf: injectInitInExtensionWarnings(
                 extension: node,
@@ -345,11 +360,8 @@ final class BindingDiscovery: SyntaxVisitor {
         unannotatedExtensionTarget: String? = nil
     ) {
         enclosingTypes.append(name)
-        if hasAttribute(attributes, named: "Container") {
-            containerScope.append(name)
-        } else {
-            containerScope.append(containerScope.last ?? nil)
-        }
+        let isContainer = hasAttribute(attributes, named: "Container")
+        containerScope.append(isContainer ? name : (containerScope.last ?? nil))
         unannotatedExtensionStack.append(unannotatedExtensionTarget)
     }
 
@@ -363,13 +375,9 @@ final class BindingDiscovery: SyntaxVisitor {
     /// member of an enclosing type. Instance members and locals inside
     /// function bodies are silently skipped.
     private func isAtRecognisedProvidesPosition(modifiers: DeclModifierListSyntax) -> Bool {
-        if enclosingTypes.isEmpty {
-            // Top-level — no `static` keyword expected.
-            return true
-        }
-        return modifiers.contains { modifier in
-            modifier.name.tokenKind == .keyword(.static)
-        }
+        // Top-level — no `static` keyword expected.
+        if enclosingTypes.isEmpty { return true }
+        return modifiers.contains { $0.name.tokenKind == .keyword(.static) }
     }
 
     private func processSingleton(
