@@ -297,19 +297,48 @@ package struct SourceFileDiscovery: Sendable {
     /// extended type has a `@Container` declaration *somewhere*, and
     /// only `WireGen` knows the module-wide container-name set.
     package let unannotatedExtensionProvides: [UnannotatedExtensionProvides]
+    /// Module-scope `typealias` declarations captured per-file and
+    /// aggregated across the module. Drives the typealias hint that
+    /// missing-binding diagnostics use to point at the underlying type
+    /// when a typealias was injected but its underlying type IS bound.
+    package let typealiases: [DiscoveredTypealias]
 
     package init(
         bindings: [DiscoveredBinding],
         containerBindings: [String: [DiscoveredBinding]] = [:],
         imports: [String],
         warnings: [Warning] = [],
-        unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
+        unannotatedExtensionProvides: [UnannotatedExtensionProvides] = [],
+        typealiases: [DiscoveredTypealias] = []
     ) {
         self.bindings = bindings
         self.containerBindings = containerBindings
         self.imports = imports
         self.warnings = warnings
         self.unannotatedExtensionProvides = unannotatedExtensionProvides
+        self.typealiases = typealiases
+    }
+}
+
+/// One module-scope `typealias` declaration captured during discovery.
+/// Used at validation time to enrich missing-binding diagnostics: if
+/// `@Inject var x: UserID` fails to resolve but `UserID` is a typealias
+/// of a type that IS bound, a `note:` line points at the underlying
+/// type so the user understands why the lookup didn't match. Typealiases
+/// are not unwrapped during resolution — `typealias UserID = UUID`
+/// followed by separate keyed bindings for each is a legitimate
+/// discriminator pattern.
+package struct DiscoveredTypealias: Sendable {
+    /// The typealias's own name, as written (e.g. `"UserID"`).
+    package let name: String
+    /// The right-hand-side type expression, trimmed (e.g. `"UUID"`).
+    package let underlyingType: String
+    package let location: SourceLocation
+
+    package init(name: String, underlyingType: String, location: SourceLocation) {
+        self.name = name
+        self.underlyingType = underlyingType
+        self.location = location
     }
 }
 
@@ -357,7 +386,8 @@ package func discover(
         containerBindings: visitor.containerBindings,
         imports: visitor.imports,
         warnings: visitor.warnings,
-        unannotatedExtensionProvides: visitor.unannotatedExtensionProvides
+        unannotatedExtensionProvides: visitor.unannotatedExtensionProvides,
+        typealiases: visitor.typealiases
     )
 }
 

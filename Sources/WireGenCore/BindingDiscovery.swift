@@ -47,6 +47,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// module-wide `@Container`-name set is known. See
     /// `unannotatedExtensionStack` for the scope tracking.
     var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
+    /// Module-scope `typealias` declarations. Captured for the
+    /// typealias-aware missing-binding hint; nested typealiases
+    /// (`enum Names { typealias UserID = UUID }`) and generic
+    /// typealiases are deferred.
+    var typealiases: [DiscoveredTypealias] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
     /// Stack of enclosing type names — top of stack is the immediate
@@ -300,6 +305,25 @@ final class BindingDiscovery: SyntaxVisitor {
             isAtRecognisedProvidesPosition(modifiers: node.modifiers)
         {
             extractProvidesFunction(node)
+        }
+        return .skipChildren
+    }
+
+    // MARK: Typealiases — only module-scope captured.
+
+    override func visit(_ node: TypeAliasDeclSyntax) -> SyntaxVisitorContinueKind {
+        // Nested typealiases (`enum Names { typealias UserID = UUID }`)
+        // and generic typealiases aren't surfaced for the missing-
+        // binding hint yet; expand the scope when a real example
+        // forces it.
+        if enclosingTypes.isEmpty, node.genericParameterClause == nil {
+            typealiases.append(
+                DiscoveredTypealias(
+                    name: node.name.text,
+                    underlyingType: node.initializer.value.trimmedDescription,
+                    location: location(of: node.name)
+                )
+            )
         }
         return .skipChildren
     }
