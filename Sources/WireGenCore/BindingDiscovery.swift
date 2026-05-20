@@ -44,8 +44,8 @@ final class BindingDiscovery: SyntaxVisitor {
     var warnings: [Warning] = []
     /// `@Provides` sites discovered inside unannotated extensions —
     /// the build plugin resolves these into warnings after the
-    /// module-wide `@Container`-name set is known. See
-    /// `unannotatedExtensionStack` for the scope tracking.
+    /// module-wide `@Container`-name set is known. See `scopes` for
+    /// how `VisitorScope.unannotatedExtensionTarget` tracks this.
     var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
     /// Module-scope `typealias` declarations. Captured for the
     /// typealias-aware missing-binding hint; nested typealiases
@@ -65,27 +65,33 @@ final class BindingDiscovery: SyntaxVisitor {
     var nonInjectExtensionInits: [NonInjectExtensionInit] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
-    /// Stack of enclosing type names — top of stack is the immediate
-    /// enclosing type. Used to compute `accessPath` for static
-    /// `@Provides` members of nested types.
-    private var enclosingTypes: [String] = []
-    /// Parallel stack of extended-type names for each enclosing
-    /// declaration that is an *unannotated* extension. Pushed
-    /// alongside `enclosingTypes`/`containerScope` on every type-
-    /// decl entry and popped on exit, so the depth stays in sync.
-    /// Non-extension type decls push `nil`. The top of the stack is
-    /// the extended-type of the immediately enclosing unannotated
-    /// extension, or `nil` when the immediate parent is anything
-    /// else.
-    private var unannotatedExtensionStack: [String?] = [nil]
-    /// Stack of "active container" names, pushed/popped alongside
-    /// enclosing type entries. Top of stack is the container the
-    /// current declaration belongs to (`nil` = default graph). When
-    /// entering a `@Container`-annotated declaration (primary enum or
-    /// `@Container extension Foo`) the contributing type's name is
-    /// pushed; non-container declarations push the current top to
-    /// preserve scope through nested type declarations.
-    private var containerScope: [String?] = [nil]
+    /// One frame per enclosing type the visitor has entered, in
+    /// outermost-to-innermost order. `scopes.last` is the immediate
+    /// enclosing declaration; an empty stack means module scope.
+    /// Bundling the three pieces into one frame keeps push/pop atomic
+    /// — there's no way to forget to update one dimension on the way
+    /// out.
+    private var scopes: [VisitorScope] = []
+
+    private struct VisitorScope {
+        /// Type name of this enclosing declaration. Joined with `.`
+        /// to produce qualified type names and `@Provides` access
+        /// paths.
+        let typeName: String
+        /// Container the current declaration belongs to (`nil` =
+        /// default graph). Set to `typeName` when this scope is
+        /// `@Container`-annotated; otherwise inherits from the
+        /// parent frame so nested non-container types keep
+        /// contributing to whatever container their outer scope
+        /// established.
+        let containerName: String?
+        /// Extended-type name when this scope is an *unannotated*
+        /// extension, used to record candidate `@Provides`
+        /// declarations for the extension-of-foreign-type warnings.
+        /// `nil` for primary type declarations and `@Container`-
+        /// annotated extensions.
+        let unannotatedExtensionTarget: String?
+    }
 
     init(sourcePath: String, converter: SourceLocationConverter) {
         self.sourcePath = sourcePath
@@ -105,11 +111,10 @@ final class BindingDiscovery: SyntaxVisitor {
     }
 
     /// Append a binding to either the default graph or the active
-    /// container's bucket. The top of `containerScope` is the
-    /// container name when inside a `@Container` scope, or `nil` for
-    /// the default graph.
+    /// container's bucket. The top frame's `containerName` is the
+    /// container in scope, or `nil` for the default graph.
     private func record(_ binding: DiscoveredBinding) {
-        if let container = containerScope.last ?? nil {
+        if let container = scopes.last?.containerName {
             containerBindings[container, default: []].append(binding)
         } else {
             bindings.append(binding)
@@ -316,7 +321,7 @@ final class BindingDiscovery: SyntaxVisitor {
         {
             extractProvidesProperty(node)
         }
-        if enclosingTypes.isEmpty {
+        if scopes.isEmpty {
             warnings.append(
                 contentsOf: strayInjectAtModuleScopeWarnings(
                     for: node,
@@ -344,7 +349,7 @@ final class BindingDiscovery: SyntaxVisitor {
         // and generic typealiases aren't surfaced for the missing-
         // binding hint yet; expand the scope when a real example
         // forces it.
-        if enclosingTypes.isEmpty, node.genericParameterClause == nil {
+        if scopes.isEmpty, node.genericParameterClause == nil {
             typealiases.append(
                 DiscoveredTypealias(
                     name: node.name.text,
@@ -358,30 +363,28 @@ final class BindingDiscovery: SyntaxVisitor {
 
     // MARK: Helpers
 
-    /// Push the matching scope for a type declaration: the type's name
-    /// onto `enclosingTypes`, and either the type's own name (when the
-    /// declaration is `@Container`-annotated, opening a new container
-    /// scope) or the inherited current container (when it isn't, so
-    /// nested non-container types keep contributing to whatever
-    /// container their outer scope established). The push is symmetric
-    /// with `exitTypeDecl()` regardless of whether the type was
-    /// `@Container`-annotated, so the visitor's `visit`/`visitPost`
-    /// pairs always balance without external bookkeeping.
+    /// Push one frame onto `scopes` for a type declaration. A
+    /// `@Container`-annotated decl opens a new container scope;
+    /// anything else inherits the parent's container so nested
+    /// non-container types keep contributing to whatever container
+    /// their outer scope established.
     private func enterTypeDecl(
         name: String,
         attributes: AttributeListSyntax,
         unannotatedExtensionTarget: String? = nil
     ) {
-        enclosingTypes.append(name)
         let isContainer = hasAttribute(attributes, named: "Container")
-        containerScope.append(isContainer ? name : (containerScope.last ?? nil))
-        unannotatedExtensionStack.append(unannotatedExtensionTarget)
+        scopes.append(
+            VisitorScope(
+                typeName: name,
+                containerName: isContainer ? name : scopes.last?.containerName,
+                unannotatedExtensionTarget: unannotatedExtensionTarget
+            )
+        )
     }
 
     private func exitTypeDecl() {
-        unannotatedExtensionStack.removeLast()
-        containerScope.removeLast()
-        enclosingTypes.removeLast()
+        scopes.removeLast()
     }
 
     /// `@Provides` is only recognised at module scope or as a `static`
@@ -389,7 +392,7 @@ final class BindingDiscovery: SyntaxVisitor {
     /// function bodies are silently skipped.
     private func isAtRecognisedProvidesPosition(modifiers: DeclModifierListSyntax) -> Bool {
         // Top-level — no `static` keyword expected.
-        if enclosingTypes.isEmpty { return true }
+        if scopes.isEmpty { return true }
         return modifiers.contains { $0.name.tokenKind == .keyword(.static) }
     }
 
@@ -420,7 +423,7 @@ final class BindingDiscovery: SyntaxVisitor {
         }
 
         let propertyName = pattern.identifier.text
-        let accessPath = (enclosingTypes + [propertyName]).joined(separator: ".")
+        let accessPath = (scopes.map(\.typeName) + [propertyName]).joined(separator: ".")
         let key = attribute(in: node.attributes, named: "Provides")
             .flatMap { keyIdentifier(from: $0) }
         let providerLocation = location(of: pattern.identifier)
@@ -441,7 +444,7 @@ final class BindingDiscovery: SyntaxVisitor {
             contentsOf: unannotatedExtensionProvidesCandidates(
                 providerName: propertyName,
                 location: providerLocation,
-                extendedType: unannotatedExtensionStack.last ?? nil
+                extendedType: scopes.last?.unannotatedExtensionTarget
             )
         )
     }
@@ -453,7 +456,7 @@ final class BindingDiscovery: SyntaxVisitor {
             return
         }
         let functionName = node.name.text
-        let accessPath = (enclosingTypes + [functionName]).joined(separator: ".")
+        let accessPath = (scopes.map(\.typeName) + [functionName]).joined(separator: ".")
         let dependencies = node.signature.parameterClause.parameters.map { parameter in
             // Per-parameter `@Inject(<key>)` lets a consumer name the
             // keyed binding it wants. A bare parameter (no attribute)
@@ -479,7 +482,7 @@ final class BindingDiscovery: SyntaxVisitor {
             contentsOf: unannotatedExtensionProvidesCandidates(
                 providerName: functionName,
                 location: providerLocation,
-                extendedType: unannotatedExtensionStack.last ?? nil
+                extendedType: scopes.last?.unannotatedExtensionTarget
             )
         )
         record(
@@ -514,10 +517,10 @@ extension BindingDiscovery {
             sourcePath: sourcePath,
             converter: converter
         )
-        // `enclosingTypes` already includes this type's own name (it
-        // was pushed by `enterTypeDecl` before `processSingleton` ran),
-        // so it's the full path including the singleton itself.
-        let qualified = enclosingTypes.joined(separator: ".")
+        // `scopes` already includes this type's own frame (it was
+        // pushed by `enterTypeDecl` before `processSingleton` ran),
+        // so the joined names are the full qualified path.
+        let qualified = scopes.map(\.typeName).joined(separator: ".")
         record(
             .singleton(
                 DiscoveredSingleton(
@@ -726,9 +729,9 @@ private func containerWithScopeWarnings(
 
 /// Build a candidate when the `@Provides` was found inside an
 /// unannotated extension (i.e. the immediate enclosing scope's
-/// extended-type entry on `unannotatedExtensionStack` is non-nil).
-/// WireGen resolves candidates against the module-wide `@Container`
-/// name set in a later pass.
+/// `VisitorScope.unannotatedExtensionTarget` is non-nil). WireGen
+/// resolves candidates against the module-wide `@Container` name
+/// set in a later pass.
 private func unannotatedExtensionProvidesCandidates(
     providerName: String,
     location: SourceLocation,
