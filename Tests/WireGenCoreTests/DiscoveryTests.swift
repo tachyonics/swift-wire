@@ -1401,6 +1401,63 @@ struct DiscoveryTests {
         #expect(warnings.isEmpty)
     }
 
+    @Test func nonInjectExtensionInitIsRecordedAsCandidate() {
+        // `init` inside an extension without `@Inject` — recorded as
+        // a candidate; the per-extended-type check happens in
+        // WireGen after aggregation.
+        let source = """
+            extension Foo {
+                init(custom: String) {
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "FooExt.swift")
+        #expect(result.nonInjectExtensionInits.count == 1)
+        #expect(result.nonInjectExtensionInits[0].extendedType == "Foo")
+    }
+
+    @Test func injectExtensionInitIsNotRecordedAsNonInjectCandidate() {
+        // `@Inject init` in an extension is the OTHER warning's
+        // territory; the non-Inject candidate list stays empty.
+        let source = """
+            extension Foo {
+                @Inject init(custom: String) {
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "FooExt.swift")
+        #expect(result.nonInjectExtensionInits.isEmpty)
+    }
+
+    @Test func extensionInitConflictWarningFiresForSingletonType() {
+        let candidate = NonInjectExtensionInit(
+            extendedType: "Foo",
+            location: SourceLocation(file: "FooExt.swift", line: 2, column: 5)
+        )
+        let warnings = extensionInitConflictWarnings(
+            candidates: [candidate],
+            singletonTypeNames: ["Foo"]
+        )
+        #expect(warnings.count == 1)
+        #expect(warnings[0].message.contains("extension init conflicts"))
+        #expect(warnings[0].message.contains("'Foo'"))
+    }
+
+    @Test func extensionInitConflictWarningSkipsNonSingletonType() {
+        // Foo isn't @Singleton in this module — extension init is
+        // just an additional init, no Wire-generated init to conflict
+        // with. No warning.
+        let candidate = NonInjectExtensionInit(
+            extendedType: "Foo",
+            location: SourceLocation(file: "FooExt.swift", line: 2, column: 5)
+        )
+        let warnings = extensionInitConflictWarnings(
+            candidates: [candidate],
+            singletonTypeNames: []
+        )
+        #expect(warnings.isEmpty)
+    }
+
     @Test func crossModuleExtensionWarningTreatsGenericExtensionAsBaseName() {
         // `extension Array<Int>` parses as an IdentifierTypeSyntax
         // whose `.name.text` is `Array`; the generic argument clause

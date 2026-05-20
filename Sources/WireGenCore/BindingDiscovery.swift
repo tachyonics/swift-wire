@@ -58,6 +58,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// `extension Foo` where `Foo` isn't in this set across the whole
     /// module is probably extending an imported type.
     var declaredTypeNames: [String] = []
+    /// Candidates for the extension-init-conflict warning — `init`s
+    /// found inside `extension` blocks that don't carry `@Inject`.
+    /// WireGen resolves these against the module-wide
+    /// `@Singleton`-name set after aggregation.
+    var nonInjectExtensionInits: [NonInjectExtensionInit] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
     /// Stack of enclosing type names — top of stack is the immediate
@@ -275,6 +280,14 @@ final class BindingDiscovery: SyntaxVisitor {
                 converter: converter
             )
         )
+        nonInjectExtensionInits.append(
+            contentsOf: nonInjectExtensionInitCandidates(
+                extension: node,
+                extendedName: extendedName,
+                sourcePath: sourcePath,
+                converter: converter
+            )
+        )
         // `@Container extension Foo { ... }` opts the extension into
         // Foo's container, merging with any other declarations
         // (primary type or other `@Container` extensions) that target
@@ -378,38 +391,6 @@ final class BindingDiscovery: SyntaxVisitor {
         // Top-level — no `static` keyword expected.
         if enclosingTypes.isEmpty { return true }
         return modifiers.contains { $0.name.tokenKind == .keyword(.static) }
-    }
-
-    private func processSingleton(
-        typeKind: String,
-        nameToken: TokenSyntax,
-        generics: GenericParameterClauseSyntax?,
-        attributes: AttributeListSyntax,
-        members: MemberBlockItemListSyntax
-    ) {
-        guard hasAttribute(attributes, named: "Singleton") else { return }
-        let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
-        let dependencies = extractInjectDependencies(
-            from: members,
-            sourcePath: sourcePath,
-            converter: converter
-        )
-        // `enclosingTypes` already includes this type's own name (it
-        // was pushed by `enterTypeDecl` before `processSingleton` ran),
-        // so it's the full path including the singleton itself.
-        let qualified = enclosingTypes.joined(separator: ".")
-        record(
-            .singleton(
-                DiscoveredSingleton(
-                    typeName: nameToken.text,
-                    qualifiedTypeName: qualified,
-                    typeKind: typeKind,
-                    genericParameterNames: genericParameterNames,
-                    dependencies: dependencies,
-                    location: location(of: nameToken)
-                )
-            )
-        )
     }
 
     private func extractProvidesProperty(_ node: VariableDeclSyntax) {
@@ -516,6 +497,40 @@ final class BindingDiscovery: SyntaxVisitor {
         )
     }
 
+}
+
+extension BindingDiscovery {
+    fileprivate func processSingleton(
+        typeKind: String,
+        nameToken: TokenSyntax,
+        generics: GenericParameterClauseSyntax?,
+        attributes: AttributeListSyntax,
+        members: MemberBlockItemListSyntax
+    ) {
+        guard hasAttribute(attributes, named: "Singleton") else { return }
+        let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
+        let dependencies = extractInjectDependencies(
+            from: members,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+        // `enclosingTypes` already includes this type's own name (it
+        // was pushed by `enterTypeDecl` before `processSingleton` ran),
+        // so it's the full path including the singleton itself.
+        let qualified = enclosingTypes.joined(separator: ".")
+        record(
+            .singleton(
+                DiscoveredSingleton(
+                    typeName: nameToken.text,
+                    qualifiedTypeName: qualified,
+                    typeKind: typeKind,
+                    genericParameterNames: genericParameterNames,
+                    dependencies: dependencies,
+                    location: location(of: nameToken)
+                )
+            )
+        )
+    }
 }
 
 // MARK: - File-private helpers
@@ -838,4 +853,33 @@ private func injectInitInExtensionWarnings(
         )
     }
     return warnings
+}
+
+/// Record every non-`@Inject` `init` inside an extension as a
+/// candidate. WireGen filters these against the module-wide
+/// `@Singleton`-name set after aggregation — the warning fires only
+/// when the extended type is a `@Singleton`, since that's when the
+/// macro-generated init enters the picture.
+private func nonInjectExtensionInitCandidates(
+    extension extensionNode: ExtensionDeclSyntax,
+    extendedName: String,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> [NonInjectExtensionInit] {
+    var candidates: [NonInjectExtensionInit] = []
+    for member in extensionNode.memberBlock.members {
+        guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { continue }
+        if hasAttribute(initDecl.attributes, named: "Inject") { continue }
+        candidates.append(
+            NonInjectExtensionInit(
+                extendedType: extendedName,
+                location: makeSourceLocation(
+                    of: initDecl.initKeyword,
+                    sourcePath: sourcePath,
+                    converter: converter
+                )
+            )
+        )
+    }
+    return candidates
 }

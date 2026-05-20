@@ -19,6 +19,27 @@ package func unannotatedExtensionContainerWarnings(
     }
 }
 
+/// Filter `NonInjectExtensionInit` candidates against the module-wide
+/// `@Singleton`-name set: for each candidate whose extended type IS a
+/// `@Singleton`, emit a warning at the init keyword. Wire-generated
+/// inits land on the primary declaration; a non-`@Inject` extension
+/// init either collides with the generated init at the Swift level
+/// (with a confusing "invalid redeclaration" message) or shadows it
+/// silently — neither is what the user wants.
+package func extensionInitConflictWarnings(
+    candidates: [NonInjectExtensionInit],
+    singletonTypeNames: Set<String>
+) -> [Warning] {
+    candidates.compactMap { candidate -> Warning? in
+        guard singletonTypeNames.contains(candidate.extendedType) else { return nil }
+        return Warning(
+            location: candidate.location,
+            message:
+                "extension init conflicts with Wire's generated init for '\(candidate.extendedType)' — move it into the primary declaration and mark it @Inject if it should be the canonical one."
+        )
+    }
+}
+
 /// Candidates whose extended type isn't declared anywhere in this
 /// module (and isn't a `@Container` either — those are handled by
 /// `unannotatedExtensionContainerWarnings`) almost certainly extend
