@@ -146,18 +146,13 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        if let binding = discoveredSingleton(
+        processSingleton(
             typeKind: "struct",
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
-            members: node.memberBlock.members,
-            enclosingTypes: enclosingTypes,
-            sourcePath: sourcePath,
-            converter: converter
-        ) {
-            record(binding)
-        }
+            members: node.memberBlock.members
+        )
         return .visitChildren
     }
     override func visitPost(_ node: StructDeclSyntax) {
@@ -184,18 +179,13 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        if let binding = discoveredSingleton(
+        processSingleton(
             typeKind: "class",
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
-            members: node.memberBlock.members,
-            enclosingTypes: enclosingTypes,
-            sourcePath: sourcePath,
-            converter: converter
-        ) {
-            record(binding)
-        }
+            members: node.memberBlock.members
+        )
         return .visitChildren
     }
     override func visitPost(_ node: ClassDeclSyntax) {
@@ -222,18 +212,13 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        if let binding = discoveredSingleton(
+        processSingleton(
             typeKind: "actor",
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
-            members: node.memberBlock.members,
-            enclosingTypes: enclosingTypes,
-            sourcePath: sourcePath,
-            converter: converter
-        ) {
-            record(binding)
-        }
+            members: node.memberBlock.members
+        )
         return .visitChildren
     }
     override func visitPost(_ node: ActorDeclSyntax) {
@@ -514,6 +499,40 @@ final class BindingDiscovery: SyntaxVisitor {
 
 }
 
+extension BindingDiscovery {
+    fileprivate func processSingleton(
+        typeKind: String,
+        nameToken: TokenSyntax,
+        generics: GenericParameterClauseSyntax?,
+        attributes: AttributeListSyntax,
+        members: MemberBlockItemListSyntax
+    ) {
+        guard hasAttribute(attributes, named: "Singleton") else { return }
+        let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
+        let dependencies = extractInjectDependencies(
+            from: members,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+        // `enclosingTypes` already includes this type's own name (it
+        // was pushed by `enterTypeDecl` before `processSingleton` ran),
+        // so it's the full path including the singleton itself.
+        let qualified = enclosingTypes.joined(separator: ".")
+        record(
+            .singleton(
+                DiscoveredSingleton(
+                    typeName: nameToken.text,
+                    qualifiedTypeName: qualified,
+                    typeKind: typeKind,
+                    genericParameterNames: genericParameterNames,
+                    dependencies: dependencies,
+                    location: location(of: nameToken)
+                )
+            )
+        )
+    }
+}
+
 // MARK: - File-private helpers
 
 /// Scope-macro attribute names that conflict with `@Container` on
@@ -617,44 +636,6 @@ private func makeSourceLocation(
 ) -> SourceLocation {
     let position = node.startLocation(converter: converter)
     return SourceLocation(file: sourcePath, line: position.line, column: position.column)
-}
-
-/// Build a `DiscoveredBinding.singleton` from a primary type
-/// declaration, or `nil` if the type isn't `@Singleton`-annotated.
-/// `enclosingTypes` is the visitor's stack including the singleton
-/// itself, so the qualified-type-name calculation here gets the full
-/// path.
-private func discoveredSingleton(
-    typeKind: String,
-    nameToken: TokenSyntax,
-    generics: GenericParameterClauseSyntax?,
-    attributes: AttributeListSyntax,
-    members: MemberBlockItemListSyntax,
-    enclosingTypes: [String],
-    sourcePath: String,
-    converter: SourceLocationConverter
-) -> DiscoveredBinding? {
-    guard hasAttribute(attributes, named: "Singleton") else { return nil }
-    let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
-    let dependencies = extractInjectDependencies(
-        from: members,
-        sourcePath: sourcePath,
-        converter: converter
-    )
-    return .singleton(
-        DiscoveredSingleton(
-            typeName: nameToken.text,
-            qualifiedTypeName: enclosingTypes.joined(separator: "."),
-            typeKind: typeKind,
-            genericParameterNames: genericParameterNames,
-            dependencies: dependencies,
-            location: makeSourceLocation(
-                of: nameToken,
-                sourcePath: sourcePath,
-                converter: converter
-            )
-        )
-    )
 }
 
 /// Collect the `@Singleton` type's dependencies. Same priority rule as
