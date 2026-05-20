@@ -55,16 +55,16 @@ struct WireGen {
 
         printSkippedReport(default: defaultGraph, containers: containerGraphs)
         let containerNames = Set(aggregate.containerBindings.keys)
-        let crossFileWarnings =
-            unannotatedExtensionContainerWarnings(
-                candidates: aggregate.unannotatedExtensionProvides,
-                containerNames: containerNames
-            )
-            + crossModuleExtensionWarnings(
-                candidates: aggregate.unannotatedExtensionProvides,
-                containerNames: containerNames,
-                declaredTypeNames: aggregate.declaredTypeNames
-            )
+        let unannotatedExtensionContainerWarnings = unannotatedExtensionContainerWarnings(
+            candidates: aggregate.unannotatedExtensionProvides,
+            containerNames: containerNames
+        )
+        let crossModuleExtensionWarnings = crossModuleExtensionWarnings(
+            candidates: aggregate.unannotatedExtensionProvides,
+            containerNames: containerNames,
+            declaredTypeNames: aggregate.declaredTypeNames
+        )
+        let crossFileWarnings = unannotatedExtensionContainerWarnings + crossModuleExtensionWarnings
         printWarnings(aggregate.warnings + crossFileWarnings)
         failIfAnyGraphInvalid(default: defaultGraph, containers: containerGraphs)
 
