@@ -54,10 +54,17 @@ struct WireGen {
             }
 
         printSkippedReport(default: defaultGraph, containers: containerGraphs)
-        let crossFileWarnings = unannotatedExtensionContainerWarnings(
-            candidates: aggregate.unannotatedExtensionProvides,
-            containerNames: Set(aggregate.containerBindings.keys)
-        )
+        let containerNames = Set(aggregate.containerBindings.keys)
+        let crossFileWarnings =
+            unannotatedExtensionContainerWarnings(
+                candidates: aggregate.unannotatedExtensionProvides,
+                containerNames: containerNames
+            )
+            + crossModuleExtensionWarnings(
+                candidates: aggregate.unannotatedExtensionProvides,
+                containerNames: containerNames,
+                declaredTypeNames: aggregate.declaredTypeNames
+            )
         printWarnings(aggregate.warnings + crossFileWarnings)
         failIfAnyGraphInvalid(default: defaultGraph, containers: containerGraphs)
 
@@ -105,6 +112,7 @@ struct WireGen {
         var warnings: [Warning] = []
         var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
         var typealiases: [DiscoveredTypealias] = []
+        var declaredTypeNames: Set<String> = []
     }
 
     private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
@@ -140,29 +148,9 @@ struct WireGen {
                 contentsOf: result.unannotatedExtensionProvides
             )
             aggregate.typealiases.append(contentsOf: result.typealiases)
+            aggregate.declaredTypeNames.formUnion(result.declaredTypeNames)
         }
         return aggregate
-    }
-
-    /// Cross-reference the `unannotatedExtensionProvides` candidates
-    /// collected during discovery against the module-wide
-    /// `@Container`-name set. Each candidate whose extended type
-    /// matches a discovered `@Container` produces a warning — the
-    /// user probably meant `@Container extension Foo` but wrote a
-    /// plain `extension Foo`, and the `@Provides` inside is silently
-    /// falling through to the default graph.
-    private static func unannotatedExtensionContainerWarnings(
-        candidates: [UnannotatedExtensionProvides],
-        containerNames: Set<String>
-    ) -> [Warning] {
-        candidates.compactMap { candidate -> Warning? in
-            guard containerNames.contains(candidate.extendedType) else { return nil }
-            return Warning(
-                location: candidate.location,
-                message:
-                    "@Provides '\(candidate.providerName)' in an unannotated extension of '\(candidate.extendedType)' falls through to the default graph — mark the extension @Container to contribute to '\(candidate.extendedType)'s container instead."
-            )
-        }
     }
 
     /// Emit warnings to stderr in the `file:line:col: warning:` form.
