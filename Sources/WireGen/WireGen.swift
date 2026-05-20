@@ -55,6 +55,7 @@ struct WireGen {
 
         printSkippedReport(default: defaultGraph, containers: containerGraphs)
         let containerNames = Set(aggregate.containerBindings.keys)
+        let singletonTypeNames = singletonTypeNames(in: aggregate)
         let unannotatedExtensionContainerWarnings = unannotatedExtensionContainerWarnings(
             candidates: aggregate.unannotatedExtensionProvides,
             containerNames: containerNames
@@ -64,7 +65,14 @@ struct WireGen {
             containerNames: containerNames,
             declaredTypeNames: aggregate.declaredTypeNames
         )
-        let crossFileWarnings = unannotatedExtensionContainerWarnings + crossModuleExtensionWarnings
+        let extensionInitConflictWarnings = extensionInitConflictWarnings(
+            candidates: aggregate.nonInjectExtensionInits,
+            singletonTypeNames: singletonTypeNames
+        )
+        let crossFileWarnings =
+            unannotatedExtensionContainerWarnings
+            + crossModuleExtensionWarnings
+            + extensionInitConflictWarnings
         printWarnings(aggregate.warnings + crossFileWarnings)
         failIfAnyGraphInvalid(default: defaultGraph, containers: containerGraphs)
 
@@ -113,6 +121,7 @@ struct WireGen {
         var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
         var typealiases: [DiscoveredTypealias] = []
         var declaredTypeNames: Set<String> = []
+        var nonInjectExtensionInits: [NonInjectExtensionInit] = []
     }
 
     private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
@@ -149,8 +158,28 @@ struct WireGen {
             )
             aggregate.typealiases.append(contentsOf: result.typealiases)
             aggregate.declaredTypeNames.formUnion(result.declaredTypeNames)
+            aggregate.nonInjectExtensionInits.append(
+                contentsOf: result.nonInjectExtensionInits
+            )
         }
         return aggregate
+    }
+
+    /// Collect type names of `@Singleton` bindings across every graph
+    /// (default + every container). Drives the extension-init-conflict
+    /// warning — `@Singleton` is the only scope macro whose generated
+    /// init the warning needs to be aware of; future scopes (`@RequestScope`,
+    /// `@JobScope`) will join the set here when they land.
+    private static func singletonTypeNames(in aggregate: DiscoveryAggregate) -> Set<String> {
+        let allBindings =
+            aggregate.defaultBindings
+            + aggregate.containerBindings.values.flatMap { $0 }
+        return Set(
+            allBindings.compactMap { binding -> String? in
+                if case .singleton(let singleton) = binding { return singleton.typeName }
+                return nil
+            }
+        )
     }
 
     /// Emit warnings to stderr in the `file:line:col: warning:` form.

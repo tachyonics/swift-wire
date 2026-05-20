@@ -308,6 +308,11 @@ package struct SourceFileDiscovery: Sendable {
     /// — an unannotated `extension Foo` whose `Foo` isn't in this set
     /// is probably extending an imported type.
     package let declaredTypeNames: [String]
+    /// `init`s found inside `extension` blocks that aren't marked
+    /// `@Inject`. Resolved to a warning when the extended type is
+    /// `@Singleton` somewhere in the module — those inits collide
+    /// with or shadow the macro-generated init.
+    package let nonInjectExtensionInits: [NonInjectExtensionInit]
 
     package init(
         bindings: [DiscoveredBinding],
@@ -316,7 +321,8 @@ package struct SourceFileDiscovery: Sendable {
         warnings: [Warning] = [],
         unannotatedExtensionProvides: [UnannotatedExtensionProvides] = [],
         typealiases: [DiscoveredTypealias] = [],
-        declaredTypeNames: [String] = []
+        declaredTypeNames: [String] = [],
+        nonInjectExtensionInits: [NonInjectExtensionInit] = []
     ) {
         self.bindings = bindings
         self.containerBindings = containerBindings
@@ -325,6 +331,7 @@ package struct SourceFileDiscovery: Sendable {
         self.unannotatedExtensionProvides = unannotatedExtensionProvides
         self.typealiases = typealiases
         self.declaredTypeNames = declaredTypeNames
+        self.nonInjectExtensionInits = nonInjectExtensionInits
     }
 }
 
@@ -346,6 +353,25 @@ package struct DiscoveredTypealias: Sendable {
     package init(name: String, underlyingType: String, location: SourceLocation) {
         self.name = name
         self.underlyingType = underlyingType
+        self.location = location
+    }
+}
+
+/// One `init` site found inside an extension that doesn't carry
+/// `@Inject`. Recorded as a candidate; resolves to a warning when the
+/// extended type is `@Singleton`-annotated somewhere in the module —
+/// the macro-generated init either collides with this one (Swift
+/// redeclaration error) or silently shadows it. The Wire diagnostic
+/// fires before either of those confusing outcomes does.
+package struct NonInjectExtensionInit: Sendable {
+    /// Simple name of the extended type — what we cross-reference
+    /// against the module-wide `@Singleton`-name set.
+    package let extendedType: String
+    /// Anchor at the `init` keyword.
+    package let location: SourceLocation
+
+    package init(extendedType: String, location: SourceLocation) {
+        self.extendedType = extendedType
         self.location = location
     }
 }
@@ -396,7 +422,8 @@ package func discover(
         warnings: visitor.warnings,
         unannotatedExtensionProvides: visitor.unannotatedExtensionProvides,
         typealiases: visitor.typealiases,
-        declaredTypeNames: visitor.declaredTypeNames
+        declaredTypeNames: visitor.declaredTypeNames,
+        nonInjectExtensionInits: visitor.nonInjectExtensionInits
     )
 }
 

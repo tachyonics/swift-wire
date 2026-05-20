@@ -58,6 +58,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// `extension Foo` where `Foo` isn't in this set across the whole
     /// module is probably extending an imported type.
     var declaredTypeNames: [String] = []
+    /// Candidates for the extension-init-conflict warning — `init`s
+    /// found inside `extension` blocks that don't carry `@Inject`.
+    /// WireGen resolves these against the module-wide
+    /// `@Singleton`-name set after aggregation.
+    var nonInjectExtensionInits: [NonInjectExtensionInit] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
     /// Stack of enclosing type names — top of stack is the immediate
@@ -141,13 +146,18 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        processSingleton(
+        if let binding = discoveredSingleton(
             typeKind: "struct",
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
-            members: node.memberBlock.members
-        )
+            members: node.memberBlock.members,
+            enclosingTypes: enclosingTypes,
+            sourcePath: sourcePath,
+            converter: converter
+        ) {
+            record(binding)
+        }
         return .visitChildren
     }
     override func visitPost(_ node: StructDeclSyntax) {
@@ -174,13 +184,18 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        processSingleton(
+        if let binding = discoveredSingleton(
             typeKind: "class",
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
-            members: node.memberBlock.members
-        )
+            members: node.memberBlock.members,
+            enclosingTypes: enclosingTypes,
+            sourcePath: sourcePath,
+            converter: converter
+        ) {
+            record(binding)
+        }
         return .visitChildren
     }
     override func visitPost(_ node: ClassDeclSyntax) {
@@ -207,13 +222,18 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        processSingleton(
+        if let binding = discoveredSingleton(
             typeKind: "actor",
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
-            members: node.memberBlock.members
-        )
+            members: node.memberBlock.members,
+            enclosingTypes: enclosingTypes,
+            sourcePath: sourcePath,
+            converter: converter
+        ) {
+            record(binding)
+        }
         return .visitChildren
     }
     override func visitPost(_ node: ActorDeclSyntax) {
@@ -269,6 +289,14 @@ final class BindingDiscovery: SyntaxVisitor {
             ?? node.extendedType.trimmedDescription
         warnings.append(
             contentsOf: injectInitInExtensionWarnings(
+                extension: node,
+                extendedName: extendedName,
+                sourcePath: sourcePath,
+                converter: converter
+            )
+        )
+        nonInjectExtensionInits.append(
+            contentsOf: nonInjectExtensionInitCandidates(
                 extension: node,
                 extendedName: extendedName,
                 sourcePath: sourcePath,
@@ -378,38 +406,6 @@ final class BindingDiscovery: SyntaxVisitor {
         // Top-level — no `static` keyword expected.
         if enclosingTypes.isEmpty { return true }
         return modifiers.contains { $0.name.tokenKind == .keyword(.static) }
-    }
-
-    private func processSingleton(
-        typeKind: String,
-        nameToken: TokenSyntax,
-        generics: GenericParameterClauseSyntax?,
-        attributes: AttributeListSyntax,
-        members: MemberBlockItemListSyntax
-    ) {
-        guard hasAttribute(attributes, named: "Singleton") else { return }
-        let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
-        let dependencies = extractInjectDependencies(
-            from: members,
-            sourcePath: sourcePath,
-            converter: converter
-        )
-        // `enclosingTypes` already includes this type's own name (it
-        // was pushed by `enterTypeDecl` before `processSingleton` ran),
-        // so it's the full path including the singleton itself.
-        let qualified = enclosingTypes.joined(separator: ".")
-        record(
-            .singleton(
-                DiscoveredSingleton(
-                    typeName: nameToken.text,
-                    qualifiedTypeName: qualified,
-                    typeKind: typeKind,
-                    genericParameterNames: genericParameterNames,
-                    dependencies: dependencies,
-                    location: location(of: nameToken)
-                )
-            )
-        )
     }
 
     private func extractProvidesProperty(_ node: VariableDeclSyntax) {
@@ -621,6 +617,44 @@ private func makeSourceLocation(
 ) -> SourceLocation {
     let position = node.startLocation(converter: converter)
     return SourceLocation(file: sourcePath, line: position.line, column: position.column)
+}
+
+/// Build a `DiscoveredBinding.singleton` from a primary type
+/// declaration, or `nil` if the type isn't `@Singleton`-annotated.
+/// `enclosingTypes` is the visitor's stack including the singleton
+/// itself, so the qualified-type-name calculation here gets the full
+/// path.
+private func discoveredSingleton(
+    typeKind: String,
+    nameToken: TokenSyntax,
+    generics: GenericParameterClauseSyntax?,
+    attributes: AttributeListSyntax,
+    members: MemberBlockItemListSyntax,
+    enclosingTypes: [String],
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> DiscoveredBinding? {
+    guard hasAttribute(attributes, named: "Singleton") else { return nil }
+    let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
+    let dependencies = extractInjectDependencies(
+        from: members,
+        sourcePath: sourcePath,
+        converter: converter
+    )
+    return .singleton(
+        DiscoveredSingleton(
+            typeName: nameToken.text,
+            qualifiedTypeName: enclosingTypes.joined(separator: "."),
+            typeKind: typeKind,
+            genericParameterNames: genericParameterNames,
+            dependencies: dependencies,
+            location: makeSourceLocation(
+                of: nameToken,
+                sourcePath: sourcePath,
+                converter: converter
+            )
+        )
+    )
 }
 
 /// Collect the `@Singleton` type's dependencies. Same priority rule as
@@ -838,4 +872,33 @@ private func injectInitInExtensionWarnings(
         )
     }
     return warnings
+}
+
+/// Record every non-`@Inject` `init` inside an extension as a
+/// candidate. WireGen filters these against the module-wide
+/// `@Singleton`-name set after aggregation — the warning fires only
+/// when the extended type is a `@Singleton`, since that's when the
+/// macro-generated init enters the picture.
+private func nonInjectExtensionInitCandidates(
+    extension extensionNode: ExtensionDeclSyntax,
+    extendedName: String,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> [NonInjectExtensionInit] {
+    var candidates: [NonInjectExtensionInit] = []
+    for member in extensionNode.memberBlock.members {
+        guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { continue }
+        if hasAttribute(initDecl.attributes, named: "Inject") { continue }
+        candidates.append(
+            NonInjectExtensionInit(
+                extendedType: extendedName,
+                location: makeSourceLocation(
+                    of: initDecl.initKeyword,
+                    sourcePath: sourcePath,
+                    converter: converter
+                )
+            )
+        )
+    }
+    return candidates
 }
