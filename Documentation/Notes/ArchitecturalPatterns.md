@@ -187,7 +187,7 @@ framework, it's a graph-composition framework that happens to
 support hex cleanly when the user wants it.
 
 The minimal HTTP-framework integration shape — for a sense of
-what Wire-on-Vapor actually looks like — is a one-annotation
+what Wire-on-Vapor actually looks like — is a two-annotation
 adoption that preserves the existing controller idiom:
 
 ```swift
@@ -196,7 +196,7 @@ import Wire            // @Singleton
 import WireVapor       // @VaporRouteCollection
 
 @Singleton
-@VaporRouteCollection
+@VaporRouteCollection // a contributing annotation
 struct TodosController {
     func boot(routes: any RoutesBuilder) throws {
         routes.get("todos", use: index)
@@ -209,8 +209,8 @@ struct TodosController {
 }
 ```
 
-The existing `RouteCollection`-style controller gains one
-annotation and joins Wire's graph; Wire automates the
+The existing `RouteCollection`-style controller gains two
+annotations and joins Wire's graph; Wire automates the
 `app.register(collection:)` call at bootstrap. Nothing about
 the routing, handler signatures, or request-based service
 access changes. `WireMVCAbstraction.md` covers the rest of the
