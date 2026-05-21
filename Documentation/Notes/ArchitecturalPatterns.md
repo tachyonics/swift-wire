@@ -137,7 +137,7 @@ generic over the port, and Wire's codegen has to support opaque
 return types in the bootstrap (see `OpaqueTypesSupport.md` for the
 spec, currently deferred to iteration 9). For consumers that can
 afford to be non-generic, `any P` is the standard hex pattern and
-ships in M1 today.
+is available prior to iteration 9.
 
 ## Wire with framework-coupled ecosystems (Vapor and similar)
 
@@ -263,8 +263,7 @@ swift-openapi-generator's split between `swift-openapi-generator`
 `swift-openapi-vapor` (provides transport bindings). See
 `WireMVCAbstraction.md` for the design space.
 
-Feather's `feather-http` is client-side; no server-side HTTP
-capability ships in the Feather organization today. The natural
+Feather's `feather-http` is client-side; the natural
 cross-framework abstraction WireMVC would target on the server
 side is `swift-http-api-proposal` once it stabilises — its scope
 explicitly includes a server protocol and middleware. Until that
@@ -300,16 +299,3 @@ Wire wires the top layer; capability protocols and adapters
 inhabit the middle; the runtime is at the bottom. The arrows
 between layers all point upward (dependencies on abstractions,
 not implementations).
-
-## What this isn't
-
-- A claim that Wire *requires* hex architecture. Wire works for
-  any architectural shape; this doc captures how the hex shape
-  composes cleanly because that's the architecture much of the
-  README's audience (server-side Swift developers coming from
-  JVM/backend ecosystems) thinks in.
-- A prescription about which capability libraries to use.
-  Feather is the most-developed example today; the architectural
-  pattern works with any capability-protocol library.
-- A specification of WireMVC's adapter contract. That's
-  WireMVCAbstraction.md's territory.
