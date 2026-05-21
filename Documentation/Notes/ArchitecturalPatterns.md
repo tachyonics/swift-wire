@@ -139,6 +139,80 @@ spec, currently deferred to iteration 9). For consumers that can
 afford to be non-generic, `any P` is the standard hex pattern and
 ships in M1 today.
 
+## Wire with framework-coupled ecosystems (Vapor and similar)
+
+Feather is one shape of capability library: protocols defined
+runtime-agnostically, adapter packages per backend, no assumed HTTP
+framework. The Vapor ecosystem takes the opposite stance — Fluent
+(ORM), Queues, Sessions, JWTKit, and similar packages publish APIs
+intentionally tied to Vapor's runtime concepts (`Application`,
+`Request`, Vapor's service container). They cover similar
+capability ground as Feather (database drivers, queue handling,
+mail) but with Vapor's runtime as part of the contract rather
+than an integration concern.
+
+Wire is **orthogonal to this choice**. It wires whatever types
+the user puts at the `@Provides` boundary; the types themselves
+can come from any ecosystem. A Wire + Vapor-ecosystem
+application looks like:
+
+```swift
+import Vapor
+import Fluent
+import FluentPostgresDriver
+
+@Provides
+func database(app: Application) -> some Database {
+    app.databases.database(.psql, logger: app.logger, on: ...)!
+}
+
+@Singleton @Controller("/tasks")
+struct TaskController<DB: Database> {
+    @Inject var database: DB
+    // ...
+}
+```
+
+Mechanically this is identical to the Feather example. The
+*architectural* distinction is what crosses the `@Provides`
+boundary: Fluent's `Database` is a Vapor-flavoured protocol
+(its associated types and methods assume Vapor's runtime), so
+`TaskController` is implicitly coupled to Vapor through the
+protocol it depends on. Swapping the HTTP framework
+(Hummingbird ↔ Vapor) requires changing the controller's port
+type, not just one `@Provides` function.
+
+Wire doesn't push for or against either ecosystem. The
+trade-offs the user is making:
+
+- **Vapor ecosystem**: lower friction within Vapor (rich, mature,
+  integrated). Higher cost to swap HTTP frameworks because the
+  capability protocols carry Vapor's shape.
+- **Feather ecosystem**: framework-agnostic protocols; swapping
+  HTTP frameworks doesn't propagate into the application's
+  ports. Fewer integrated packages today; the abstractions are
+  newer.
+- **Custom mix**: most real apps will mix — Feather for some
+  capabilities (storage, mail), Vapor-tied for others (Fluent
+  for the ORM), concrete types for things with no abstraction
+  cost (`Logger`).
+
+Wire's contribution is the same regardless: build-time graph
+validation, generic preservation, scope routing, multi-module
+composition. The architectural style of *what* gets wired is the
+user's design decision. The README's "neutral on architecture"
+framing applies all the way down — Wire isn't a hex-architecture
+framework, it's a graph-composition framework that happens to
+support hex cleanly when the user wants it.
+
+A practical implication for adapter packages: a future
+`WireVapor` adapter (M2 territory) provides runtime integration
+(application bootstrap, request-scope seeding) regardless of
+whether the user's *capability bindings* are typed as Vapor
+protocols or as framework-agnostic Feather protocols. The HTTP
+framework's adapter is a separate concern from the capability
+ecosystem's adapters.
+
 ## `some P` vs `any P` vs concrete in hex contexts
 
 Each choice has a hex-architecture interpretation:
@@ -183,13 +257,15 @@ swift-openapi-generator's split between `swift-openapi-generator`
 `swift-openapi-vapor` (provides transport bindings). See
 `WireMVCAbstraction.md` for the design space.
 
-Feather currently doesn't publish a server-side HTTP capability
-(its `feather-http` is client-side). When/if a server-side
-abstraction emerges — either through `swift-http-api-proposal`,
-a future `feather-http-server`, or another effort — WireMVC
-targets it as the cross-framework port. Until then, WireMVC ships
-per-framework adapters (WireMVCHummingbird, WireMVCVapor) as the
-M5-timeframe implementation.
+Feather's `feather-http` is client-side; no server-side HTTP
+capability ships in the Feather organization today. The natural
+cross-framework abstraction WireMVC would target on the server
+side is `swift-http-api-proposal` once it stabilises — its scope
+explicitly includes a server protocol and middleware. Until that
+proposal ships and Hummingbird/Vapor adopt it, WireMVC's M5
+implementation targets the HTTP frameworks directly through
+per-framework adapter packages (WireMVCHummingbird,
+WireMVCVapor).
 
 ## Layer relationships at a glance
 

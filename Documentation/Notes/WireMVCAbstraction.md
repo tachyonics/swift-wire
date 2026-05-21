@@ -82,25 +82,23 @@ point. Wire's build plugin reads the activated module's
 conformances, finds the `WireMVCServer` implementation, and emits
 the appropriate registration call with concrete arguments.
 
-## Three protocols this could target
+## Two protocols this could target
 
 WireMVC's "server-shape protocol" doesn't have to be Wire-published.
-Three options, in increasing order of ecosystem entanglement:
+Two realistic options:
 
 1. **Wire-published `WireMVCServer`.** Wire core (or WireMVC
    specifically) publishes the protocol. Adapter packages provide
    conformances. Self-contained but invents a parallel surface to
    anything the broader ecosystem might converge on.
 
-2. **swift-http-api-proposal's server-side protocol.** If the
-   proposal stabilises with a server-side abstraction by M5
-   time, WireMVC targets it directly. No Wire-specific surface;
-   ecosystem-shared. Timing depends on the proposal's pace.
-
-3. **A future feather-http-server.** Feather currently publishes a
-   client-side HTTP abstraction (`feather-http`). A server-side
-   capability protocol would slot into Feather's pattern naturally.
-   No commitment from Feather's authors to publish this; speculative.
+2. **swift-http-api-proposal's server-side protocol.** The
+   proposal explicitly includes a server protocol and a
+   composable middleware system in its scope. If it stabilises
+   and Hummingbird/Vapor adopt conformances by M5 time, WireMVC
+   targets it directly. No Wire-specific server surface;
+   ecosystem-shared. Timing depends on the proposal's pace and
+   on adapter adoption.
 
 The contract mechanism doesn't depend on which protocol gets chosen
 — `_wireRegister`'s generic parameter `S: WireMVCServer` becomes
@@ -108,9 +106,11 @@ The contract mechanism doesn't depend on which protocol gets chosen
 conformance. The architectural pattern is the same.
 
 For M5's actual implementation: target option 1 if the ecosystem
-hasn't stabilised; option 2 if swift-http-api-proposal has shipped
-a server-side abstraction; option 3 if Feather has by then. The
-decision is M5-time, not M1-time.
+hasn't stabilised; option 2 if `swift-http-api-proposal` has
+shipped a usable server-side abstraction with adapter conformances.
+The decision is M5-time, not M1-time. Both Wire and the proposal
+are pre-1.0 efforts in the same ecosystem; co-evolution is more
+likely than a clean serial dependency.
 
 ## Middleware
 
