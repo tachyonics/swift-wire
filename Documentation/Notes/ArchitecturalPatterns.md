@@ -53,12 +53,16 @@ concerns:
 1. **Web frameworks (Hummingbird, Vapor)** own the runtime — HTTP
    server, request routing, async lifecycle, middleware chain.
    Their job is to receive requests and dispatch them.
-2. **Capability-abstraction libraries (Feather, eventually
-   swift-http-api-proposal)** define what individual dependencies
-   look like — the *shape* of a database client, an HTTP executor,
-   a file storage backend, a queue handler. Each capability is a
-   protocol; concrete adapter packages implement the protocol for
-   specific backends.
+2. **Capability-abstraction libraries (Feather, also Vapor's
+   Fluent / Queues / etc., eventually swift-http-api-proposal)**
+   define what individual dependencies look like — the *shape*
+   of a database client, an HTTP executor, a file storage
+   backend, a queue handler. Each capability is a protocol;
+   concrete adapter packages implement the protocol for
+   specific backends. The libraries differ in whether their
+   capability protocols are tied to a specific HTTP framework's
+   runtime (Vapor's ecosystem) or runtime-agnostic (Feather);
+   see the Vapor-ecosystem section below for the trade-off.
 3. **Wire (this project)** validates and composes the graph of
    dependencies at build time. It doesn't define what dependencies
    *are* (that's the capability abstractions' job) or how requests
