@@ -112,12 +112,15 @@ final class BindingDiscovery: SyntaxVisitor {
     /// Append a binding to its `(container, scope)` partition. The
     /// container axis comes from the visitor's enclosing-scope stack;
     /// the scope axis comes from the binding's own scope identity
-    /// (currently always nil — `@Scoped(seed:)` recognition will set
-    /// this in a follow-up).
+    /// (non-nil for `@Scoped(seed:)`).
     private func record(_ binding: DiscoveredBinding) {
+        let scopeKey: ScopeKey? = {
+            if case .singleton(let singleton) = binding { return singleton.scopeKey }
+            return nil
+        }()
         let partition = Partition(
             container: scopes.last?.containerName,
-            scope: nil
+            scope: scopeKey
         )
         allBindings[partition, default: []].append(binding)
     }
@@ -152,7 +155,7 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        processSingleton(
+        processScopeBoundType(
             typeKind: "struct",
             nameToken: node.name,
             generics: node.genericParameterClause,
@@ -185,7 +188,7 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        processSingleton(
+        processScopeBoundType(
             typeKind: "class",
             nameToken: node.name,
             generics: node.genericParameterClause,
@@ -218,7 +221,7 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes)
-        processSingleton(
+        processScopeBoundType(
             typeKind: "actor",
             nameToken: node.name,
             generics: node.genericParameterClause,
@@ -504,14 +507,29 @@ final class BindingDiscovery: SyntaxVisitor {
 }
 
 extension BindingDiscovery {
-    fileprivate func processSingleton(
+    /// Process a primary type declaration for `@Singleton` or
+    /// `@Scoped(seed:)` annotations. The two are alternatives — a
+    /// type can't sensibly carry both (Swift catches it as a
+    /// redeclaration on the synthesised members), so the dispatch
+    /// picks at most one. Returns early when neither annotation is
+    /// present.
+    fileprivate func processScopeBoundType(
         typeKind: String,
         nameToken: TokenSyntax,
         generics: GenericParameterClauseSyntax?,
         attributes: AttributeListSyntax,
         members: MemberBlockItemListSyntax
     ) {
-        guard hasAttribute(attributes, named: "Singleton") else { return }
+        let scopeKey: ScopeKey?
+        if hasAttribute(attributes, named: "Singleton") {
+            scopeKey = nil
+        } else if let scopedAttribute = attribute(in: attributes, named: "Scoped"),
+            let seed = seedTypeExpression(from: scopedAttribute)
+        {
+            scopeKey = ScopeKey(seed: seed)
+        } else {
+            return
+        }
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
         let dependencies = extractInjectDependencies(
             from: members,
@@ -519,8 +537,8 @@ extension BindingDiscovery {
             converter: converter
         )
         // `scopes` already includes this type's own frame (it was
-        // pushed by `enterTypeDecl` before `processSingleton` ran),
-        // so the joined names are the full qualified path.
+        // pushed by `enterTypeDecl`), so the joined names are the
+        // full qualified path.
         let qualified = scopes.map(\.typeName).joined(separator: ".")
         record(
             .singleton(
@@ -530,7 +548,8 @@ extension BindingDiscovery {
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
                     dependencies: dependencies,
-                    location: location(of: nameToken)
+                    location: location(of: nameToken),
+                    scopeKey: scopeKey
                 )
             )
         )
@@ -545,7 +564,7 @@ extension BindingDiscovery {
 /// type a binding in the *default* graph. Combining them means
 /// the type is both a node in one graph and a grouping for
 /// another — almost always a user error.
-private let scopeMacroNames = ["Singleton", "RequestScope", "JobScope"]
+private let scopeMacroNames = ["Singleton", "Scoped"]
 
 /// Find the first attribute in the list matching `name`, or `nil`.
 /// Used to reach the attribute's argument list when extracting a
@@ -585,6 +604,26 @@ private func keyIdentifier(from attribute: AttributeSyntax) -> String? {
     guard case let .argumentList(args) = attribute.arguments else { return nil }
     guard let firstArg = args.first else { return nil }
     return firstArg.expression.trimmedDescription
+}
+
+/// Extract the seed type expression from a `@Scoped(seed: SomeType.self)`
+/// attribute. Returns the base of the `.self` member access — `"SomeType"`
+/// for `SomeType.self`, `"Foo<Bar>"` for `Foo<Bar>.self`. Returns `nil`
+/// if the attribute is malformed in a way Swift would catch later
+/// (missing argument, non-`.self` expression).
+///
+/// Generic seed expressions are kept verbatim — `Foo<Bar>` and `Foo<Bar>`
+/// are the same scope, `Foo<Baz>` is a different scope. The build
+/// plugin's canonical-type-name whitespace normalisation kicks in
+/// during graph identity comparisons separately.
+private func seedTypeExpression(from attribute: AttributeSyntax) -> String? {
+    guard case let .argumentList(args) = attribute.arguments else { return nil }
+    guard let seedArg = args.first(where: { $0.label?.text == "seed" }) else { return nil }
+    guard let memberAccess = seedArg.expression.as(MemberAccessExprSyntax.self),
+        memberAccess.declName.baseName.text == "self",
+        let base = memberAccess.base
+    else { return nil }
+    return base.trimmedDescription
 }
 
 /// The parameter's external label — what callers write at the call

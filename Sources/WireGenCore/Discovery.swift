@@ -180,6 +180,13 @@ extension DiscoveredBinding {
 /// `qualifiedTypeName` at the construction site since the generated
 /// `_wireBootstrap...` function lives at module scope and can't see
 /// nested types unqualified.
+///
+/// Despite the name, this type also models `@Scoped(seed:)` bindings.
+/// `@Scoped` and `@Singleton` synthesise identical members and route
+/// the same way through the graph — the only structural difference is
+/// the `scopeKey`, which is non-nil for `@Scoped` bindings (recording
+/// the seed type) and nil for `@Singleton`. Renaming this type would
+/// have churned a lot of tests for cosmetic value.
 package struct DiscoveredSingleton: Sendable {
     package let typeName: String
     package let qualifiedTypeName: String
@@ -189,6 +196,11 @@ package struct DiscoveredSingleton: Sendable {
     /// Position of the type-name identifier in source — what the user
     /// would navigate to from a diagnostic.
     package let location: SourceLocation
+    /// `nil` for `@Singleton` bindings; non-nil for `@Scoped`
+    /// bindings, carrying the canonical seed-type expression (and a
+    /// `within` slot reserved for future hierarchical-scope work,
+    /// always `nil` today).
+    package let scopeKey: ScopeKey?
 
     package var sourcePath: String { location.file }
 
@@ -198,7 +210,8 @@ package struct DiscoveredSingleton: Sendable {
         typeKind: String,
         genericParameterNames: [String],
         dependencies: [DependencyParameter],
-        location: SourceLocation
+        location: SourceLocation,
+        scopeKey: ScopeKey? = nil
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -209,6 +222,7 @@ package struct DiscoveredSingleton: Sendable {
         self.genericParameterNames = genericParameterNames
         self.dependencies = dependencies
         self.location = location
+        self.scopeKey = scopeKey
     }
 }
 

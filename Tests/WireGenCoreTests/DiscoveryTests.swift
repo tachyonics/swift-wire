@@ -1481,4 +1481,153 @@ struct DiscoveryTests {
         #expect(warnings.count == 1)
         #expect(warnings[0].message.contains("'Array' isn't declared in this module"))
     }
+
+    // MARK: - @Scoped(seed:) discovery + per-seed routing
+
+    @Test func scopedTypeRoutedToPerSeedPartition() {
+        let source = """
+            @Scoped(seed: RequestSeed.self)
+            struct RequestLogger {
+            }
+            """
+        let result = discover(in: source, sourcePath: "RequestLogger.swift")
+        // Scoped types DON'T appear in the default-graph slice...
+        #expect(result.bindings.isEmpty)
+        // ...they're routed into `allBindings` under a Partition
+        // whose `scope` carries the seed.
+        let partition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
+        #expect(result.allBindings[partition]?.count == 1)
+        guard case .singleton(let singleton) = result.allBindings[partition]?.first else {
+            Issue.record("Expected a singleton-shaped scoped binding")
+            return
+        }
+        #expect(singleton.typeName == "RequestLogger")
+        #expect(singleton.scopeKey?.seed == "RequestSeed")
+        #expect(singleton.scopeKey?.within == nil)
+    }
+
+    @Test func twoScopedTypesSameSeedShareAPartition() {
+        let source = """
+            @Scoped(seed: RequestSeed.self)
+            struct RequestLogger {
+            }
+
+            @Scoped(seed: RequestSeed.self)
+            struct RequestMetrics {
+            }
+            """
+        let result = discover(in: source, sourcePath: "Request.swift")
+        let partition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
+        #expect(result.allBindings[partition]?.count == 2)
+    }
+
+    @Test func scopedTypesWithDifferentSeedsGetIndependentPartitions() {
+        let source = """
+            @Scoped(seed: RequestSeed.self)
+            struct RequestLogger {
+            }
+
+            @Scoped(seed: SQSMessage.self)
+            struct SQSWorker {
+            }
+            """
+        let result = discover(in: source, sourcePath: "Mixed.swift")
+        let requestPartition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
+        let sqsPartition = Partition(container: nil, scope: ScopeKey(seed: "SQSMessage"))
+        #expect(result.allBindings[requestPartition]?.count == 1)
+        #expect(result.allBindings[sqsPartition]?.count == 1)
+        // The two partitions are distinct keys; the scopes don't mix.
+        #expect(requestPartition != sqsPartition)
+    }
+
+    @Test func scopedSeedExpressionPreservesGenericArgs() {
+        // The seed expression goes through verbatim — `Foo<Bar>` is
+        // distinct from `Foo<Baz>`. The build plugin's canonical-type
+        // normalisation (whitespace stripping) happens separately at
+        // graph-identity time.
+        let source = """
+            @Scoped(seed: TenantSeed<String>.self)
+            struct TenantCache {
+            }
+            """
+        let result = discover(in: source, sourcePath: "TenantCache.swift")
+        let partition = Partition(
+            container: nil,
+            scope: ScopeKey(seed: "TenantSeed<String>")
+        )
+        #expect(result.allBindings[partition]?.count == 1)
+    }
+
+    @Test func singletonAndScopedCoexistInSeparatePartitions() {
+        let source = """
+            @Singleton
+            struct AppConfig {
+            }
+
+            @Scoped(seed: RequestSeed.self)
+            struct RequestLogger {
+            }
+            """
+        let result = discover(in: source, sourcePath: "App.swift")
+        // @Singleton lands in the default partition (container nil,
+        // scope nil); @Scoped lands in a per-seed partition. They
+        // share the dictionary but stay separate keys.
+        #expect(result.bindings.count == 1)
+        let scopedPartition = Partition(
+            container: nil,
+            scope: ScopeKey(seed: "RequestSeed")
+        )
+        #expect(result.allBindings[scopedPartition]?.count == 1)
+        if case .singleton(let singleton) = result.bindings.first {
+            #expect(singleton.scopeKey == nil)
+        } else {
+            Issue.record("Expected AppConfig to be discovered as a default-graph singleton")
+        }
+    }
+
+    @Test func scopedInsideContainerRoutesToContainerAndSeedPartition() {
+        // Container × scope is orthogonal: a `@Scoped` inside a
+        // `@Container` lands in a partition keyed by both
+        // (container: "TestContainer", scope: seed). Tests can swap
+        // request-scoped types by selecting the container.
+        let source = """
+            @Container
+            enum TestContainer {
+                @Scoped(seed: RequestSeed.self)
+                struct TestRequestLogger {
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "TestContainer.swift")
+        let partition = Partition(
+            container: "TestContainer",
+            scope: ScopeKey(seed: "RequestSeed")
+        )
+        #expect(result.allBindings[partition]?.count == 1)
+        // The default-graph slice and the test container's singleton
+        // slice are both empty — the scoped binding isn't in either.
+        #expect(result.bindings.isEmpty)
+        #expect(result.containerBindings["TestContainer"]?.isEmpty ?? true)
+    }
+
+    @Test func containerWithScopedWarningFires() {
+        // `@Container` plus `@Scoped` on the same type is as
+        // problematic as `@Container` plus `@Singleton` — the type
+        // ends up as both a node in one graph and a grouping for
+        // another. Iteration-3's container-with-scope warning fires
+        // for both since `scopeMacroNames` now contains "Scoped".
+        let source = """
+            @Container
+            @Scoped(seed: RequestSeed.self)
+            struct Mixed {
+            }
+            """
+        let result = discover(in: source, sourcePath: "Mixed.swift")
+        #expect(result.warnings.count == 1)
+        #expect(
+            result.warnings[0].message.contains(
+                "'Mixed' carries both @Container and @Scoped"
+            )
+        )
+    }
 }
