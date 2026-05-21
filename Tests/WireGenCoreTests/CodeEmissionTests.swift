@@ -17,8 +17,8 @@ struct CodeEmissionTests {
                 location: mockLocation("\(name).swift")
             )
         }
-        return .singleton(
-            DiscoveredSingleton(
+        return .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: name,
                 qualifiedTypeName: qualifiedTypeName,
                 typeKind: "struct",
@@ -733,8 +733,8 @@ struct CodeEmissionTests {
         depColumn: Int = 1,
         depSourcePath: String? = nil
     ) -> DiscoveredBinding {
-        .singleton(
-            DiscoveredSingleton(
+        .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: name,
                 typeKind: "struct",
                 genericParameterNames: [],
@@ -1053,8 +1053,8 @@ struct CodeEmissionTests {
                 keyIdentifier: "Database.primary"
             )
         )
-        let consumer: DiscoveredBinding = .singleton(
-            DiscoveredSingleton(
+        let consumer: DiscoveredBinding = .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: "UserRepo",
                 typeKind: "struct",
                 genericParameterNames: [],

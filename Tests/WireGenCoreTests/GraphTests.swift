@@ -19,8 +19,8 @@ struct GraphTests {
                 location: mockLocation("\(name).swift")
             )
         }
-        return .singleton(
-            DiscoveredSingleton(
+        return .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: name,
                 typeKind: "struct",
                 genericParameterNames: generics,
@@ -40,8 +40,8 @@ struct GraphTests {
         depType: String,
         depKey: String?
     ) -> DiscoveredBinding {
-        .singleton(
-            DiscoveredSingleton(
+        .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: name,
                 typeKind: "struct",
                 genericParameterNames: [],
@@ -919,7 +919,7 @@ struct GraphTests {
 
     @Test func concreteAndGenericForSameInstantiationIsAmbiguous() throws {
         // A concrete `@Provides static let r: Repository<DynamoDBTable>`
-        // exists alongside a generic `Repository<T>` singleton. Both
+        // exists alongside a generic `Repository<T>` scopeBound. Both
         // could satisfy a consumer's `Repository<DynamoDBTable>` dep,
         // which is ambiguous — Wire surfaces this as a duplicate-
         // binding error (consistent with how two concrete bindings for
@@ -955,12 +955,12 @@ struct GraphTests {
         let kinds = Set(
             duplicate.bindings.map { binding -> String in
                 switch binding {
-                case .singleton: return "singleton"
+                case .scopeBound: return "scopeBound"
                 case .provider: return "provider"
                 }
             }
         )
-        #expect(kinds == ["singleton", "provider"])
+        #expect(kinds == ["scopeBound", "provider"])
     }
 
     @Test func concreteAndGenericWithDifferentKeysCoexist() throws {

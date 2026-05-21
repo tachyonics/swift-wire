@@ -6,13 +6,13 @@ import Testing
 struct DiscoveryTests {
     /// Extract just the `@Singleton` bindings — preserves the
     /// pre-`@Provides` shape of these tests, which assert on
-    /// `DiscoveredSingleton` fields directly.
+    /// `DiscoveredScopeBoundType` fields directly.
     private func discoverSingletons(
         in source: String,
         sourcePath: String
-    ) -> [DiscoveredSingleton] {
+    ) -> [DiscoveredScopeBoundType] {
         discover(in: source, sourcePath: sourcePath).bindings.compactMap { binding in
-            if case .singleton(let singleton) = binding { return singleton }
+            if case .scopeBound(let scopeBound) = binding { return scopeBound }
             return nil
         }
     }
@@ -501,8 +501,8 @@ struct DiscoveryTests {
             """
         let bindings = discover(in: source, sourcePath: "Mixed.swift").bindings
         #expect(bindings.count == 3)
-        let singletons = bindings.compactMap { binding -> DiscoveredSingleton? in
-            if case .singleton(let s) = binding { return s }
+        let singletons = bindings.compactMap { binding -> DiscoveredScopeBoundType? in
+            if case .scopeBound(let s) = binding { return s }
             return nil
         }
         let providers = bindings.compactMap { binding -> DiscoveredProvider? in
@@ -557,10 +557,10 @@ struct DiscoveryTests {
         #expect(result.bindings.isEmpty)
         let testContainerBindings = result.containerBindings["TestContainer"] ?? []
         #expect(testContainerBindings.count == 1)
-        if case .singleton(let singleton) = testContainerBindings[0] {
-            #expect(singleton.typeName == "MockService")
-            #expect(singleton.qualifiedTypeName == "TestContainer.MockService")
-            #expect(singleton.dependencies.first?.type == "Logger")
+        if case .scopeBound(let scopeBound) = testContainerBindings[0] {
+            #expect(scopeBound.typeName == "MockService")
+            #expect(scopeBound.qualifiedTypeName == "TestContainer.MockService")
+            #expect(scopeBound.dependencies.first?.type == "Logger")
         } else {
             Issue.record("expected singleton binding")
         }
@@ -855,8 +855,8 @@ struct DiscoveryTests {
     @Test func discoveryReportSkipsFilesWithNoBindings() {
         // Files that contained no bindings should not appear in the
         // report body; they still count toward "source file(s)" though.
-        let item: DiscoveredBinding = .singleton(
-            DiscoveredSingleton(
+        let item: DiscoveredBinding = .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: "A",
                 typeKind: "struct",
                 genericParameterNames: [],
@@ -874,8 +874,8 @@ struct DiscoveryTests {
     }
 
     @Test func discoveryReportRendersSingletonGenerics() {
-        let item: DiscoveredBinding = .singleton(
-            DiscoveredSingleton(
+        let item: DiscoveredBinding = .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: "Repository",
                 typeKind: "struct",
                 genericParameterNames: ["Model"],
@@ -888,8 +888,8 @@ struct DiscoveryTests {
     }
 
     @Test func discoveryReportRendersInjectPropertyDependency() {
-        let item: DiscoveredBinding = .singleton(
-            DiscoveredSingleton(
+        let item: DiscoveredBinding = .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: "A",
                 typeKind: "struct",
                 genericParameterNames: [],
@@ -910,8 +910,8 @@ struct DiscoveryTests {
     }
 
     @Test func discoveryReportRendersInjectInitParameterDependency() {
-        let item: DiscoveredBinding = .singleton(
-            DiscoveredSingleton(
+        let item: DiscoveredBinding = .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: "A",
                 typeKind: "struct",
                 genericParameterNames: [],
@@ -970,8 +970,8 @@ struct DiscoveryTests {
     }
 
     @Test func discoveryReportShowsNoDependenciesNoticeWhenEmpty() {
-        let item: DiscoveredBinding = .singleton(
-            DiscoveredSingleton(
+        let item: DiscoveredBinding = .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: "A",
                 typeKind: "struct",
                 genericParameterNames: [],
@@ -1497,13 +1497,13 @@ struct DiscoveryTests {
         // whose `scope` carries the seed.
         let partition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
         #expect(result.allBindings[partition]?.count == 1)
-        guard case .singleton(let singleton) = result.allBindings[partition]?.first else {
+        guard case .scopeBound(let scopeBound) = result.allBindings[partition]?.first else {
             Issue.record("Expected a singleton-shaped scoped binding")
             return
         }
-        #expect(singleton.typeName == "RequestLogger")
-        #expect(singleton.scopeKey?.seed == "RequestSeed")
-        #expect(singleton.scopeKey?.within == nil)
+        #expect(scopeBound.typeName == "RequestLogger")
+        #expect(scopeBound.scopeKey?.seed == "RequestSeed")
+        #expect(scopeBound.scopeKey?.within == nil)
     }
 
     @Test func twoScopedTypesSameSeedShareAPartition() {
@@ -1578,8 +1578,8 @@ struct DiscoveryTests {
             scope: ScopeKey(seed: "RequestSeed")
         )
         #expect(result.allBindings[scopedPartition]?.count == 1)
-        if case .singleton(let singleton) = result.bindings.first {
-            #expect(singleton.scopeKey == nil)
+        if case .scopeBound(let scopeBound) = result.bindings.first {
+            #expect(scopeBound.scopeKey == nil)
         } else {
             Issue.record("Expected AppConfig to be discovered as a default-graph singleton")
         }

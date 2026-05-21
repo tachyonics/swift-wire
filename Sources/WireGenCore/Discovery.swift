@@ -96,7 +96,7 @@ package struct Partition: Hashable, Sendable {
 /// construction call shape differs (`Type(args)` vs `accessPath` vs
 /// `accessPath(args)`).
 package enum DiscoveredBinding: Sendable {
-    case singleton(DiscoveredSingleton)
+    case scopeBound(DiscoveredScopeBoundType)
     case provider(DiscoveredProvider)
 }
 
@@ -106,7 +106,7 @@ extension DiscoveredBinding {
     /// or the function's return type. Bindings are graph-keyed by this.
     package var boundType: String {
         switch self {
-        case .singleton(let singleton): return singleton.typeName
+        case .scopeBound(let scopeBound): return scopeBound.typeName
         case .provider(let provider): return provider.boundType
         }
     }
@@ -121,7 +121,7 @@ extension DiscoveredBinding {
     /// iteration 3 if it bites).
     package var boundTypeReference: String {
         switch self {
-        case .singleton(let singleton): return singleton.qualifiedTypeName
+        case .scopeBound(let scopeBound): return scopeBound.qualifiedTypeName
         case .provider(let provider): return provider.boundType
         }
     }
@@ -131,7 +131,7 @@ extension DiscoveredBinding {
     /// `@Provides func`, empty for `@Provides let`.
     package var dependencies: [DependencyParameter] {
         switch self {
-        case .singleton(let singleton): return singleton.dependencies
+        case .scopeBound(let scopeBound): return scopeBound.dependencies
         case .provider(let provider): return provider.dependencies
         }
     }
@@ -141,14 +141,14 @@ extension DiscoveredBinding {
     /// specialisation pass (not yet implemented).
     package var genericParameterNames: [String] {
         switch self {
-        case .singleton(let singleton): return singleton.genericParameterNames
+        case .scopeBound(let scopeBound): return scopeBound.genericParameterNames
         case .provider(let provider): return provider.genericParameterNames
         }
     }
 
     package var location: SourceLocation {
         switch self {
-        case .singleton(let singleton): return singleton.location
+        case .scopeBound(let scopeBound): return scopeBound.location
         case .provider(let provider): return provider.location
         }
     }
@@ -162,7 +162,7 @@ extension DiscoveredBinding {
     /// Graph identity is `(boundType, keyIdentifier?)`.
     package var keyIdentifier: String? {
         switch self {
-        case .singleton: return nil
+        case .scopeBound: return nil
         case .provider(let provider): return provider.keyIdentifier
         }
     }
@@ -187,7 +187,7 @@ extension DiscoveredBinding {
 /// the `scopeKey`, which is non-nil for `@Scoped` bindings (recording
 /// the seed type) and nil for `@Singleton`. Renaming this type would
 /// have churned a lot of tests for cosmetic value.
-package struct DiscoveredSingleton: Sendable {
+package struct DiscoveredScopeBoundType: Sendable {
     package let typeName: String
     package let qualifiedTypeName: String
     package let typeKind: String
@@ -533,8 +533,8 @@ package func renderDiscoveryReport(
         for item in items {
             totalCount += 1
             switch item {
-            case .singleton(let singleton):
-                renderSingleton(singleton, into: &lines)
+            case .scopeBound(let scopeBound):
+                renderScopeBoundType(scopeBound, into: &lines)
             case .provider(let provider):
                 renderProvider(provider, into: &lines)
             }
@@ -549,7 +549,7 @@ package func renderDiscoveryReport(
     return lines.joined(separator: "\n")
 }
 
-private func renderSingleton(_ item: DiscoveredSingleton, into lines: inout [String]) {
+private func renderScopeBoundType(_ item: DiscoveredScopeBoundType, into lines: inout [String]) {
     let generics =
         item.genericParameterNames.isEmpty
         ? ""

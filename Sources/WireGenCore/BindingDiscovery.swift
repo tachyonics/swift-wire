@@ -115,7 +115,7 @@ final class BindingDiscovery: SyntaxVisitor {
     /// (non-nil for `@Scoped(seed:)`).
     private func record(_ binding: DiscoveredBinding) {
         let scopeKey: ScopeKey? = {
-            if case .singleton(let singleton) = binding { return singleton.scopeKey }
+            if case .scopeBound(let scopeBound) = binding { return scopeBound.scopeKey }
             return nil
         }()
         let partition = Partition(
@@ -541,8 +541,8 @@ extension BindingDiscovery {
         // full qualified path.
         let qualified = scopes.map(\.typeName).joined(separator: ".")
         record(
-            .singleton(
-                DiscoveredSingleton(
+            .scopeBound(
+                DiscoveredScopeBoundType(
                     typeName: nameToken.text,
                     qualifiedTypeName: qualified,
                     typeKind: typeKind,
