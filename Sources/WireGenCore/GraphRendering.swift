@@ -142,7 +142,7 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
 /// the type name for `@Singleton`, the access path for `@Provides`.
 private func displayName(_ binding: DiscoveredBinding) -> String {
     switch binding {
-    case .singleton(let singleton): return singleton.typeName
+    case .scopeBound(let scopeBound): return scopeBound.typeName
     case .provider(let provider): return provider.accessPath
     }
 }

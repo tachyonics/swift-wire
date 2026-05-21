@@ -195,7 +195,7 @@ struct WireGen {
             aggregate.allBindings.values
                 .flatMap { $0 }
                 .compactMap { binding -> String? in
-                    if case .singleton(let singleton) = binding { return singleton.typeName }
+                    if case .scopeBound(let scopeBound) = binding { return scopeBound.typeName }
                     return nil
                 }
         )

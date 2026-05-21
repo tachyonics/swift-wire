@@ -233,15 +233,15 @@ private func constructionExpression(
     for binding: DiscoveredBinding
 ) -> String {
     switch binding {
-    case .singleton(let singleton):
+    case .scopeBound(let scopeBound):
         // Generic instantiations (`Repository<TaskTable>`) keep their
         // angle brackets at the call site since Swift's syntax accepts
         // that. `qualifiedTypeName` includes any enclosing-type
         // prefix (e.g. `TestContainer.MockService`) so a `@Singleton`
         // nested inside a `@Container` resolves correctly when called
         // from the module-scope `_wireBootstrap...` free function.
-        let args = renderArguments(singleton.dependencies)
-        return "\(singleton.qualifiedTypeName)(\(args))"
+        let args = renderArguments(scopeBound.dependencies)
+        return "\(scopeBound.qualifiedTypeName)(\(args))"
     case .provider(let provider):
         switch provider.form {
         case .property:

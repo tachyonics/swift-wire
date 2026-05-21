@@ -421,8 +421,8 @@ private func genericBindingSignature(
 ) -> (base: String, paramCount: Int)? {
     guard !binding.genericParameterNames.isEmpty else { return nil }
     switch binding {
-    case .singleton(let singleton):
-        return (singleton.typeName, binding.genericParameterNames.count)
+    case .scopeBound(let scopeBound):
+        return (scopeBound.typeName, binding.genericParameterNames.count)
     case .provider(let provider):
         let parsed = parseGenericType(canonicalTypeName(provider.boundType))
         return (parsed.base, binding.genericParameterNames.count)
@@ -457,26 +457,26 @@ private func specialiseBinding(
         )
     }
     switch binding {
-    case .singleton(let singleton):
+    case .scopeBound(let scopeBound):
         // The specialised concrete type expression replaces both
         // `typeName` and `qualifiedTypeName` so codegen renders the
         // construction call as `Repository<DynamoDBTable>(...)` and
         // the stored-property type annotation matches.
-        let concreteType = "\(singleton.typeName)<\(concreteArguments.joined(separator: ", "))>"
+        let concreteType = "\(scopeBound.typeName)<\(concreteArguments.joined(separator: ", "))>"
         let enclosingPrefix =
-            singleton.qualifiedTypeName.hasSuffix(singleton.typeName)
+            scopeBound.qualifiedTypeName.hasSuffix(scopeBound.typeName)
             ? String(
-                singleton.qualifiedTypeName.dropLast(singleton.typeName.count)
+                scopeBound.qualifiedTypeName.dropLast(scopeBound.typeName.count)
             )
             : ""
-        return .singleton(
-            DiscoveredSingleton(
+        return .scopeBound(
+            DiscoveredScopeBoundType(
                 typeName: concreteType,
                 qualifiedTypeName: enclosingPrefix + concreteType,
-                typeKind: singleton.typeKind,
+                typeKind: scopeBound.typeKind,
                 genericParameterNames: [],
                 dependencies: substitutedDependencies,
-                location: singleton.location
+                location: scopeBound.location
             )
         )
     case .provider(let provider):
