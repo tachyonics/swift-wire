@@ -30,6 +30,63 @@ package struct SourceLocation: Sendable, Hashable {
 
 // MARK: - Discovery model
 
+/// Identifies a `@Scoped` binding's scope partition. Today only the
+/// seed type matters; `within` is reserved for the future
+/// `@Scoped(within:)` hierarchical-scope work and is always `nil`.
+/// Treating it as a structured key from the start means reopening
+/// hierarchical scopes later doesn't reshape this type.
+package struct ScopeKey: Hashable, Sendable {
+    /// Canonical text of the seed-type expression from the `@Scoped`
+    /// argument (e.g. `"HBRequestSeed"`).
+    package let seed: String
+    /// Canonical text of the enclosing parent scope's seed type, when
+    /// hierarchical scopes are in use. Always `nil` today.
+    package let within: String?
+
+    package init(seed: String, within: String? = nil) {
+        self.seed = seed
+        self.within = within
+    }
+}
+
+/// Identifies where a discovered binding belongs in the graph
+/// space. Two orthogonal axes:
+///
+/// - `container`: `nil` for the default graph; non-nil for a named
+///   `@Container`'s graph. Selecting a container at the entry point
+///   replaces the default graph atomically — module-scope bindings
+///   don't merge in (README's atomic-selection rule).
+/// - `scope`: `nil` for singleton-lifetime bindings (process-wide for
+///   `@Singleton`, container-wide for an in-container `@Provides`);
+///   non-nil for `@Scoped(seed:)` bindings, identifying the per-seed
+///   scope partition.
+///
+/// All four combinations are valid placements:
+///
+/// | container | scope | Placement                                |
+/// | --------- | ----- | ---------------------------------------- |
+/// | `nil`     | `nil` | Default graph, singleton lifetime        |
+/// | `"Foo"`   | `nil` | `Foo` container's graph, singletons      |
+/// | `nil`     | seed  | Default graph's per-seed scope           |
+/// | `"Foo"`   | seed  | `Foo` container's per-seed scope         |
+///
+/// Container × scope is orthogonal: a `@Container`-selected graph
+/// has its own scoped pools, separate from module-scope ones.
+package struct Partition: Hashable, Sendable {
+    package let container: String?
+    package let scope: ScopeKey?
+
+    package init(container: String? = nil, scope: ScopeKey? = nil) {
+        self.container = container
+        self.scope = scope
+    }
+
+    /// The default-graph singleton partition — `container == nil`,
+    /// `scope == nil`. Convenience for tests and call sites that
+    /// build the most common partition by name.
+    package static let `default` = Partition()
+}
+
 /// One binding the build plugin found in source — either a `@Singleton`
 /// type whose construction Wire owns, or a `@Provides`-declared property
 /// or function the user wrote to supply a value.
@@ -270,19 +327,15 @@ package enum DependencyKind: Sendable, Equatable {
 /// statements, partitioning bindings between the default graph and
 /// any `@Container` enums encountered.
 package struct SourceFileDiscovery: Sendable {
-    /// Bindings that feed the default graph: module-scope `@Provides`,
-    /// module-scope `@Singleton`s, and static `@Provides` on
-    /// enclosing types that are *not* `@Container`-annotated.
-    package let bindings: [DiscoveredBinding]
-    /// Bindings inside `@Container`-annotated declarations, keyed by
-    /// container name. Each container's list contains `@Provides`
-    /// static members and nested `@Singleton` types from every
-    /// `@Container`-annotated declaration that targets the same type
-    /// name (a primary `@Container enum Foo` plus any
-    /// `@Container extension Foo` declarations all contribute here).
-    /// Plain (un-`@Container`-annotated) extensions don't contribute;
-    /// their bindings fall through to the default `bindings` list.
-    package let containerBindings: [String: [DiscoveredBinding]]
+    /// Every discovered binding, partitioned by `(container, scope)`.
+    /// One uniform structure covers all four placement combinations
+    /// described on `Partition`: default-graph singletons,
+    /// container-graph singletons, default-graph scoped, and
+    /// container-graph scoped. Callers that need the historical
+    /// "default bindings" / "named container's bindings" slices use
+    /// the convenience accessors below, or filter `allBindings` by
+    /// `partition.container` / `partition.scope` directly.
+    package let allBindings: [Partition: [DiscoveredBinding]]
     package let imports: [String]
     /// Source-pattern warnings the visitor surfaced during this file's
     /// parse — things like `@Inject` on an extension init (silently
@@ -315,8 +368,7 @@ package struct SourceFileDiscovery: Sendable {
     package let nonInjectExtensionInits: [NonInjectExtensionInit]
 
     package init(
-        bindings: [DiscoveredBinding],
-        containerBindings: [String: [DiscoveredBinding]] = [:],
+        allBindings: [Partition: [DiscoveredBinding]] = [:],
         imports: [String],
         warnings: [Warning] = [],
         unannotatedExtensionProvides: [UnannotatedExtensionProvides] = [],
@@ -324,14 +376,36 @@ package struct SourceFileDiscovery: Sendable {
         declaredTypeNames: [String] = [],
         nonInjectExtensionInits: [NonInjectExtensionInit] = []
     ) {
-        self.bindings = bindings
-        self.containerBindings = containerBindings
+        self.allBindings = allBindings
         self.imports = imports
         self.warnings = warnings
         self.unannotatedExtensionProvides = unannotatedExtensionProvides
         self.typealiases = typealiases
         self.declaredTypeNames = declaredTypeNames
         self.nonInjectExtensionInits = nonInjectExtensionInits
+    }
+}
+
+extension SourceFileDiscovery {
+    /// Default-graph singleton bindings: `partition.container == nil`
+    /// and `partition.scope == nil`. Convenience accessor for the
+    /// most-common slice; equivalent to
+    /// `allBindings[.default] ?? []`.
+    package var bindings: [DiscoveredBinding] {
+        allBindings[.default] ?? []
+    }
+
+    /// Singleton bindings inside `@Container`-annotated declarations,
+    /// grouped by container name. Today every entry is `scope == nil`;
+    /// once `@Scoped` lands, per-container scoped bindings live in
+    /// their own partitions and are derived separately.
+    package var containerBindings: [String: [DiscoveredBinding]] {
+        var result: [String: [DiscoveredBinding]] = [:]
+        for (partition, bindings) in allBindings {
+            guard let container = partition.container, partition.scope == nil else { continue }
+            result[container, default: []].append(contentsOf: bindings)
+        }
+        return result
     }
 }
 
@@ -416,8 +490,7 @@ package func discover(
     let visitor = BindingDiscovery(sourcePath: sourcePath, converter: converter)
     visitor.walk(syntaxTree)
     return SourceFileDiscovery(
-        bindings: visitor.bindings,
-        containerBindings: visitor.containerBindings,
+        allBindings: visitor.allBindings,
         imports: visitor.imports,
         warnings: visitor.warnings,
         unannotatedExtensionProvides: visitor.unannotatedExtensionProvides,

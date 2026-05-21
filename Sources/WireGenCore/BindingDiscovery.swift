@@ -24,14 +24,13 @@ import SwiftSyntax
 /// them) and in the consumer's compiler errors if they `@Inject` a
 /// dependency no binding satisfies.
 final class BindingDiscovery: SyntaxVisitor {
-    /// Default-graph bindings: module-scope `@Provides`, module-scope
-    /// `@Singleton`s, and static `@Provides` on non-`@Container`
-    /// enclosing types.
-    var bindings: [DiscoveredBinding] = []
-    /// Bindings discovered inside `@Container` enums, keyed by
-    /// container name. The same `DiscoveredBinding` model is reused —
-    /// the container partition is purely about *where* a binding goes.
-    var containerBindings: [String: [DiscoveredBinding]] = [:]
+    /// Every discovered binding partitioned by `(container, scope)`.
+    /// `record(_:)` derives the partition from the current visitor
+    /// state and the binding's scope identity (currently always nil;
+    /// `@Scoped(seed:)` will start populating it). One uniform dict
+    /// covers default-graph, container-graph, and any future scope
+    /// partitions.
+    var allBindings: [Partition: [DiscoveredBinding]] = [:]
     /// Verbatim `import` statements found in the source — captured for
     /// propagation into the generated `_WireGraph.swift` so any types
     /// referenced by discovered bindings stay in scope. Includes
@@ -110,15 +109,17 @@ final class BindingDiscovery: SyntaxVisitor {
         )
     }
 
-    /// Append a binding to either the default graph or the active
-    /// container's bucket. The top frame's `containerName` is the
-    /// container in scope, or `nil` for the default graph.
+    /// Append a binding to its `(container, scope)` partition. The
+    /// container axis comes from the visitor's enclosing-scope stack;
+    /// the scope axis comes from the binding's own scope identity
+    /// (currently always nil — `@Scoped(seed:)` recognition will set
+    /// this in a follow-up).
     private func record(_ binding: DiscoveredBinding) {
-        if let container = scopes.last?.containerName {
-            containerBindings[container, default: []].append(binding)
-        } else {
-            bindings.append(binding)
-        }
+        let partition = Partition(
+            container: scopes.last?.containerName,
+            scope: nil
+        )
+        allBindings[partition, default: []].append(binding)
     }
 
     // MARK: Import collection — verbatim text, no semantic analysis.

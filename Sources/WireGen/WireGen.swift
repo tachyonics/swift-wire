@@ -38,10 +38,12 @@ struct WireGen {
         // Each is validated independently (atomic; no cross-graph
         // leakage).
         let defaultGraph = buildDependencyGraph(
-            from: aggregate.defaultBindings,
+            from: defaultBindings(in: aggregate),
             typealiases: aggregate.typealiases
         )
-        let containerGraphs = aggregate.containerBindings
+        let containerSingletonBindings = containerSingletonBindings(in: aggregate)
+        let containerGraphs =
+            containerSingletonBindings
             .sorted(by: { $0.key < $1.key })
             .map { name, bindings in
                 (
@@ -54,7 +56,7 @@ struct WireGen {
             }
 
         printSkippedReport(default: defaultGraph, containers: containerGraphs)
-        let containerNames = Set(aggregate.containerBindings.keys)
+        let containerNames = Set(containerSingletonBindings.keys)
         let singletonTypeNames = singletonTypeNames(in: aggregate)
         let unannotatedExtensionContainerWarnings = unannotatedExtensionContainerWarnings(
             candidates: aggregate.unannotatedExtensionProvides,
@@ -90,17 +92,15 @@ struct WireGen {
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
 
-        // Key checks: every binding (default + container) is fair game
+        // Key checks: every binding across every partition is fair game
         // for a keyed annotation, and the emitted file is independent
         // of the graph's topological ordering — it's pure type
         // assertion scaffolding the Swift compiler runs through when
         // building the consumer.
-        let allBindings =
-            aggregate.defaultBindings
-            + aggregate.containerBindings.values.flatMap { $0 }
+        let allBindingsFlat = aggregate.allBindings.values.flatMap { $0 }
         let keyChecks = renderWireKeyChecks(
             imports: aggregate.imports,
-            allBindings: allBindings
+            allBindings: allBindingsFlat
         )
         try keyChecks.write(toFile: keyChecksOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(keyChecksOutputPath)")
@@ -108,14 +108,14 @@ struct WireGen {
 
     // MARK: - Helpers
 
-    /// Aggregated per-file discovery: bindings shown together in the
-    /// discovery report (default + container), plus the two separate
-    /// buckets the graph orchestration needs, plus the union of
-    /// imports from binding-bearing files.
+    /// Aggregated per-file discovery: a flat per-file inventory for
+    /// the discovery report plus the unified `(container, scope)`
+    /// binding partition for graph orchestration. Per-graph slices
+    /// (default, named container) are derived from `allBindings` at
+    /// the point of use via the helpers below.
     private struct DiscoveryAggregate {
         var perFile: [(path: String, items: [DiscoveredBinding])] = []
-        var defaultBindings: [DiscoveredBinding] = []
-        var containerBindings: [String: [DiscoveredBinding]] = [:]
+        var allBindings: [Partition: [DiscoveredBinding]] = [:]
         var imports: [String] = []
         var warnings: [Warning] = []
         var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
@@ -131,24 +131,21 @@ struct WireGen {
             let result = discover(in: source, sourcePath: path)
 
             // For the discovery report, show all of the file's bindings
-            // (default and container) together — the access path on
+            // together regardless of partition — the access path on
             // provider bindings already encodes the container name, so
             // a flat per-file view stays informative.
-            let containerBindingsList = result.containerBindings.values.flatMap { $0 }
-            aggregate.perFile.append(
-                (path: path, items: result.bindings + containerBindingsList)
-            )
+            let fileBindings = result.allBindings.values.flatMap { $0 }
+            aggregate.perFile.append((path: path, items: fileBindings))
 
-            aggregate.defaultBindings.append(contentsOf: result.bindings)
-            for (name, bindings) in result.containerBindings {
-                aggregate.containerBindings[name, default: []].append(contentsOf: bindings)
+            for (partition, bindings) in result.allBindings {
+                aggregate.allBindings[partition, default: []].append(contentsOf: bindings)
             }
 
             // Only collect imports from files that contribute bindings.
             // Files with no @Singleton/@Provides have nothing to add to
             // the generated file's type-visibility needs — including
             // their imports would just leak unrelated modules.
-            if !result.bindings.isEmpty || !result.containerBindings.isEmpty {
+            if !result.allBindings.isEmpty {
                 aggregate.imports.append(contentsOf: result.imports)
             }
 
@@ -165,20 +162,42 @@ struct WireGen {
         return aggregate
     }
 
+    /// Default-graph singleton bindings.
+    /// `partition.container == nil && partition.scope == nil`.
+    private static func defaultBindings(
+        in aggregate: DiscoveryAggregate
+    ) -> [DiscoveredBinding] {
+        aggregate.allBindings[.default] ?? []
+    }
+
+    /// Singleton bindings inside each named container, grouped by
+    /// container name. Today every entry has `scope == nil`; when
+    /// `@Scoped` recognition lands, per-container scoped bindings
+    /// will live in their own partitions and be derived separately.
+    private static func containerSingletonBindings(
+        in aggregate: DiscoveryAggregate
+    ) -> [String: [DiscoveredBinding]] {
+        var result: [String: [DiscoveredBinding]] = [:]
+        for (partition, bindings) in aggregate.allBindings {
+            guard let container = partition.container, partition.scope == nil else { continue }
+            result[container, default: []].append(contentsOf: bindings)
+        }
+        return result
+    }
+
     /// Collect type names of `@Singleton` bindings across every graph
     /// (default + every container). Drives the extension-init-conflict
     /// warning — `@Singleton` is the only scope macro whose generated
-    /// init the warning needs to be aware of; future scopes (`@RequestScope`,
-    /// `@JobScope`) will join the set here when they land.
+    /// init the warning needs to be aware of; future scopes (`@Scoped`)
+    /// will join the set here when they land.
     private static func singletonTypeNames(in aggregate: DiscoveryAggregate) -> Set<String> {
-        let allBindings =
-            aggregate.defaultBindings
-            + aggregate.containerBindings.values.flatMap { $0 }
-        return Set(
-            allBindings.compactMap { binding -> String? in
-                if case .singleton(let singleton) = binding { return singleton.typeName }
-                return nil
-            }
+        Set(
+            aggregate.allBindings.values
+                .flatMap { $0 }
+                .compactMap { binding -> String? in
+                    if case .singleton(let singleton) = binding { return singleton.typeName }
+                    return nil
+                }
         )
     }
 
