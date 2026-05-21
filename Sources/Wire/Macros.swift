@@ -1,8 +1,8 @@
 // Public-facing macro declarations.
 //
-// The currently shipping surface is `@Singleton`, `@Inject`,
-// `@Provides`, and `@Container`. `@RequestScope`, `@JobScope`, and
-// `@Contributes` are planned for later milestones.
+// The currently shipping surface is `@Singleton`, `@Scoped`,
+// `@Inject`, `@Provides`, and `@Container`. `@Contributes` is
+// planned for a later milestone.
 
 /// Declares a process-lifetime singleton. The macro generates:
 /// - A `static let key: BindingKey<Self>` for the auto-generated key.
@@ -15,10 +15,33 @@
 @attached(member, names: named(init), named(key))
 public macro Singleton() = #externalMacro(module: "WireMacrosImpl", type: "SingletonMacro")
 
+/// Declares a type that lives for the dynamic extent of a scope keyed
+/// by `seed`. The seed type uniquely identifies the scope — two
+/// `@Scoped(seed: X.self)` types share a scope iff `X` is the same
+/// type. Bindings in the scope (including the seed value itself) are
+/// available to any `@Scoped(seed: X.self)` type inside it; the seed
+/// is implicitly bound when the scope is entered via
+/// `withScope(seeding:body:)`.
+///
+/// The macro generates the same members as `@Singleton`: an `init(...)`
+/// from `@Inject`-marked properties (or the user's `@Inject`-marked
+/// init), and a `static var key: BindingKey<Self>`. Scope identity
+/// (which graph partition the binding belongs to) is read by the
+/// build plugin from the `seed:` argument; it doesn't enter the
+/// generated members.
+///
+/// Apply to a struct, class, or actor. Generic types are supported.
+///
+/// `@Singleton` is the special case for process-lifetime values that
+/// have no seed.
+@attached(member, names: named(init), named(key))
+public macro Scoped<Seed>(seed: Seed.Type) =
+    #externalMacro(module: "WireMacrosImpl", type: "ScopedMacro")
+
 /// Marks a stored property (or init parameter) as an injection point.
-/// The enclosing type's scope macro (`@Singleton`, `@RequestScope`,
-/// `@JobScope`) reads these markers to synthesise its initialiser, and
-/// the build plugin reads them when discovering dependencies.
+/// The enclosing type's scope macro (`@Singleton` or `@Scoped`) reads
+/// these markers to synthesise its initialiser, and the build plugin
+/// reads them when discovering dependencies.
 ///
 /// `@Inject` itself contributes no code — it's a marker that other
 /// macros and the build plugin recognise. Putting `@Inject` on a
