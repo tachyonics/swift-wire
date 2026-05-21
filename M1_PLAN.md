@@ -396,6 +396,14 @@ Reasons to defer:
 
 Decision point: when an adopter has a real session-scoped value (or tenant-scoped value, etc.) that they want to express as scope nesting rather than as a composite seed, that's the signal to design `@Scoped(within:)`. Until then, document the shape here and let the composite-seed workaround serve.
 
+### Opaque-type returns from `@Provides` (`@Provides -> some P`)
+
+Wire's existing specialisation handles concrete-typed providers and `any P`-typed providers. The middle ground — `@Provides func makeDB() -> some DatabaseClient { ... }` with a generic consumer `Foo<DB: DatabaseClient>` — preserves the protocol-level abstraction at the source while keeping compile-time identity through generic specialisation. The pattern is useful but requires non-trivial codegen: every opaque-typed binding lifts a generic parameter onto the generated `_WireGraph`, and the bootstrap returns `_WireGraph<some P1, some P2, ...>` with opaque arguments.
+
+Design spec lives in [`OpaqueTypesSupport.md`](OpaqueTypesSupport.md). The doc covers the binding-identity model, the codegen requirements (lifted generic parameters, opaque return from bootstrap), keying for multiple opaque-typed bindings of the same protocol, and the open implementation questions.
+
+Decision point: iteration 9's task-cluster migration is the forcing function. If migration surfaces a real `@Provides -> some P` case, support lands in iteration 9 against the spec in `OpaqueTypesSupport.md`. If migration completes without hitting it, the spec stays documented and implementation waits for an external adopter's case to surface.
+
 ### Dynamic binding lookup by `Any.Type` (rejected)
 
 Wire deliberately does not expose runtime binding lookup by `Any.Type` (or `String`, or any other type-erased key). Generated graphs surface typed accessors only; the binding set is not iterable, queryable, or addressable through an erased lookup at runtime.
