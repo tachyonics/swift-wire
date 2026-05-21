@@ -214,37 +214,46 @@ controller actually depends on, validated at build time.
 ### Hummingbird parallel
 
 The same progression applies for Hummingbird via `WireHummingbird`.
-Hummingbird's idiom is `RouteCollection` with an `addRoutes(to:)`
-method that takes the router. The first-step example looks like:
+Hummingbird's idiom is a `Sendable` controller that exposes
+`addRoutes(to:)`, taking a `RouterGroup<some RequestContext>`,
+and registers handlers by chaining HTTP-verb methods. The
+first-step example looks like:
 
 ```swift
 import Hummingbird
 import Wire                 // @Singleton
-import WireHummingbird      // @HummingbirdRouteCollection
+import WireHummingbird      // @HummingbirdRoutes
 
 @Singleton
-@HummingbirdRouteCollection
-struct TodosController {
-    func addRoutes(to router: any RouterMethods<some RequestContext>) {
-        router.get("todos", use: index)
-        router.post("todos", use: create)
-        router.delete("todos/:todoID", use: delete)
+@HummingbirdRoutes(at: "todos")
+struct TodosController: Sendable {
+    func addRoutes(to group: RouterGroup<some RequestContext>) {
+        group
+            .get(use: self.list)
+            .post(use: self.create)
+            .delete(":id", use: self.delete)
     }
 
-    @Sendable func index(
-        request: Request,
+    func list(
+        _ request: Request,
         context: some RequestContext
-    ) async throws -> [Todo] {
-        try await context.applicationContext.service.list()
-    }
+    ) async throws -> [Todo] { ... }
+
+    func create(
+        _ request: Request,
+        context: some RequestContext
+    ) async throws -> Todo { ... }
     // ...
 }
 ```
 
-`WireHummingbird`'s generated bootstrap walks the
-`@HummingbirdRouteCollection`-annotated types, constructs each
-from Wire's graph, and calls `router.addRoutes(controller)` for
-each.
+`WireHummingbird`'s generated bootstrap walks every
+`@HummingbirdRoutes`-annotated type, constructs each from Wire's
+graph, opens the route group at the annotation's path, and calls
+`controller.addRoutes(to: group)` on it. The `@HummingbirdRoutes(at:)`
+argument specifies the route-group prefix the controller's routes
+hang off; this is the rough equivalent of Vapor's
+`routes.grouped("todos")` call inside `boot(routes:)`.
 
 The deeper-adoption progression mirrors Vapor's: add `@Inject`
 properties to move services from context-based access into the
