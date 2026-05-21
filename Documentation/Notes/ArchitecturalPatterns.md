@@ -98,19 +98,19 @@ import FeatherDatabasePostgres   // concrete adapter
 import FeatherStorageS3          // concrete adapter
 
 @Provides
-func database(config: PostgresConfig) -> any DatabaseClient {
+func database(config: PostgresConfig) -> some DatabaseClient {
     PostgresDatabaseClient(config: config)
 }
 
 @Provides
-func storage(config: S3Config) -> any FileStorage {
+func storage(config: S3Config) -> some FileStorage {
     S3FileStorage(config: config)
 }
 
 @Singleton @Controller("/tasks")
-struct TaskController {
-    @Inject var database: any DatabaseClient    // depends on the port
-    @Inject var storage: any FileStorage
+struct TaskController<DB: DatabaseClient, Storage: FileStorage> {
+    @Inject var database: DB        // depends on the port via constraint
+    @Inject var storage: Storage
     // ...
 }
 ```
@@ -119,22 +119,47 @@ The controller is the inbound adapter. The Feather protocols
 (`DatabaseClient`, `FileStorage`) are the outbound ports. The
 `@Provides` functions constructing concrete instances are the
 outbound adapters. Wire validates everything wires together at
-compile time. Swapping Postgres → MySQL is one `@Provides` change;
-the controller and application services don't move.
+compile time, and — because the providers return `some P` rather
+than `any P` and the controller is generic over the port — the
+concrete types specialise through the controller without
+existential boxing. Swapping Postgres → MySQL is one `@Provides`
+change; the controller and application services don't move, *and*
+the type system stays generic-preserved through the swap.
 
-## `any P` vs `some P` vs concrete in hex contexts
+This is the pattern that distinguishes Wire from reflection-based
+JVM DI frameworks: hex-style protocol abstraction at the source,
+zero runtime virtual-dispatch cost. Spring's `@Autowired
+DatabaseClient database` looks similar at the source but resolves
+to an `any DatabaseClient`-equivalent at runtime; Wire's resolves
+to the concrete type the protocol's bound to. The trade-off costs
+two things — every consumer that wants the abstraction has to be
+generic over the port, and Wire's codegen has to support opaque
+return types in the bootstrap (see `OpaqueTypesSupport.md` for the
+spec, currently deferred to iteration 9). For consumers that can
+afford to be non-generic, `any P` is the standard hex pattern and
+ships in M1 today.
+
+## `some P` vs `any P` vs concrete in hex contexts
 
 Each choice has a hex-architecture interpretation:
 
-- **`any P`** — strict port-and-adapter separation. Consumer
-  depends only on the port. Existential boxing at the boundary.
-  The canonical hex pattern.
 - **`some P` from `@Provides` + generic consumer** — hex-style
   abstraction at the *source* level (consumer references only the
   protocol via generic constraint) while preserving concrete
   identity through the type system. Zero existential boxing,
-  specialised at compile time. (See `OpaqueTypesSupport.md` for
-  the design spec — deferred to iteration 9.)
+  specialised at compile time. The most architecturally novel of
+  the three options for an audience coming from reflection-based
+  JVM DI — Spring/Guice can't express this; it requires a
+  compile-time DI framework with generic preservation. (See
+  `OpaqueTypesSupport.md` for the design spec — deferred to
+  iteration 9.)
+- **`any P`** — strict port-and-adapter separation. Consumer
+  depends only on the port via the existential. Standard hex
+  pattern with the standard existential-boxing cost. The
+  workhorse for cases where the consumer can't or shouldn't be
+  generic over the port (e.g., heterogeneous consumers, types
+  bound to swift-log's `Logger`, or anything where the generic
+  surface would cascade through the codebase awkwardly).
 - **Concrete type at both ends** — no abstraction. The consumer
   knows the implementation. Strictly speaking, breaks hex purity
   for that binding, but acceptable when the abstraction would
@@ -142,7 +167,8 @@ Each choice has a hex-architecture interpretation:
   where there's only one canonical implementation pattern).
 
 The choice is the user's per binding, not Wire's. Wire supports
-all three.
+all three (the `some P` path landing with iteration 9's opaque-
+types support).
 
 ## WireMVC's positioning
 
