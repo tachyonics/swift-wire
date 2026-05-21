@@ -1,11 +1,347 @@
 # WireMVC abstraction — working notes
 
-> **Status:** design-space exploration for M5 (WireMVC adapter).
-> Captures the shape of how WireMVC could publish a framework-
-> agnostic abstraction that HTTP-framework adapters target, mirroring
-> the swift-openapi-generator pattern. Not a committed plan;
-> intended to preserve thinking from iteration 4a's discussions so
-> M5's implementation work doesn't start from scratch.
+> **Status:** design-space exploration for HTTP-framework integration
+> across M2 (framework-specific adapters) and M5 (cross-framework
+> WireMVC). Captures both tiers of integration plus the
+> progressive-adoption story for existing codebases. Not a committed
+> plan; intended to preserve thinking from iteration 4a's discussions
+> so M2's and M5's implementation work don't start from scratch.
+
+## Two tiers of HTTP-framework integration
+
+Wire offers two distinct levels of automation for HTTP-framework
+integration, with meaningfully different trade-offs:
+
+- **Tier 1 — framework-specific adapters (`WireHummingbird` /
+  `WireVapor`, planned for M2):** the controller stays in its
+  native framework form (Vapor's `RouteCollection`, Hummingbird's
+  router-registration style). The adapter automates the
+  application-level wiring — constructing the controller from
+  Wire's graph and registering it with the framework — without
+  abstracting routes themselves. The controller's *routes* and
+  *handler signatures* stay framework-shaped.
+- **Tier 2 — `WireMVC` (planned for M5):** declarative
+  cross-framework routing. The controller uses Wire-published
+  annotations (`@Controller`, `@Get`, `@Post`, parameter
+  annotations) and the build plugin generates route registration
+  for whichever HTTP framework adapter is activated. The
+  controller's source is portable across frameworks.
+
+The two tiers coexist as separate adapter packages. Tier 1 is the
+natural on-ramp for users committed to one HTTP framework who want
+compile-time-validated DI without changing their controller style.
+Tier 2 is for users who want cross-framework portability, prefer
+declarative-routing annotations over imperative
+`boot(routes:)`-style registration, or are starting fresh without
+an existing framework attachment.
+
+## Tier 1: framework-specific adapters
+
+For Vapor (or any framework with mature MVC idioms), tier 1 is the
+realistic on-ramp. The controller preserves its native framework
+form; the adapter adds compile-time-validated dependency injection
+without displacing the framework's routing model.
+
+### Tier 1, first step: automate the registration call
+
+The minimal adoption: a single annotation tells Wire to register
+the controller with Vapor's `Application` at bootstrap. The
+controller body is otherwise untouched — services come from
+Vapor's request-based service container as usual, the
+`boot(routes:)` method is exactly what the user already writes.
+
+```swift
+import Vapor
+import Wire            // @Singleton
+import WireVapor       // @VaporRouteCollection
+
+@Singleton
+@VaporRouteCollection
+struct TodosController {
+    func boot(routes: any RoutesBuilder) throws {
+        let todos = routes.grouped("todos")
+        todos.get(use: index)
+        todos.post(use: create)
+        todos.group(":todoID") { todo in
+            todo.delete(use: delete)
+        }
+    }
+
+    func index(req: Request) async throws -> [Todo] {
+        try await req.service.list()   // Vapor's request-based service access
+    }
+    // ...
+}
+
+@main
+struct App {
+    static func main() async throws {
+        let env = try Environment.detect()
+        let app = try await Application.make(env)
+        app.databases.use(.postgres(...), as: .psql)
+
+        // Wire's generated bootstrap constructs every
+        // @VaporRouteCollection-annotated type and calls
+        // app.register(collection:) for each.
+        try await Wire.vapor(app).run()
+    }
+}
+```
+
+The `@VaporRouteCollection` macro adds the `RouteCollection`
+conformance (the `boot(routes:)` method already satisfies it) and
+registers the type for automated Vapor wiring. Almost nothing else
+changes — existing Vapor controllers can adopt this with a
+one-line annotation, no rewrite required.
+
+What this first step contributes:
+
+- **Automated `app.register(collection: ...)`** for every
+  `@VaporRouteCollection`-annotated type. Removes the
+  bootstrap-time `try app.register(collection: TodosController())`
+  list-keeping.
+- **The controller is now part of Wire's graph.** Even if its
+  body doesn't use `@Inject` yet, the type is wired and available
+  for future incremental migration.
+
+What stays Vapor (everything, at this step):
+
+- Request-based service access (`req.service`,
+  `req.application`, etc.).
+- `boot(routes:)`, route grouping, handler signatures, middleware,
+  request scope, session handling.
+- Vapor's standard runtime setup.
+
+### Tier 1, deeper adoption: move services to `@Inject`
+
+The natural next step is to migrate services from request-based
+access to constructor-injected dependencies. The controller keeps
+its Vapor shape; Wire builds it with its dependencies wired:
+
+```swift
+@Singleton
+@VaporRouteCollection
+struct TodosController {
+    @Inject var service: TodosService    // wired by Wire's graph
+    @Inject var logger: Logger
+
+    func boot(routes: any RoutesBuilder) throws {
+        let todos = routes.grouped("todos")
+        todos.get(use: index)
+        // ...
+    }
+
+    func index(req: Request) async throws -> [Todo] {
+        try await service.list()         // injected service
+    }
+}
+```
+
+This is identical to the first step except for the `@Inject`
+properties. The migration is incremental and per-controller —
+nothing forces all controllers to switch at the same time.
+
+What the deeper-adoption step contributes:
+
+- **Build-time validation of service wiring.** Missing bindings
+  fail at compile time rather than runtime resolution.
+- **Composable scope, multi-module composition, key-based
+  disambiguation.** Standard Wire features apply.
+- **Test substitution.** A `@Container TestContainer { ... }` can
+  swap service implementations atomically at the entry point.
+
+What still stays Vapor:
+
+- Routing, handler signatures, request scope, middleware
+  composition. The controller's body that touches HTTP is still
+  Vapor-shaped; only the dependency wiring moves.
+
+### Request-scoped controllers via `@Scoped`
+
+A further deepening: when the controller wants to inject
+request-scoped services directly (a request-tagged logger, a
+tenant context derived from the authenticated request, etc.),
+the controller itself can be `@Scoped` against the request seed
+that `WireVapor` publishes. Wire constructs a fresh controller
+per request inside the request scope, and request-scoped
+services inject naturally without needing `Provider<T>` or
+manual request-scope entry:
+
+```swift
+@Scoped(seed: VaporRequest.self)
+@VaporRouteCollection
+struct TodosController {
+    @Inject var seed: VaporRequest               // the Vapor Request
+    @Inject var requestLogger: RequestLogger     // @Scoped, request-tagged
+    @Inject var service: TodosService            // @Singleton — still injects
+
+    func boot(routes: any RoutesBuilder) throws {
+        routes.get("todos", use: index)
+    }
+
+    func index(req: Request) async throws -> [Todo] {
+        requestLogger.log("listing todos")
+        return try await service.list()
+    }
+}
+```
+
+`WireVapor`'s integration handles the difference between
+`@Singleton`-scoped and `@Scoped`-scoped controllers
+transparently: a `@Singleton` controller is constructed once at
+startup and registered with the application; a `@Scoped`
+controller's route handlers are wrapped to enter the request
+scope, construct the controller fresh, and dispatch.
+
+This pattern is what makes request-scoped services
+naturally usable from controllers — no cross-scope-crossing
+mechanism is needed because the controller is already inside
+the request scope. The pattern composes with `@Singleton`
+controllers in the same application; users pick per-controller
+which lifetime makes sense.
+
+A side benefit: it reduces what has to live globally on
+Vapor's `Request`. Idiomatic Vapor accumulates services on the
+request — `req.databases`, `req.auth`, `req.tenant`, custom
+extensions — making `Request` a de facto god object that every
+controller knows the shape of. With `@Scoped` controllers,
+those services get injected into the controllers that
+specifically need them; `Request` reverts to carrying just the
+HTTP transport state. Each controller's dependency list reads
+as a precise statement of what request-scoped state that
+controller actually depends on, validated at build time.
+
+### Hummingbird parallel
+
+The same progression applies for Hummingbird via `WireHummingbird`.
+Hummingbird's idiom is `RouteCollection` with an `addRoutes(to:)`
+method that takes the router. The first-step example looks like:
+
+```swift
+import Hummingbird
+import Wire                 // @Singleton
+import WireHummingbird      // @HummingbirdRouteCollection
+
+@Singleton
+@HummingbirdRouteCollection
+struct TodosController {
+    func addRoutes(to router: any RouterMethods<some RequestContext>) {
+        router.get("todos", use: index)
+        router.post("todos", use: create)
+        router.delete("todos/:todoID", use: delete)
+    }
+
+    @Sendable func index(
+        request: Request,
+        context: some RequestContext
+    ) async throws -> [Todo] {
+        try await context.applicationContext.service.list()
+    }
+    // ...
+}
+```
+
+`WireHummingbird`'s generated bootstrap walks the
+`@HummingbirdRouteCollection`-annotated types, constructs each
+from Wire's graph, and calls `router.addRoutes(controller)` for
+each.
+
+The deeper-adoption progression mirrors Vapor's: add `@Inject`
+properties to move services from context-based access into the
+graph; then, if needed, mark the controller `@Scoped(seed: HummingbirdRequestSeed.self)`
+(or whatever seed type `WireHummingbird` publishes) so request-
+scoped services inject naturally. Same three steps as the Vapor
+side; different framework idioms underneath.
+
+Both `WireVapor` and `WireHummingbird` ship as separate adapter
+packages in M2.
+
+### Progressive adoption and coexistence
+
+Tier 1's tightest constraint is that nothing about it forces
+all-or-nothing adoption. Within a single application:
+
+- **Some controllers are Wire-annotated; others aren't.** A Vapor
+  app can have ten existing `RouteCollection` controllers
+  registered manually (`try app.register(collection: ...)`) and
+  add `@VaporRouteCollection` to one new controller at a time.
+  Wire's bootstrap registers only the annotated ones; the rest
+  are user-registered as before. The two co-exist in the same
+  `Application`.
+- **Annotated controllers can omit `@Inject`.** Tier-1 first-step
+  controllers with no `@Inject` properties are wired (constructed
+  with empty init, registered) but don't pull from Wire's graph
+  beyond construction. Mixing first-step and deeper-adoption
+  controllers in the same app works — they're both
+  `@VaporRouteCollection`s, differing only in whether they have
+  `@Inject` properties.
+- **Wire's graph and Vapor's service container coexist.** Wire
+  doesn't replace Vapor's runtime services; it sits alongside.
+  Services accessed via `req.foo` continue to work; services
+  accessed via `@Inject` use Wire's graph. The user controls the
+  migration pace per controller.
+
+This makes Wire-on-Vapor adoptable as a *gradient* rather than a
+cliff. The first controller takes a one-line annotation; the
+hundredth takes the same. There's never a moment where the user
+has to commit the whole codebase to Wire.
+
+## Tier 2: WireMVC for cross-framework declarative routing
+
+When the user wants framework-agnostic controllers — or simply
+prefers declarative-routing annotations over imperative
+`boot(routes:)`-style registration — WireMVC is the path:
+
+```swift
+import Wire           // @Singleton, @Inject
+import WireMVC        // @Controller, @Get, @Post, @Delete, @Body, @Path
+
+@Singleton
+@Controller("/todos")
+struct TodosController {
+    @Inject var service: TodosService
+
+    @Get
+    func index() async throws -> [Todo] { try await service.list() }
+
+    @Post
+    func create(@Body input: NewTodo) async throws -> Todo { ... }
+
+    @Delete("/{id}")
+    func delete(@Path id: UUID) async throws { ... }
+}
+```
+
+Wire's build plugin reads the annotations and generates the route
+registration. With `WireMVCVapor` activated, the generated code
+synthesizes the equivalent of `boot(routes:)` plus the
+`app.register(collection: ...)` call. With `WireMVCHummingbird`
+activated, the generated code produces the equivalent Hummingbird
+router-registration call. The controller's source is identical
+across frameworks; only the activated adapter changes.
+
+WireMVC is meaningfully more ambitious than tier 1: the
+abstraction has to express middleware, content negotiation,
+streaming responses, error mapping, and similar concerns in a way
+that survives across frameworks.
+
+### Coexistence with tier 1
+
+Tier 1 and tier 2 controllers can coexist in the same application.
+A user could have:
+
+- A handful of `@Controller`-annotated controllers using declarative
+  routing (WireMVC, tier 2).
+- A handful of `@VaporRouteCollection`-annotated Vapor controllers
+  using `boot(routes:)` (tier 1).
+- Some manually-registered native Vapor `RouteCollection`s with no
+  Wire annotation at all.
+
+Wire's bootstrap walks each adapter's recognised annotation kind
+and emits the appropriate registration. Tier 1 and tier 2 are
+different adapter annotations targeting different `_wireRegister`
+shapes; they don't conflict and there's no precedence to worry
+about. The user picks per-controller which tier makes sense.
 
 ## The pattern: openapi-generator-style abstraction
 

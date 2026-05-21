@@ -161,105 +161,7 @@ isn't typically available; the consumer accepts `any Database`
 (with its existential boxing) or reaches for a concrete driver
 type when one's directly importable.
 
-### Realistic on-ramp: Wire for the graph, Vapor for the runtime
-
-The likely partial-adoption path for a Vapor app is to use Wire
-for its internal service graph and let Vapor own the HTTP
-runtime entirely. The application's controllers, repositories,
-domain services, and configuration get wired by Wire; the
-results are handed to Vapor's route handlers and service
-container in the normal Vapor idioms.
-
-```swift
-import Vapor
-import Fluent
-
-// Wire-managed graph: validated at build time.
-@Singleton
-struct TaskService {
-    @Inject var logger: Logger
-    func handle(...) async throws -> ... { ... }
-}
-
-@Singleton
-struct TaskController {
-    @Inject var service: TaskService
-    @Inject var database: any Database    // typed as Fluent's existential
-
-    func boot(routes: any RoutesBuilder) throws {
-        routes.get("tasks", ":id", use: getTask)
-        routes.post("tasks", use: createTask)
-        // ... Vapor's familiar route registration
-    }
-
-    func getTask(req: Request) async throws -> TaskItem { ... }
-    func createTask(req: Request) async throws -> TaskItem { ... }
-}
-
-@main
-struct App {
-    static func main() async throws {
-        let env = try Environment.detect()
-        let app = try await Application.make(env)
-
-        // Vapor's runtime setup (databases, middleware, etc.)
-        app.databases.use(.postgres(...), as: .psql)
-
-        // Wire bootstrap: builds the graph against whatever
-        // bindings Vapor has set up at this point.
-        let graph = try await Wire.bootstrap()
-
-        // Hand controllers to Vapor's routing in the standard
-        // Vapor idiom.
-        try graph.taskController.boot(routes: app.routes)
-        try graph.userController.boot(routes: app.routes)
-
-        try await app.execute()
-    }
-}
-```
-
-What Wire contributes in this pattern:
-
-- **Build-time validation of the internal graph.** Forget to
-  bind a `TaskService` somewhere and the consumer fails at
-  compile time. Vapor's native service container does this
-  resolution at runtime; Wire moves it to build time.
-- **Composable scope, multi-module composition, key-based
-  disambiguation.** Standard Wire features apply to the internal
-  graph; Vapor doesn't need to be aware of any of it.
-- **Controllers as constructor-injected types** rather than
-  `req.application.someProperty`-style ambient access.
-
-What Vapor still owns:
-
-- HTTP server lifecycle, request routing, middleware composition.
-- Database connection registration via `app.databases.use(...)`.
-- Request scope (Vapor's `Request` object), session handling,
-  authentication.
-- Any Vapor-ecosystem capabilities (Fluent, JWT, Queues, etc.).
-
-Wire's `@Provides` boundary may pull from Vapor's service
-container — e.g., `@Provides func database(app: Application) -> any Database`
-that reaches into Vapor's runtime — bridging the two systems.
-The bridging is one-way (Wire reads from Vapor's bag; Vapor
-doesn't read from Wire's graph). For most Vapor users, this is
-enough: their controllers and services get build-time-validated
-construction; Vapor's runtime stays the runtime.
-
-### Full integration would need request-scope bridging
-
-Beyond partial adoption, a full Wire + Vapor integration (where
-Wire's request-scope-seeded types live inside Vapor's request
-lifecycle) needs a `WireVapor` adapter package that seeds
-Wire's request scope from Vapor's `Request` at the appropriate
-middleware hook. This is M2 territory, parallel to
-`WireHummingbird`. Most Vapor apps adopting Wire incrementally
-won't need this — they'll start with the partial-adoption
-pattern above and grow into deeper integration only when
-request-scoped Wire bindings start to matter.
-
-### Trade-offs across ecosystem choices
+Trade-offs across ecosystem choices:
 
 - **Vapor ecosystem**: lower friction within Vapor (rich, mature,
   integrated). Capability protocols carry Vapor's shape, so the
@@ -283,6 +185,39 @@ decision. The README's "neutral on architecture" framing
 applies all the way down — Wire isn't a hex-architecture
 framework, it's a graph-composition framework that happens to
 support hex cleanly when the user wants it.
+
+The minimal HTTP-framework integration shape — for a sense of
+what Wire-on-Vapor actually looks like — is a one-annotation
+adoption that preserves the existing controller idiom:
+
+```swift
+import Vapor
+import Wire            // @Singleton
+import WireVapor       // @VaporRouteCollection
+
+@Singleton
+@VaporRouteCollection
+struct TodosController {
+    func boot(routes: any RoutesBuilder) throws {
+        routes.get("todos", use: index)
+        // ...
+    }
+
+    func index(req: Request) async throws -> [Todo] {
+        try await req.service.list()    // Vapor's request-based access
+    }
+}
+```
+
+The existing `RouteCollection`-style controller gains one
+annotation and joins Wire's graph; Wire automates the
+`app.register(collection:)` call at bootstrap. Nothing about
+the routing, handler signatures, or request-based service
+access changes. `WireMVCAbstraction.md` covers the rest of the
+story: tiers of adapter automation (framework-specific vs
+cross-framework declarative), the deeper-adoption path
+(`@Inject`-driven service wiring), and the progressive-adoption
+patterns for existing Vapor or Hummingbird codebases.
 
 ## `some P` vs `any P` vs concrete in hex contexts
 
