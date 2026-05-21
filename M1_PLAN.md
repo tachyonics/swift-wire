@@ -344,6 +344,58 @@ What 2b's design preserves so this lands cleanly later:
 
 Decision point: when an adopter hits the "I'm repeating bindings across containers" pattern (most likely the environment-config case described above), that's the signal to build composition. Until then, document the design space here and move on.
 
+### Nested seeded-scope hierarchies (`@Scoped(within:)`)
+
+Iteration 4a commits to a two-layer scope structure: `@Singleton` is the one always-active scope; everything else is a sibling seeded scope identified by its seed type. Two seeded scopes can't see each other's bindings — they're isolated by design. The common cases the iteration 4 audience cares about (request handling, job consumption, scheduled tasks) fit this shape: a request scope and a job scope coexist as siblings, both pulling from `@Singleton`, never reaching across.
+
+The case worth capturing for future work: scope-within-scope composition. A session scope around a request scope — the session is established at login, lasts across many requests, and a request handler wants access to session-scoped values without re-seeding them per request. Or a per-tenant scope around a per-request scope — tenant identity comes from a token verified once, then descendants inside the request handler need it.
+
+Today's workaround is a composite seed struct: `struct RequestSeed { let request: HTTPRequest; let session: SessionData; let tenant: TenantID }`. The framework adapter assembles the composite at request-scope entry by reading from whichever upstream context holds each piece. Works for shallow composition; gets awkward when the session/tenant values have lifetimes meaningfully longer than the request and you'd rather express the lifetime in the type system.
+
+The shape we'd consider when the use case becomes concrete:
+
+```swift
+@Scoped(seed: SessionData.self)
+struct SessionLogger {
+    @Inject var seed: SessionData
+    @Inject var baseLogger: Logger
+}
+
+@Scoped(seed: HTTPRequest.self, within: SessionData.self)
+struct RequestLogger {
+    @Inject var session: SessionData       // from outer scope
+    @Inject var request: HTTPRequest       // from this scope's seed
+    @Inject var sessionLogger: SessionLogger   // also from outer scope
+}
+
+// Entry point: nest via the outer scope's handle.
+try await wire.withScope(seeded: session) { sessionScope in
+    try await sessionScope.withSubScope(seeded: request) { requestScope in
+        // RequestLogger resolves here, with session + request both visible.
+    }
+}
+```
+
+Design rules to lock in:
+
+1. **`@Scoped(within:)` declares the parent statically.** The build plugin verifies that every entry point reaching a `@Scoped(within: A.self)` binding does so from inside an `A` scope. A subscope can only be entered through its declared parent's handle; entering it from singleton scope (or from an unrelated sibling) is a compile-time error.
+
+2. **Validation generalises naturally.** A `@Scoped(seed: B.self, within: A.self)` type can `@Inject` from: `@Singleton` bindings, the A scope's bindings (including A's seed), and the B scope's bindings (including B's seed). It cannot reach sibling scopes of A.
+
+3. **No task-local context propagation is required.** The sub-scope's handle is passed explicitly via the closure parameter (`sessionScope.withSubScope { ... }`), which carries the captured outer-scope state directly. The build plugin generates the `withSubScope` method on the outer scope's resolver type, with the inner scope's binding set + the captured outer bindings. This avoids the ambient-context fragility that `Provider<T>` already mitigates with a different mechanism.
+
+4. **Cross-scope storage rules generalise.** A `@Scoped(seed: A.self)` value still can't be stored directly by a `@Singleton` — same diagnostic with the same `Provider<...>` fix-it. Storing a `@Scoped(within: A.self)` value inside a non-`A` scope is the obvious extension of the rule and gets the same diagnostic shape.
+
+5. **Sibling-scope rule unchanged.** Two `@Scoped(seed: B.self, within: A.self)` and `@Scoped(seed: C.self, within: A.self)` types share an A scope but are independent within it. They can each be entered from inside A but not from inside each other.
+
+Reasons to defer:
+
+1. The two-layer model covers the dominant iteration 4 cases without complicating either the macro contract or the build plugin's graph routing. The cost of deferring is a small ergonomic tax on the session-around-request case (a composite seed struct), not a fundamental capability gap.
+2. The static-analysis story — verifying every entry point to a sub-scope goes through its parent — is the substantive work. Designing it against a real use case (rather than a hypothetical session pattern) avoids over-engineering the graph-validation pass.
+3. The closure-captured-state vs. task-local-propagation choice should be made when there's a concrete API to weigh against — the current `withSubScope { }` sketch is plausible but not the only option.
+
+Decision point: when an adopter has a real session-scoped value (or tenant-scoped value, etc.) that they want to express as scope nesting rather than as a composite seed, that's the signal to design `@Scoped(within:)`. Until then, document the shape here and let the composite-seed workaround serve.
+
 ### Dynamic binding lookup by `Any.Type` (rejected)
 
 Wire deliberately does not expose runtime binding lookup by `Any.Type` (or `String`, or any other type-erased key). Generated graphs surface typed accessors only; the binding set is not iterable, queryable, or addressable through an erased lookup at runtime.
