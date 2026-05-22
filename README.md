@@ -28,7 +28,7 @@
 
 swift-wire is a compile-time-validated dependency injection library, being built alongside `task-cluster` — a demonstration application that grows in complexity over time — and an accompanying blog series. The library lands new capabilities as task-cluster needs them: request-scoped observability when the HTTP layer gains tracing, lifecycle hooks when there's a DB pool to shut down cleanly, multi-module composition when task-cluster's library targets start shipping their own bindings.
 
-The architectural commitment is an *adapter-annotation contract* — a published, versioned macro-based extension mechanism that lets third-party packages contribute framework integrations (Hummingbird, the OpenAPI generator, queue consumers, schedulers) by publishing their own annotations rather than being baked into the core. The DI core does the wiring; the contract is what turns that core into a platform other packages build against rather than a closed system that knows only its own concepts. The application domain is server-side Swift on Linux: hierarchical scopes (`@Singleton`, `@RequestScope`, `@JobScope`) are defined in terms of server lifecycles, the build plugin runs against the SPM toolchain on Linux as a first-class target, and the macro surface is shaped by Swift 6's concurrency model.
+The architectural commitment is an *adapter-annotation contract* — a published, versioned macro-based extension mechanism that lets third-party packages contribute framework integrations (Hummingbird, the OpenAPI generator, queue consumers, schedulers) by publishing their own annotations rather than being baked into the core. The DI core does the wiring; the contract is what turns that core into a platform other packages build against rather than a closed system that knows only its own concepts. The application domain is server-side Swift on Linux: scopes are seed-typed (`@Singleton` for process lifetime; `@Scoped(seed: X.self)` for any sibling lifetime keyed by the seed type, with adapter packages publishing convenience macros for common seeds like HTTP requests and job messages), the build plugin runs against the SPM toolchain on Linux as a first-class target, and the macro surface is shaped by Swift 6's concurrency model.
 
 The design language is openly Java-DI shaped — `@Inject`, `@Provides`, scope macros, adapter annotations. The audience whose intuitions transfer cleanly is anyone working in annotation-based, container-driven backend DI: Spring and Dagger on the JVM, NestJS on Node.js, ASP.NET Core's built-in DI, or teams that want their Swift service to feel architecturally like the other server services they operate. The cross-section that targets Swift-server is small today; the project is partly a bet on Swift's continued growth with developers coming from a non-iOS background.
 
@@ -111,19 +111,19 @@ package struct DynamoDBTaskRepository<Table: DynamoDBCompositePrimaryKeyTable & 
 `Sources/TaskClusterApp/TaskController.swift`:
 
 ```swift
-@Singleton
+@Scoped(seed: HBRequestSeed.self)                   // request-scoped: one per HTTP request
 @RoutedBy(Router<BasicRequestContext>.self)         // adapter annotation from WireOpenAPI
 package struct TaskController<Repository: TaskRepository>: APIProtocol {
-    @Inject var repository: Repository
-    @Inject var requestLogger: Provider<RequestLogger>   // crosses scope: resolved per request
-    // unchanged: 4 handler methods, now call requestLogger().logger to emit
+    @Inject var repository: Repository              // singleton — fine to inject from request scope
+    @Inject var requestLogger: RequestLogger        // same scope — direct injection, no wrapper
+    // unchanged: 4 handler methods, now call requestLogger.logger to emit
 }
 ```
 
 `Sources/TaskClusterApp/RequestLogger.swift` (new — but task-cluster *should* have this):
 
 ```swift
-@RequestScope
+@Scoped(seed: HBRequestSeed.self)
 struct RequestLogger {
     @Inject var baseLogger: Logger
     @Inject var requestID: RequestID         // provided by WireHummingbird's request scope
@@ -135,6 +135,8 @@ struct RequestLogger {
     }
 }
 ```
+
+`HBRequestSeed` is the seed type that `WireHummingbird` publishes for the HTTP request scope. Two `@Scoped(seed: HBRequestSeed.self)` types share a request scope: both are constructed fresh per request, both can inject the seed and any other request-scoped value directly, and singletons (the repository, base logger) inject through unchanged.
 
 `Sources/TaskCluster/TaskCluster.swift`:
 
@@ -166,7 +168,7 @@ struct TaskCluster {
 What you actually get from this:
 
 - **Generics are preserved.** `TaskController<Repository>` stays generic. `DynamoDBTaskRepository<Table>` stays generic. The build plugin specializes both at the resolution site — when there's exactly one binding for `DynamoDBCompositePrimaryKeyTable & Sendable` (the in-memory one), it picks `Table = InMemoryDynamoDBCompositePrimaryKeyTable`, and `TaskController` is constructed as `TaskController<DynamoDBTaskRepository<InMemoryDynamoDBCompositePrimaryKeyTable>>`. No existential boxing introduced by the library.
-- **The graph is validated at build time.** Forget to bind a `DynamoDBCompositePrimaryKeyTable` and Swift won't compile. Inject a `@RequestScope` value as a stored property on a `@Singleton` and the macro refuses (you have to wrap it in `Provider<…>` or make the consumer request-scoped).
+- **The graph is validated at build time.** Forget to bind a `DynamoDBCompositePrimaryKeyTable` and Swift won't compile. Inject a `@Scoped(seed: X.self)` value as a stored property on a `@Singleton` and the build plugin refuses with a fix-it (make the consumer `@Scoped(seed: X.self)` too, or compose via a scope-appropriate wrapper).
 - **`@RoutedBy` is the architectural feature, not a one-off helper.** It's an *adapter annotation* — a macro published by `WireOpenAPI` that hooks `TaskController` into the app's startup. The same mechanism powers `@JobHandler`, `@ScheduledTask`, `@WebSocketRoute`, etc., from any third-party adapter. The Wire core knows nothing about OpenAPI.
 - **Tests select an alternative `@Container` at the entry point** instead of re-instantiating types with different generic arguments by hand. The chosen container is the whole graph for that test run.
 
@@ -178,17 +180,18 @@ If that diff doesn't look like a meaningful improvement to you, the project does
 
 ### Scope annotations
 
-Three built-in scope macros, all defined in terms of server lifecycles:
+Two built-in scope macros:
 
-| Macro            | Lifetime                  | Typical contents                                        |
-|------------------|---------------------------|---------------------------------------------------------|
-| `@Singleton`     | process                   | DB pools, HTTP clients, config, metrics, base logger    |
-| `@RequestScope`  | one HTTP request          | request ID, authenticated principal, request-scoped log |
-| `@JobScope`      | one queue/background task | job ID, tenant context for a worker                     |
+| Macro                          | Lifetime                                                | Typical contents                                     |
+|--------------------------------|---------------------------------------------------------|------------------------------------------------------|
+| `@Singleton`                   | process                                                 | DB pools, HTTP clients, config, metrics, base logger |
+| `@Scoped(seed: SeedType.self)` | one instance per externally provided `SeedType` value   | request-derived state, per-job tenant context        |
 
-Scopes form a strict hierarchy: singletons outlive everything; request and job scopes each see singletons but not each other. Asking for a narrower scope as a stored property of a wider one is a compile error. To cross the boundary, inject `Provider<T>` and call it to resolve a fresh `T` in the appropriate scope.
+`@Scoped` is *seed-typed*: every non-singleton scope is identified by the concrete type whose runtime instance opens it. An HTTP request scope is `@Scoped(seed: HBRequestSeed.self)`; a job scope is `@Scoped(seed: SQSMessage.self)`. The seed type is the only contract — anyone (the Wire user, an adapter package, a third party) can publish a seed type and the types scoped to it will compose naturally. Multiple seed types coexist; a single graph might host request-scoped, job-scoped, and WebSocket-session-scoped bindings simultaneously.
 
-Custom scopes are out of scope through 0.x. They'll be added when a real use case turns up that doesn't fit these three.
+Singletons outlive everything. Scoped instances see singletons (and the seed value itself) but not each other across scope boundaries. Asking for a scoped type from a singleton — or from a scope keyed by a different seed — is a compile error pointing at the injection site; the fix is either widening the seed or scoping the consumer the same way.
+
+Hierarchical seeded scopes (`@Scoped(seed:, within:)`) are a deferred decision: the data model reserves the slot, but no scope is hierarchical in 0.x. A real adopter case forces the design.
 
 ### `@Inject` and how the macro generates an init
 
@@ -196,13 +199,15 @@ Custom scopes are out of scope through 0.x. They'll be added when a real use cas
 
 The macro reads the property type as written. `var repository: Repository` keeps `TaskController` generic over `Repository`. `var repository: any TaskRepository` makes it an existential. The library is neutral — pick the one whose performance characteristics you want.
 
-### `Provider<T>` for crossing scopes
+### Crossing scopes
 
-A `@Singleton` cannot store a `@RequestScope` value directly — it would outlive the scope. Inject `Provider<T>` instead; calling it resolves a fresh `T` in the active request scope. This is the standard Java DI pattern (Dagger's `Provider`, Spring's `ObjectProvider`). The macro and build plugin enforce it: missing `Provider<…>` wrapping is a compile error with a fix-it.
+The common case for "a singleton needs request-scoped state" collapses if you scope the consumer to the seed instead. A `TaskController` that wants per-request logging is naturally `@Scoped(seed: HBRequestSeed.self)`, not a singleton with a deferred-resolution wrapper. Wire's adapter packages publish controller registration that constructs per-seed instances on demand — the controller goes in the request scope, the singleton stays in the process scope, and the boundary is never crossed at injection time.
+
+When a singleton genuinely needs to *defer* construction of something within its own scope (a circular initialisation dependency, lazy expensive setup), `Lazy<T>` is the primitive — same scope, deferred evaluation. A general `Provider<T>` for cross-scope on-demand resolution is deferred; if a real case surfaces that neither seeded scopes nor `Lazy<T>` handle, the design lands then.
 
 ### Adapter annotations (the extension mechanism)
 
-The Wire core defines exactly: scope macros, `@Inject`, `@Container`, `@Provides`, `@Contributes`, `Provider<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`, `Lifecycle`, `Resource<T>`. Everything else — every framework integration — is an *adapter annotation*: a macro published by an adapter package that the build plugin recognizes by name and that emits registration code into the generated bootstrap.
+The Wire core defines exactly: scope macros (`@Singleton`, `@Scoped`), `@Inject`, `@Container`, `@Provides`, `@Contributes`, `Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`, `Lifecycle`, `Resource<T>`. Everything else — every framework integration — is an *adapter annotation*: a macro published by an adapter package that the build plugin recognizes by name and that emits registration code into the generated bootstrap.
 
 Adapter annotations come in three forms, all supported by the contract:
 
@@ -213,11 +218,11 @@ Adapter annotations come in three forms, all supported by the contract:
 A `WireMVC` controller — the canonical type-level-with-member-recognition case — looks like this:
 
 ```swift
-@Singleton
+@Scoped(seed: HBRequestSeed.self)
 @Controller("/tasks")
 package struct TaskController {
     @Inject var repository: any TaskRepository
-    @Inject var requestLogger: Provider<RequestLogger>
+    @Inject var requestLogger: RequestLogger
 
     @Get("/{id}")
     func getTask(@Path id: UUID) async throws -> TaskItem {
@@ -294,7 +299,7 @@ Adapter authors building against public API are insulated from Wire's internal e
 
 `@Provides` declares a binding for the dependency graph. It attaches to either a property or a function — pick whichever Swift construct fits. A property contributes a value with no dependencies; a function's parameters become its dependencies.
 
-You only declare `@Provides` for things the graph can't construct on its own — framework primitives (a `Logger`, a config object), values produced by external systems, or concrete instances pinning a specific type for a generic constraint. Every `@Singleton` / `@RequestScope` / `@JobScope` type is automatically part of the graph and constructed by the build plugin without an explicit `@Provides`.
+You only declare `@Provides` for things the graph can't construct on its own — framework primitives (a `Logger`, a config object), values produced by external systems, or concrete instances pinning a specific type for a generic constraint. Every `@Singleton` / `@Scoped(...)` type is automatically part of the graph and constructed by the build plugin without an explicit `@Provides`.
 
 In the common case, `@Provides` declarations live at module scope and that's the entire graph:
 
@@ -340,7 +345,7 @@ Bindings are looked up by type first, by key second. The rules:
 2. **Multiple bindings match** → compile error naming the candidates. The user disambiguates with an explicit key.
 3. **No binding matches** → compile error pointing at the unsatisfied dependency.
 
-Every `@Singleton` / `@RequestScope` / `@JobScope` macro auto-generates a `static let key: BindingKey<Self>` on the type. The build plugin uses these keys to identify bindings; users only ever *read* keys, and only when an ambiguity forces them to. In the common case, nothing in the user's code mentions a key.
+Every `@Singleton` / `@Scoped(...)` macro auto-generates a `static let key: BindingKey<Self>` on the type. The build plugin uses these keys to identify bindings; users only ever *read* keys, and only when an ambiguity forces them to. In the common case, nothing in the user's code mentions a key.
 
 When an ambiguity does arise — say, a second `TaskRepository` implementation lands in the graph:
 
@@ -716,11 +721,11 @@ Wire respects Swift 6's isolation model rather than reinventing it. The compiler
 
 #### The rules
 
-1. **All bindings must be `Sendable`.** Singletons are shared across the process; request- and job-scoped values cross `await` boundaries during request handling. The macro-generated `init(...)` from `@Inject` properties propagates Sendable requirements naturally — try to `@Inject` a non-Sendable type into a `@Singleton` and Swift rejects the generated init at compile time.
+1. **All bindings must be `Sendable`.** Singletons are shared across the process; scoped values cross `await` boundaries during request or job handling. The macro-generated `init(...)` from `@Inject` properties propagates Sendable requirements naturally — try to `@Inject` a non-Sendable type into a `@Singleton` and Swift rejects the generated init at compile time.
 
 2. **Global actor isolation is honored, not reinvented.** Write `@MainActor @Singleton struct UICoordinator` and the macro reads the existing `@MainActor` attribute. Consumers of an isolated singleton from non-isolated contexts use Swift's standard `await` semantics. Wire doesn't introduce a parallel `isolation:` parameter — the language's existing mechanisms already type-check correctly.
 
-3. **The `Resolver` protocol is `Sendable`-aware where it surfaces.** Most adapters never touch a resolver — `_wireRegister` takes its dependencies as direct parameters (see *How the contract works*). Where the resolver does appear — `Provider<T>` resolving lazily into a request scope, or an explicit escape-hatch resolution — its surface is:
+3. **The `Resolver` protocol is `Sendable`-aware where it surfaces.** Most adapters never touch a resolver — `_wireRegister` takes its dependencies as direct parameters (see *How the contract works*). Where the resolver does appear — `Lazy<T>` deferring construction within its own scope, or an explicit escape-hatch resolution — its surface is:
 
     ```swift
     public protocol Resolver: Sendable {
@@ -733,15 +738,15 @@ Wire respects Swift 6's isolation model rather than reinventing it. The compiler
 
    Global-actor types are Sendable (the actor provides isolation), so they pass through these methods naturally. Calling `resolve` from any isolation domain is fine; the await hops happen as needed at the call site.
 
-4. **`Provider<T>` inherits its Sendability from `T`.** A `@Singleton` injecting `Provider<RequestLogger>` is Sendable iff `RequestLogger` is. Calling `provider()` from inside the singleton hops to whatever isolation the request scope dictates, governed by Swift's normal rules.
+4. **`Lazy<T>` inherits its Sendability from `T`.** A type injecting `Lazy<DatabasePool>` is Sendable iff `DatabasePool` is. `Lazy` defers construction within the same scope — the held value is constructed on first access using the scope's normal isolation rules, with no cross-scope hop.
 
 #### Diagnostics
 
-The classic Spring-style "inject a request-scoped non-Sendable thing into a singleton" failure becomes a Swift compile error from the standard isolation checker, not a runtime surprise. Wire emits a custom diagnostic to pre-empt the otherwise-confusing "synthesized init isn't Sendable" message: when a `@Singleton`-annotated type isn't `Sendable`, the build plugin reports "`@Singleton`-annotated types must conform to `Sendable`. Add `: Sendable` to the type or audit its stored properties."
+The classic Spring-style "inject a request-scoped non-Sendable thing into a singleton" failure becomes a Swift compile error — Wire's structural check (scoped types can't be stored on a wider scope) fires first with a fix-it ("scope `Foo` to `HBRequestSeed`, or scope the consumer to the same seed"); the Sendable checker is a second line of defence for cases the structural check can't see (e.g., escape-hatch resolves). Wire emits a custom diagnostic to pre-empt the otherwise-confusing "synthesized init isn't Sendable" message: when a `@Singleton`-annotated type isn't `Sendable`, the build plugin reports "`@Singleton`-annotated types must conform to `Sendable`. Add `: Sendable` to the type or audit its stored properties."
 
 #### What's deliberately deferred
 
-- **Custom isolation domains as scope qualifiers.** "This dependency is on `MyJobActor`" is expressed as `@MyJobActor` on the type. Wire respects that without inventing a parallel `@JobScope(isolation:)` form.
+- **Custom isolation domains as scope qualifiers.** "This dependency is on `MyJobActor`" is expressed as `@MyJobActor` on the type. Wire respects that without inventing a parallel `@Scoped(isolation:)` form.
 - **Container-level isolation enforcement.** A `@Container(isolation: SomeActor.self)` that constrains every binding within to share an isolation domain is a plausible future direction — useful for single-threaded subsystems where coherent isolation is the architectural intent. Deferred until a concrete use case demonstrates Swift's per-type isolation isn't sufficient. Adding it post-1.0 is non-breaking; existing containers continue to work.
 - **`~Copyable` types.** Singletons are shared by definition; non-copyable means single-owner. The semantics conflict; `~Copyable` types don't compose with `@Singleton`. Request- and job-scoped uses *might* work for single-consumer cases but require parallel `Resolver` overloads that haven't been designed. The ergonomic answer for now is to wrap a `~Copyable` resource in a Sendable reference type that manages scoped access internally — the same pattern Swift's standard library uses for `Mutex`. `~Copyable` injection stays out of scope through 0.x; reconsider post-1.0 if a real use case appears.
 
@@ -865,7 +870,7 @@ Library milestones are tied to what task-cluster needs next, not to a fixed cale
   - Spike 2 (type-level macro walking method-level annotations): PASS. M5's `WireMVC` design is mechanically viable.
   - Spike 3 (annotation argument extraction): PASS. SwiftSyntax preserves type-expression structure verbatim, including nested- and multi-argument generics. M1 must normalise interior whitespace before binding lookup so `Router<X, Y>` and `Router<X,Y>` resolve to the same binding.
   - Spike 4 (swift-syntax pinning): PASS. `from: "601.0.0"` resolves to swift-syntax 601.0.1 identically on both platforms. Bumps to 602.x are deliberate per-Swift-release maintenance events.
-- **M1: core graph.** Macros (`@Singleton`, `@RequestScope`, `@JobScope`, `@Inject`, `@Container`, `@Provides`, `@Contributes`), runtime types (`Provider<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`, `Lifecycle`, `Resource<T>`), build plugin, graph validation, the adapter-annotation contract v1 (designed for all three annotation forms, versioned for future evolution), multi-module composition (full cross-target validation by re-parsing dependency sources at build time; the manifest-based optimization is deferred to M6), build-time graph JSON dump (`_WireGraph.json` for tooling/CI/IDE consumption), Linux CI. task-cluster's manual wiring switches to Wire-driven construction; framework integration stays manual at this point. No public 0.x tag yet.
+- **M1: core graph.** Macros (`@Singleton`, `@Scoped`, `@Inject`, `@Container`, `@Provides`, `@Contributes`), runtime types (`Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`, `Lifecycle`, `Resource<T>`), build plugin, graph validation (including cross-scope storage checks), the adapter-annotation contract v1 (designed for all three annotation forms, versioned for future evolution), multi-module composition (full cross-target validation by re-parsing dependency sources at build time; the manifest-based optimization is deferred to M6), build-time graph JSON dump (`_WireGraph.json` for tooling/CI/IDE consumption), Linux CI. task-cluster's manual wiring switches to Wire-driven construction; framework integration stays manual at this point. No public 0.x tag yet.
 - **M2: `WireHummingbird` adapter.** Lands when task-cluster needs first-class request-scoped observability — likely a request-id-tagged logger or the equivalent for tracing. Includes the per-request resolver, `@WebSocketRoute` as the first ship-worthy adapter annotation (type-level form), the first concrete consumer of `CollectedKey` (the application's `[any Service]` lifecycle list), and the runtime `Resolver.introspect()` API plus an `/admin/wiring` example endpoint demonstrating it.
 - **M3: `WireOpenAPI` adapter (`@RoutedBy`).** Lands when task-cluster's existing `TaskController.registerHandlers(on:)` call moves into the adapter-annotation system. Auto-wires generated `APIProtocol` conformances. The headline differentiator.
 - **M4: lifecycle orchestration.** Lands when task-cluster gets a resource needing orderly shutdown — most likely the first time `AsyncHTTPClient` or a real DynamoDB client (vs the in-memory one) ships in the example. The `Lifecycle` protocol and `Resource<T>` wrapper exist from M1; M4 is when the build plugin starts walking them in reverse dependency order at scope teardown, integrating with swift-service-lifecycle for app-scope signal handling and Hummingbird's request lifecycle for request-scope teardown. Defines failure semantics (init failure tears down already-initialized resources in reverse order; teardown failures are collected and logged).

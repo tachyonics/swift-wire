@@ -98,24 +98,46 @@ This is Risk #4 ("macro diagnostics") and Risk #5 ("resolution edge cases") meet
 
 Each broken graph produces a precise error pointing at the right source location with a fix-it where applicable. The diagnostic gallery becomes the regression suite for diagnostic quality from this point forward.
 
-## Iteration 4 — `@RequestScope`, `@JobScope`, `Provider<T>`
+## Iteration 4 — seed-typed scopes, `Lazy<T>`, cross-scope validation
 
-The other two scopes plus the scope-crossing wrapper.
+The planned `@RequestScope` / `@JobScope` named-scope macros are replaced by a single seed-typed scope macro — `@Scoped(seed: SeedType.self)`. The seed type *is* the scope identity: two `@Scoped` types share a scope iff their seed types match. Multiple adapters (Hummingbird, Vapor, SQS, Redis, schedulers) publish independent sibling scopes keyed by their own seed types, avoiding the named-scope namespacing problem that `@JobScope` would have produced when multiple job-handling adapters coexist. See `Documentation/Notes/ArchitecturalPatterns.md` for the architectural framing.
 
-**Scope:**
-- `@RequestScope` macro
-- `@JobScope` macro
-- `Provider<T>` runtime type — likely a `@Sendable () async throws -> T` closure-backed wrapper that the build plugin populates with the appropriate scope-resolution logic. Decide whether `Provider<T>` needs the `Resolver` protocol (deferred from iteration 1) once we see what the closure-based version costs in practice.
-- Build plugin's check that refuses storing a `@RequestScope` value as a property on a `@Singleton` (compile error with a fix-it suggesting `Provider<...>`)
+`Provider<T>` is removed from this iteration's scope. Most cross-scope-reading cases collapse under "scope the consumer correctly" or "compose via a wrapper at the appropriate scope" — see the deferred-decision entry below. `Lazy<T>` ships in its place: same closure-backed runtime shape, but intra-scope semantics (defer construction to first call, cache after) and a clean compile-time story. The case for `Lazy<T>` (lazy initialisation of expensive deps) is independent of any cross-scope reading.
 
-**Forward-compatibility notes.** `Provider<T>` and `@RequestScope` are the features that would shift shape most if Swift ever gained native effect handlers — they're the scope-crossing cases where a static graph stops fitting and a handler-based implementation would be the natural representation. Two API-framing choices to make deliberately at this iteration so a future migration stays open:
+**Sittings:**
 
-- **`Provider<T>` framed as "request one when you need it,"** not "a captured closure you call." Implementation today is closure capture; the documented contract is the effectful-operation framing. A future handler-based implementation could replace the closure without changing the user-facing surface.
-- **`@RequestScope` framed as a dynamic extent** — `withRequestScope { ... }`-shaped entry points, not mutable graph state or thread-local registries. Same mental model a handler-based implementation would use natively. Avoid baking in any specific concurrency primitive (custom executor, particular actor-isolation shape) at this level.
+- **4a — `@Scoped(seed:)` macro + discovery + per-seed graph routing + code emission.**
+  - `Sources/Wire/Macros.swift` declares `@Scoped<Seed>(seed: Seed.Type)`.
+  - `Sources/WireMacrosImpl/ScopedMacro.swift` implements expansion (delegates to `SingletonMacro.expansion`; the synthesised members are identical, only the unsupported-declaration error message differs).
+  - `BindingDiscovery` recognises `@Scoped(seed:)`-annotated types, extracts the seed type expression, and routes bindings into the unified `[Partition: [DiscoveredBinding]]` map under a `Partition` whose `scope` carries the seed.
+  - `DiscoveredSingleton` (renamed to `DiscoveredScopeBoundType` to reflect dual `@Singleton`/`@Scoped` use) carries an optional `scopeKey: ScopeKey?`.
+  - Per-seed binding partitions in `SourceFileDiscovery.allBindings`. WireGen aggregates and builds one graph per seed type; the seed type is implicitly bound within its scope.
+  - Code emission generates a `_<SeedTypeName>WireScope` struct per seed, mirroring the per-`@Container` codegen pattern.
+  - Wire core publishes `withScope<Seed>(seeding seed: Seed, body: (Resolver) async throws -> T) async rethrows -> T` as the entry-point primitive.
+  - **Worked-example adapter convenience macro:** ship one hand-coded adapter macro alongside the test fixtures (e.g. `@TestRequestScope` expanding to `@Scoped(seed: TestRequestSeed.self)`) as a forward-looking demonstration of what adapter packages will publish in iteration 8. Not part of the contract — purely an example.
+  - **README rework:** the "Scope annotations" section gets rewritten around `@Singleton` and `@Scoped(seed:)`; `@RequestScope`/`@JobScope` references throughout become `@Scoped(seed: …)` with a forward-looking note about adapter convenience macros.
+  - Existing iteration-3 diagnostics that hard-code scope-macro names already generalise (`scopeMacroNames` is now `["Singleton", "Scoped"]`); the extension-init-conflict warning iterates the unified partition map so both `@Singleton` and `@Scoped` types are covered.
+- **4b — `Lazy<T>` runtime type + recognition.**
+  - Wire core publishes `public struct Lazy<T: Sendable>: Sendable` with `public func callAsFunction() async throws -> T`. First call constructs (using the parent's scope's bindings); result is cached for subsequent calls (`Mutex`-guarded for thread safety).
+  - Build plugin recognises `Lazy<T>` in dependency lists as a deferred binding — `T` resolves against the same scope as the consumer, codegen wraps the resolution in the lazy closure.
+  - Intra-scope only — no scope crossing. A `Lazy<T>` in a `@Scoped(seed: X.self)` type resolves to a value within the X scope. A `Lazy<T>` in a `@Singleton` resolves to a Singleton-graph value.
+- **4c — cross-scope storage validation.**
+  - A `@Singleton` directly storing a `@Scoped(seed: X.self)` value is a compile error with a fix-it: "make the consumer `@Scoped(seed: X.self)` too, or extract the request-scoped concern into a `@Scoped(seed: X.self)` wrapper."
+  - Two `@Scoped` types with different seeds directly storing each other is the same error class, same fix-it shape.
+  - The check is framed as **scope-inheritance rules**, not as "`@Singleton` vs `@Scoped`" specifically — so the same code generalises to multi-level hierarchies if `@Scoped(within:)` lands later.
+- **4d — integration test.** End-to-end fixture: a seed type (`TestRequestSeed`), one or more `@Scoped(seed: TestRequestSeed.self)` types injecting the seed and singletons, `withScope(seeding: ...)` entry, two scope entries produce distinct instances, a second seed type produces an independent scope. Demonstrates the `Lazy<T>` deferral behaviour. Demonstrates the cross-scope-storage error fires with the expected fix-it text.
 
-See also: "Dynamic binding lookup by `Any.Type` (rejected)" under Deferred decisions for the related forward-compatibility commitment.
+**Hooks for future hierarchical-scope work.** `@Scoped(within:)` is a deferred decision (see below); iteration 4a already leaves the cheap-to-leave hooks so reopening it later doesn't require touching the original infrastructure. `ScopeKey` is shaped `(seed: String, within: String?)` from day one with `within` always `nil`; the partition is keyed by the full `(container, scope)` pair via `Partition`; cross-scope-storage validation in 4c is phrased as scope-inheritance rules; the entry-point primitive stays `withScope<Seed>(seeding:body:)` and is forward-compatible with adding `withSubScope` methods to the resolver type.
 
-**Validation gate:** test app with a `@Singleton` injecting `Provider<RequestLogger>`-style; calling `provider()` returns a fresh value each invocation; storing a `@RequestScope` directly on a `@Singleton` produces the expected compile error.
+**Forward-compatibility notes.** `@Scoped(seed:)` and `Lazy<T>` are framed as the features that would shift shape most if Swift ever gained native effect handlers — they're the scope-and-deferred-evaluation cases where a static graph stops fitting and a handler-based implementation would be the natural representation. API-framing choices to make deliberately at this iteration so a future migration stays open:
+
+- **`@Scoped(seed:)` framed as a dynamic extent** — `withScope(seeding:) { ... }`-shaped entry points, not mutable graph state or thread-local registries. Same mental model a handler-based implementation would use natively.
+- **`Lazy<T>` framed as "deferred-and-cached resolution,"** not "a captured closure you call." Implementation today is closure capture with `Mutex`-guarded result memoisation; the documented contract is the effectful-operation framing. A future handler-based implementation could replace the closure without changing the user-facing surface.
+- **Avoid baking in any specific concurrency primitive** (custom executor, particular actor-isolation shape) at this level. `Sendable` and standard `async throws` are the surface; the rest is implementation.
+
+See also: "Dynamic binding lookup by `Any.Type` (rejected)" and "Cross-scope reads from outer scope (`Provider<T>`)" under Deferred decisions for the related forward-compatibility commitments.
+
+**Validation gate:** the 4d integration test passes. `@Scoped(seed:)` types are constructed per `withScope` entry, sharing singletons but isolated between scope entries. `Lazy<T>` defers construction to first `.get()` and caches the result. A `@Singleton` storing a `@Scoped` value directly produces the documented compile error.
 
 ## Iteration 5 — multibindings
 
@@ -403,6 +425,35 @@ Wire's existing specialisation handles concrete-typed providers and `any P`-type
 Design spec lives in [`OpaqueTypesSupport.md`](OpaqueTypesSupport.md). The doc covers the binding-identity model, the codegen requirements (lifted generic parameters, opaque return from bootstrap), keying for multiple opaque-typed bindings of the same protocol, and the open implementation questions.
 
 Decision point: iteration 9's task-cluster migration is the forcing function. If migration surfaces a real `@Provides -> some P` case, support lands in iteration 9 against the spec in `OpaqueTypesSupport.md`. If migration completes without hitting it, the spec stays documented and implementation waits for an external adopter's case to surface.
+
+### Cross-scope reads from outer scope (`Provider<T>`)
+
+The original iteration 4 plan included `Provider<T>` as the scope-crossing primitive for a `@Singleton` reading a `@Scoped`-bound value lazily. Working through the design surfaced that most cross-scope-reading cases collapse under "scope the consumer correctly":
+
+- A controller wanting a request-scoped logger → make the controller `@Scoped(seed: HTTPRequest.self)` (or whatever seed the adapter publishes); the logger injects naturally.
+- A long-lived service wanting per-request tracing → wrap with a `@Scoped(seed: ...)` decorator that composes the singleton service with the request-scoped trace; consumers inject the wrapper.
+- A controller-shaped type that needs request-scoped values → use `@Scoped`-ing on the controller itself (the `WireVapor` and `WireHummingbird` adapters handle the per-request controller construction transparently — see `WireMVCAbstraction.md`).
+
+The residual cases that genuinely need cross-scope ambient reads — singleton-shaped service reaching down into a request scope it didn't establish — are architecturally inverted and uncommon enough that designing the primitive speculatively risks shipping the wrong shape. Particularly around the captured-scope vs dynamic-lookup decision, the ergonomics of "this call can fail at runtime if no scope is active," and the error-message specificity (naming the expected seed type concretely).
+
+Iteration 4b ships `Lazy<T>` for the deferred-construction motivation (which is often conflated with `Provider<T>` in JVM-DI usage) — that's a separate intra-scope primitive that doesn't have the cross-scope-crossing concerns.
+
+The shape we'd consider when the use case becomes concrete:
+
+```swift
+public struct Provider<T: Sendable>: Sendable {
+    public func callAsFunction() async throws -> T  // throws if no active scope
+}
+```
+
+Design notes if `Provider<T>` is reopened:
+
+1. **Throws explicitly.** `callAsFunction()` is `async throws`. Two failure modes: no active scope (`WireScopeError.noActiveScope(seedType: "HTTPRequest")`) and any `async throws` propagated from `T`'s init. The first error names the expected seed type concretely.
+2. **Visible code-smell beacon.** Searching for `Provider<...>` in `@Inject` lists shows every place a long-lived type reaches across scope boundaries — useful in code review without needing additional tooling.
+3. **Captured-scope vs dynamic-lookup** is the open design question for the API shape; resolve against a real adopter's pattern.
+4. **Distinct from `Lazy<T>`.** Lazy is intra-scope deferred-and-cached; Provider is cross-scope per-call. They serve different needs and ship as separate types if both ever land.
+
+Decision point: when an external adopter has a concrete cross-scope-read pattern that genuinely resists the wrapper-at-appropriate-scope solution, that's the signal to design `Provider<T>` against their pattern. The error-message specificity bar from iteration 3 applies at runtime: the runtime error names the seed and suggests the wrapper-pattern alternative before naming Provider as the resort.
 
 ### Dynamic binding lookup by `Any.Type` (rejected)
 
