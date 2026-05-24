@@ -141,16 +141,16 @@ See also: "Dynamic binding lookup by `Any.Type` (rejected)" and "Cross-scope rea
 
 ## Iteration 5 — multibindings
 
-All four key flavours plus the unified `@Contributes(to:)` annotation.
+All four key flavours plus the unified `@Contributes(to:)` annotation. See `Documentation/Notes/BuilderKeyDesign.md` for the design depth on `BuilderKey<B>` — emission via result-builder attribute, return-type derivation from `buildBlock` / `buildFinalResult`, coupling with `OpaqueTypesSupport.md`, open ordering decision.
 
 **Scope:**
 - `@Contributes(to:)` macro
-- `CollectedKey<T>` with `withOrder:` parameter
-- `MappedKey<K, V>` with `atKey:` parameter
-- `BuilderKey<B>` (uses the user's result-builder type to fold contributors)
-- Build plugin parameter validity checks (`withOrder:` only on `CollectedKey`, `atKey:` required on `MappedKey`, no mixing)
+- `CollectedKey<T>` with `withOrder:` on `@Contributes` for explicit ordering
+- `MappedKey<K, V>` with `atKey:` on `@Contributes` for key disambiguation
+- `BuilderKey<B>` with return-type derivation from the builder's `buildBlock` / `buildFinalResult` signature; `withOrder:` on `@Contributes` for ordering the fold-function parameters (often type-relevant for order-sensitive builders like middleware chains). The parameterized-opaque case is deferred to when `OpaqueTypesSupport.md` lands; see the design note for the split.
+- Build plugin parameter validity checks (`withOrder:` valid on `CollectedKey` and `BuilderKey` contributions only, `atKey:` required on `MappedKey` contributions only, no mixing)
 
-**Validation gate:** test app with three contributors to a `CollectedKey<any Service>` (with `withOrder:` covering ordered + unordered cases), two contributors to a `MappedKey<String, Strategy>` (including the duplicate-key compile error case), two to a `BuilderKey<MiddlewareBuilder>` exercising real result-builder constraints. Each consumer gets the right shape with the right ordering and the right type.
+**Validation gate:** test app with three contributors to a `CollectedKey<any Service>` (with `withOrder:` covering ordered + unordered cases), two contributors to a `MappedKey<String, Strategy>` (including the duplicate-key compile error case), two to a `BuilderKey<MiddlewareBuilder>` exercising real result-builder constraints and `withOrder:`-driven contributor sequencing. Each consumer gets the right shape with the right ordering and the right type.
 
 ## Iteration 6 — `Lifecycle` and `Resource<T>` (types only)
 

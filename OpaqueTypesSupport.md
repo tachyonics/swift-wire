@@ -239,3 +239,39 @@ spec in iteration 9.
 
 Migration completes without hitting the case → spec stays documented;
 implementation waits for an external adopter's case to surface.
+
+## Second forcing condition: `BuilderKey<B>`
+
+Iteration 5's `BuilderKey<B>` (result-builder-driven multibinding
+fold) couples into this spec for the parameterized-opaque case.
+A `BuilderKey` whose result type the producer wants to declare as
+`some P<…>` — typically a typed middleware-style builder — uses
+a producer-side factory that captures the opaque shape and routes
+the binding through the same parameter-lifting mechanism described
+above:
+
+```swift
+static let middleware = BuilderKey<MiddlewareBuilder>.opaque(
+    MiddlewareProtocol<String, String, MyContext>.self,
+    "middleware"
+)
+```
+
+The opaque shape is declared at the key (producer-side, same
+direction of dependency as everywhere else in Wire — consumers
+match against the key's declared type, don't drive it).
+`_WireGraph` lifts a generic parameter for the opaque slot;
+consumers reference the same lifted parameter via their generic
+constraint.
+
+If a `BuilderKey<B>` adopter (in iteration 5 or later) wants this
+opaque variant before task-cluster migration does, that's an
+independent reason to move opaque-types support forward. See
+`Documentation/Notes/BuilderKeyDesign.md` for the design coupling
+in full.
+
+Iteration 5 ships `BuilderKey<B>` with the non-opaque cases —
+both implicit (where Wire derives the result type from the
+builder's `buildBlock` / `buildFinalResult`) and the explicit-
+`any P<…>` form on the key — without needing this spec. The
+parameterized-opaque case lands when this spec lands.
