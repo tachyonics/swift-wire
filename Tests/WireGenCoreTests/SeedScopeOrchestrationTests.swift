@@ -128,6 +128,50 @@ struct SeedScopeOrchestrationTests {
         #expect(orchestration.seedTypeExpression == "TenantSeed<String>")
     }
 
+    @Test func containerScopeOrchestrationCarriesContainerSpecificParentGraphType() throws {
+        // A seeded scope inside a `@Container` borrows from the
+        // container's singletons (typed `_<Container>WireGraph`),
+        // not the default `_WireGraph`. The orchestration's
+        // identifier suffix composes as `<Container>_<Seed>` so the
+        // emitted struct/function names don't clash with default-
+        // graph scopes of the same seed type; the parent-graph
+        // type flows through to emission so the bootstrap signature
+        // and borrow access paths point at the container's graph.
+        let scope = scopedSingleton(
+            "RequestLogger",
+            seed: "HBRequestSeed",
+            dependencies: [(name: "base", type: "Logger")]
+        )
+        let singleton = singletonProvider("logger", type: "Logger")
+        let containerGraphType = "_TestContainerWireGraph"
+        let orchestration = orchestrateSeedScope(
+            seedKey: ScopeKey(seed: "HBRequestSeed"),
+            containerName: "TestContainer",
+            scopeBindings: [scope],
+            borrowBindings: syntheticSingletonBorrowBindings(
+                from: [singleton],
+                inWireGraphOfType: containerGraphType
+            ),
+            parentGraphType: containerGraphType,
+            typealiases: []
+        )
+        #expect(orchestration.identifierSuffix == "TestContainer_HBRequestSeed")
+        #expect(orchestration.parentGraphType == containerGraphType)
+        #expect(orchestration.borrowedBindingPropertyNames == ["logger"])
+        let order = try #require(orchestration.result.outcome.topologicalOrder)
+        let borrow = order.first { $0.boundType == "Logger" }
+        if case .provider(let provider) = borrow {
+            // Borrow access path uses the parent-graph parameter's
+            // internal name — `_TestContainerWireGraph` becomes the
+            // external label `testContainerWireGraph` with the
+            // collision-safe leading underscore restored for the
+            // internal name (`_testContainerWireGraph`).
+            #expect(provider.accessPath == "_testContainerWireGraph.logger")
+        } else {
+            Issue.record("expected synthetic borrow provider in topological order")
+        }
+    }
+
     @Test func unreferencedSingletonsStillAppearInTopologicalOrderButAreBorrowed() throws {
         // Every default-graph singleton becomes a synthetic borrow,
         // whether or not any scope binding actually `@Inject`s it. The

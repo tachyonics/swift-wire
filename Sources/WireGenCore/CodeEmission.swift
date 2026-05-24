@@ -95,27 +95,32 @@ package func renderWireGraph(
 }
 
 /// Emission-side description of one per-seed scope graph. Mirrors
-/// the orchestration result's relevant fields (the seed type
-/// expression for the bootstrap parameter type, the identifier
+/// the orchestration result's relevant fields: the seed type
+/// expression for the bootstrap seed-parameter type, the parent
+/// graph type for the bootstrap wire-graph-parameter type
+/// (`_WireGraph` for default-graph seeded scopes,
+/// `_<Container>WireGraph` for container-scope ones), the identifier
 /// suffix for the struct/function names, the topological order over
 /// the combined graph, and the borrowed-binding property names so
 /// the emitter knows which entries are singletons aliased from the
-/// `wireGraph:` bootstrap parameter rather than constructed in
-/// place).
+/// `wireGraph:` bootstrap parameter rather than constructed in place.
 package struct SeedScopeEmission: Sendable {
     package let seedTypeExpression: String
     package let identifierSuffix: String
+    package let parentGraphType: String
     package let topologicalOrder: [DiscoveredBinding]
     package let borrowedBindingPropertyNames: Set<String>
 
     package init(
         seedTypeExpression: String,
         identifierSuffix: String,
+        parentGraphType: String,
         topologicalOrder: [DiscoveredBinding],
         borrowedBindingPropertyNames: Set<String>
     ) {
         self.seedTypeExpression = seedTypeExpression
         self.identifierSuffix = identifierSuffix
+        self.parentGraphType = parentGraphType
         self.topologicalOrder = topologicalOrder
         self.borrowedBindingPropertyNames = borrowedBindingPropertyNames
     }
@@ -141,17 +146,21 @@ private func appendSeedScopeStruct(
     let storedBindings = scope.topologicalOrder.filter {
         !scope.borrowedBindingPropertyNames.contains(propertyName(for: $0))
     }
-    // Both bootstrap parameter labels are type-anchored rather than
-    // role-anchored. `seed:` is the external label by convention (the
-    // role here is fixed — it's the scope-entering value), but the
-    // internal name uses the type-derived form. The wire-graph
-    // parameter uses `wireGraph:` externally too, so the label
-    // doesn't pre-commit to a hierarchical-scope model where the
-    // parameter's type might vary by scope depth. Type-derivation
-    // everywhere also avoids collisions with user bindings whose
-    // property names resolve to `seed` or `wireGraph`.
+    // Both bootstrap parameters use type-anchored labels rather than
+    // role-anchored ones. The seed parameter keeps `seed:` as its
+    // external label (the role here is fixed) but uses the seed
+    // type's property-name form as its internal name. The wire-graph
+    // parameter's external label is the parent-graph type's stripped
+    // lowerCamel form (`wireGraph:` for `_WireGraph`,
+    // `testContainerWireGraph:` for `_TestContainerWireGraph`) so
+    // varying parent-graph types don't share the same label. Its
+    // internal name is that external label prefixed with `_` so a
+    // user binding whose property name resolves to `wireGraph` or
+    // `testContainerWireGraph` can coexist without colliding on the
+    // local-variable token inside the bootstrap body.
     let seedLocal = identifierName(forType: scope.seedTypeExpression, key: nil)
-    let wireGraphLocal = wireGraphParameterInternalName
+    let wireGraphExternal = wireGraphParameterLabel(forType: scope.parentGraphType)
+    let wireGraphInternal = wireGraphParameterInternalName(forType: scope.parentGraphType)
 
     // Borrowed-singleton bindings get inlined at their consumers' arg
     // sites rather than declared as locals — every consumer in the
@@ -181,15 +190,17 @@ private func appendSeedScopeStruct(
         lines.append("")
     }
     lines.append(
-        "    static func bootstrap(seed: \(scope.seedTypeExpression), wireGraph: _WireGraph) async throws -> \(structName) {"
+        "    static func bootstrap(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(scope.parentGraphType)) async throws -> \(structName) {"
     )
-    lines.append("        try await \(bootstrapFunction)(seed: seed, wireGraph: wireGraph)")
+    lines.append(
+        "        try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal))"
+    )
     lines.append("    }")
     lines.append("}")
 
     lines.append("")
     lines.append(
-        "private func \(bootstrapFunction)(seed \(seedLocal): \(scope.seedTypeExpression), wireGraph \(wireGraphLocal): _WireGraph) async throws -> \(structName) {"
+        "private func \(bootstrapFunction)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(scope.parentGraphType)) async throws -> \(structName) {"
     )
 
     if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {
