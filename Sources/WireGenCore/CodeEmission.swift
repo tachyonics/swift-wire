@@ -123,17 +123,15 @@ package struct SeedScopeEmission: Sendable {
 
 /// Emit one `_<Suffix>WireScope` struct + matching
 /// `_wireBootstrap<Suffix>Scope` free function pair. The bootstrap
-/// takes `(seed:, wireGraph:)` parameters. Synthetic borrow bindings
-/// in the topological order construct as
-/// `let prop = <wireGraphLocal>.prop` aliases (handled by their
-/// `accessPath` already); the seed binding's bare reference resolves
-/// to the bootstrap's seed parameter directly. Both pass through the
-/// existing `constructionExpression` path — emission's only special
-/// cases are filtering borrowed bindings out of the struct's stored
-/// properties (so the scope struct doesn't double-expose singletons
-/// the caller already holds via `wireGraph`) and skipping the
-/// redundant `let X = X` shadow when a construction expression
-/// equals its local name.
+/// takes `(seed:, wireGraph:)` parameters. Borrowed singleton
+/// bindings in the topological order are not declared as locals —
+/// each borrow's `accessPath` (`<wireGraphLocal>.<prop>`) is inlined
+/// at every consumer's arg site via the `resolvingLocal` hook on
+/// `renderArguments`. The synthetic seed binding shadow-binds from
+/// the parameter (`let X = X`) and is skipped via the
+/// `local != construction` check. Net result: only scope-bound
+/// bindings emit `let` lines, borrowed singletons appear at use
+/// sites only, and unused borrows produce no output.
 private func appendSeedScopeStruct(
     scope: SeedScopeEmission,
     into lines: inout [String]
@@ -154,6 +152,24 @@ private func appendSeedScopeStruct(
     // property names resolve to `seed` or `wireGraph`.
     let seedLocal = identifierName(forType: scope.seedTypeExpression, key: nil)
     let wireGraphLocal = wireGraphParameterInternalName
+
+    // Borrowed-singleton bindings get inlined at their consumers' arg
+    // sites rather than declared as locals — every consumer in the
+    // topo order resolves a borrow dep directly to the wire-graph
+    // expression (`_WireGraph.logger`). The map's keys are borrow
+    // property names; values are the substitution expressions read
+    // straight off each borrow's `accessPath`. Unused borrows produce
+    // no output: their let-lines are skipped and no consumer refers
+    // to them, so they vanish from the emitted bootstrap.
+    var borrowAccessPaths: [String: String] = [:]
+    for binding in scope.topologicalOrder {
+        let name = propertyName(for: binding)
+        guard scope.borrowedBindingPropertyNames.contains(name),
+            case .provider(let provider) = binding
+        else { continue }
+        borrowAccessPaths[name] = provider.accessPath
+    }
+    let resolveBorrow: (String) -> String? = { borrowAccessPaths[$0] }
 
     lines.append("")
     lines.append("internal struct \(structName): Sendable {")
@@ -184,7 +200,11 @@ private func appendSeedScopeStruct(
 
     for binding in scope.topologicalOrder {
         let local = propertyName(for: binding)
-        let construction = constructionExpression(for: binding)
+        // Borrows are inlined at their consumers' arg sites — no let-
+        // line is needed (or wanted: unused borrows would otherwise
+        // leave dead lines in the emitted bootstrap).
+        if scope.borrowedBindingPropertyNames.contains(local) { continue }
+        let construction = constructionExpression(for: binding, resolvingLocal: resolveBorrow)
         // Skip a redundant `let X = X` shadow: it happens when the
         // construction expression equals the local name, which inside
         // the seed bootstrap means the synthetic seed binding whose
@@ -350,8 +370,13 @@ private func upperCamelCased(_ name: String) -> String {
 /// `bootstrap()`. Uses bare references — the consumer's source-file
 /// imports are propagated to the generated file so user-supplied
 /// symbols are in scope without qualification.
+///
+/// `resolvingLocal` is forwarded to `renderArguments` so per-graph
+/// dependency substitutions (e.g., the seed-scope path inlining
+/// borrowed singletons at use sites) flow through.
 private func constructionExpression(
-    for binding: DiscoveredBinding
+    for binding: DiscoveredBinding,
+    resolvingLocal: ((String) -> String?)? = nil
 ) -> String {
     switch binding {
     case .scopeBound(let scopeBound):
@@ -361,14 +386,14 @@ private func constructionExpression(
         // prefix (e.g. `TestContainer.MockService`) so a `@Singleton`
         // nested inside a `@Container` resolves correctly when called
         // from the module-scope `_wireBootstrap...` free function.
-        let args = renderArguments(scopeBound.dependencies)
+        let args = renderArguments(scopeBound.dependencies, resolvingLocal: resolvingLocal)
         return "\(scopeBound.qualifiedTypeName)(\(args))"
     case .provider(let provider):
         switch provider.form {
         case .property:
             return provider.accessPath
         case .function:
-            let args = renderArguments(provider.dependencies)
+            let args = renderArguments(provider.dependencies, resolvingLocal: resolvingLocal)
             // A specialised generic provider function carries the
             // concrete type arguments to splice in at the call site.
             // The bare call `makeRepo()` couldn't infer T from
@@ -391,9 +416,20 @@ private func constructionExpression(
 /// to the local-name for its `(type, key?)` identity; the argument
 /// label comes from the dependency's external label (or is omitted
 /// entirely for wildcard labels).
-private func renderArguments(_ dependencies: [DependencyParameter]) -> String {
+///
+/// `resolvingLocal`, when supplied, lets a caller substitute an
+/// expression for the local-name. The seed-scope emission uses this
+/// to inline borrowed singletons at the use site (`_WireGraph.logger`
+/// instead of `logger`) without first declaring a local. Returning
+/// `nil` from the closure falls back to the standard local-name
+/// behaviour.
+private func renderArguments(
+    _ dependencies: [DependencyParameter],
+    resolvingLocal: ((String) -> String?)? = nil
+) -> String {
     dependencies.map { dependency in
-        let value = identifierName(forType: dependency.type, key: dependency.keyIdentifier)
+        let localName = identifierName(forType: dependency.type, key: dependency.keyIdentifier)
+        let value = resolvingLocal?(localName) ?? localName
         if let label = dependency.name {
             return "\(label): \(value)"
         }

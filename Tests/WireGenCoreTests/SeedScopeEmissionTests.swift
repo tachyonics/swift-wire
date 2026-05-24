@@ -114,14 +114,14 @@ struct SeedScopeEmissionTests {
     }
 
     @Test func seedScopeBorrowingSingletonsExcludesThemFromStoredProperties() {
-        // Singletons borrowed via the synthetic-borrow mechanism appear
-        // as locals in the bootstrap body (`let logger = _WireGraph.logger`,
-        // where `_WireGraph` is the wire-graph parameter's internal name)
-        // but are NOT stored on the scope struct — the caller already
-        // owns the wire graph and double-storing would just duplicate
-        // references. The scope struct stores only the seed and the
-        // scope-bound bindings; `borrowedBindingPropertyNames` is the
-        // filter set.
+        // Singletons borrowed via the synthetic-borrow mechanism are
+        // inlined at consumer call sites — emission substitutes the
+        // borrow's access path (`_WireGraph.logger`, where `_WireGraph`
+        // is the wire-graph parameter's internal name) into the
+        // consumer's constructor args instead of declaring a local.
+        // The scope struct doesn't store them either: the caller
+        // already owns the wire graph. `borrowedBindingPropertyNames`
+        // drives both the let-line skip and the stored-property filter.
         let scope = SeedScopeEmission(
             seedTypeExpression: "HBRequestSeed",
             identifierSuffix: "HBRequestSeed",
@@ -165,8 +165,7 @@ struct SeedScopeEmissionTests {
             }
 
             private func _wireBootstrapHBRequestSeedScope(seed hBRequestSeed: HBRequestSeed, wireGraph _WireGraph: _WireGraph) async throws -> _HBRequestSeedWireScope {
-                let logger = _WireGraph.logger
-                let requestLogger = RequestLogger(base: logger, seed: hBRequestSeed)
+                let requestLogger = RequestLogger(base: _WireGraph.logger, seed: hBRequestSeed)
                 return _HBRequestSeedWireScope(hBRequestSeed: hBRequestSeed, requestLogger: requestLogger)
             }
 
