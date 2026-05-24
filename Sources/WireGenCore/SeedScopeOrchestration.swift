@@ -42,8 +42,10 @@ package struct SeedScopeOrchestration: Sendable {
 /// order; emission classifies them via
 /// `SeedScopeOrchestration.borrowedBindingPropertyNames` and emits
 /// them as `let x = singletons.x` aliases rather than as constructor
-/// calls. The seed binding similarly carries `accessPath = "seed"`
-/// so the bootstrap body aliases `let <camel(seed)> = seed`.
+/// calls. The seed binding's `accessPath` is the seed type's
+/// canonical property-name form — matching the private bootstrap
+/// function's internal seed parameter name — so the bootstrap body's
+/// `let <name> = <name>` line shadow-binds from the parameter.
 ///
 /// `defaultGraphSingletons` is the set of singleton bindings the
 /// scope can borrow — every binding in the default partition,
@@ -83,16 +85,20 @@ package func orchestrateSeedScope(
 }
 
 /// Synthetic seed binding: a property-form provider whose
-/// `accessPath` is the literal token `"seed"`, the bootstrap
-/// function's seed parameter name. The existing code-emission path
-/// renders this as `let <camel(seedExpr)> = seed` in the bootstrap
-/// body — exactly what dep-resolution needs to satisfy
-/// `@Inject var seed: HBRequestSeed`-style references.
+/// `accessPath` is the seed type's canonical property-name form
+/// (`identifierName(forType:key:)`) — matching the private bootstrap
+/// function's internal seed parameter name. Aligning the two means
+/// the parameter itself is the synthetic's source, so a user binding
+/// whose property name happens to be `seed` can coexist with the
+/// scope's `seed:` parameter label without colliding on the literal
+/// token. Emission renders this as `let <name> = <name>`, a shadow
+/// bind from the parameter to a same-named local that the rest of
+/// the body consumes uniformly.
 private func syntheticSeedBinding(seedTypeExpression: String) -> DiscoveredBinding {
     .provider(
         DiscoveredProvider(
             boundType: seedTypeExpression,
-            accessPath: "seed",
+            accessPath: identifierName(forType: seedTypeExpression, key: nil),
             form: .property,
             dependencies: [],
             genericParameterNames: [],
@@ -102,11 +108,14 @@ private func syntheticSeedBinding(seedTypeExpression: String) -> DiscoveredBindi
 }
 
 /// Synthetic borrow binding for one singleton available to the scope.
-/// `accessPath` is `"singletons.<property>"` so the existing code-
-/// emission path renders the borrow as `let <property> = singletons.<property>`
-/// in the bootstrap body. The borrow has no dependencies — the
-/// underlying singleton was constructed in the default graph and is
-/// already initialised by the time the scope's bootstrap runs.
+/// `accessPath` is `"<wireGraphLocal>.<property>"` — where
+/// `<wireGraphLocal>` is the bootstrap's wire-graph parameter
+/// internal name derived from the parameter's type (`_WireGraph`) via
+/// the standard property-name rule. Code emission renders the borrow
+/// as `let <property> = <wireGraphLocal>.<property>`. The borrow has
+/// no dependencies — the underlying singleton was constructed in the
+/// default graph and is already initialised by the time the scope's
+/// bootstrap runs.
 ///
 /// Keyed singletons carry their `keyIdentifier` through so keyed
 /// dependency resolution still matches; the borrow's access path
@@ -118,7 +127,7 @@ private func syntheticBorrowBinding(for singleton: DiscoveredBinding) -> Discove
     )
     return DiscoveredProvider(
         boundType: singleton.boundType,
-        accessPath: "singletons.\(propertyName)",
+        accessPath: "\(wireGraphParameterInternalName).\(propertyName)",
         form: .property,
         dependencies: [],
         genericParameterNames: [],
@@ -126,3 +135,18 @@ private func syntheticBorrowBinding(for singleton: DiscoveredBinding) -> Discove
         keyIdentifier: singleton.keyIdentifier
     )
 }
+
+/// Internal name of the per-seed bootstrap's `wireGraph:` parameter,
+/// derived from the parameter's type (`_WireGraph`) via the same
+/// property-name rule used everywhere else in emission. Both external
+/// and internal labels are type-anchored: the external label
+/// (`wireGraph:`) doesn't pre-commit to a hierarchical-scope model
+/// where the parameter type might vary by scope depth, and the
+/// internal label avoids collision with any user binding whose
+/// property name resolves to `wireGraph`. Future hierarchical scopes
+/// that thread more parent-graph parameters can apply the same rule
+/// per parameter type.
+package let wireGraphParameterInternalName: String = identifierName(
+    forType: "_WireGraph",
+    key: nil
+)

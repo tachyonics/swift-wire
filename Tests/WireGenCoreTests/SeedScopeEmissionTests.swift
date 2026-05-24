@@ -68,7 +68,7 @@ struct SeedScopeEmissionTests {
             seedTypeExpression: "HBRequestSeed",
             identifierSuffix: "HBRequestSeed",
             topologicalOrder: [
-                syntheticProvider(boundType: "HBRequestSeed", accessPath: "seed"),
+                syntheticProvider(boundType: "HBRequestSeed", accessPath: "hBRequestSeed"),
                 scopedSingleton(
                     "RequestLogger",
                     seed: "HBRequestSeed",
@@ -94,13 +94,12 @@ struct SeedScopeEmissionTests {
                 let hBRequestSeed: HBRequestSeed
                 let requestLogger: RequestLogger
 
-                static func bootstrap(seed: HBRequestSeed, singletons: _WireGraph) async throws -> _HBRequestSeedWireScope {
-                    try await _wireBootstrapHBRequestSeedScope(seed: seed, singletons: singletons)
+                static func bootstrap(seed: HBRequestSeed, wireGraph: _WireGraph) async throws -> _HBRequestSeedWireScope {
+                    try await _wireBootstrapHBRequestSeedScope(seed: seed, wireGraph: wireGraph)
                 }
             }
 
-            private func _wireBootstrapHBRequestSeedScope(seed: HBRequestSeed, singletons: _WireGraph) async throws -> _HBRequestSeedWireScope {
-                let hBRequestSeed = seed
+            private func _wireBootstrapHBRequestSeedScope(seed hBRequestSeed: HBRequestSeed, wireGraph _WireGraph: _WireGraph) async throws -> _HBRequestSeedWireScope {
                 let requestLogger = RequestLogger(seed: hBRequestSeed)
                 return _HBRequestSeedWireScope(hBRequestSeed: hBRequestSeed, requestLogger: requestLogger)
             }
@@ -116,18 +115,19 @@ struct SeedScopeEmissionTests {
 
     @Test func seedScopeBorrowingSingletonsExcludesThemFromStoredProperties() {
         // Singletons borrowed via the synthetic-borrow mechanism appear
-        // as locals in the bootstrap body (`let logger = singletons.logger`)
+        // as locals in the bootstrap body (`let logger = _WireGraph.logger`,
+        // where `_WireGraph` is the wire-graph parameter's internal name)
         // but are NOT stored on the scope struct — the caller already
-        // owns the singletons graph and double-storing would just
-        // duplicate references. The scope struct stores only the seed
-        // and the scope-bound bindings; `borrowedBindingPropertyNames`
-        // is the filter set.
+        // owns the wire graph and double-storing would just duplicate
+        // references. The scope struct stores only the seed and the
+        // scope-bound bindings; `borrowedBindingPropertyNames` is the
+        // filter set.
         let scope = SeedScopeEmission(
             seedTypeExpression: "HBRequestSeed",
             identifierSuffix: "HBRequestSeed",
             topologicalOrder: [
-                syntheticProvider(boundType: "Logger", accessPath: "singletons.logger"),
-                syntheticProvider(boundType: "HBRequestSeed", accessPath: "seed"),
+                syntheticProvider(boundType: "Logger", accessPath: "_WireGraph.logger"),
+                syntheticProvider(boundType: "HBRequestSeed", accessPath: "hBRequestSeed"),
                 scopedSingleton(
                     "RequestLogger",
                     seed: "HBRequestSeed",
@@ -159,14 +159,13 @@ struct SeedScopeEmissionTests {
                 let hBRequestSeed: HBRequestSeed
                 let requestLogger: RequestLogger
 
-                static func bootstrap(seed: HBRequestSeed, singletons: _WireGraph) async throws -> _HBRequestSeedWireScope {
-                    try await _wireBootstrapHBRequestSeedScope(seed: seed, singletons: singletons)
+                static func bootstrap(seed: HBRequestSeed, wireGraph: _WireGraph) async throws -> _HBRequestSeedWireScope {
+                    try await _wireBootstrapHBRequestSeedScope(seed: seed, wireGraph: wireGraph)
                 }
             }
 
-            private func _wireBootstrapHBRequestSeedScope(seed: HBRequestSeed, singletons: _WireGraph) async throws -> _HBRequestSeedWireScope {
-                let logger = singletons.logger
-                let hBRequestSeed = seed
+            private func _wireBootstrapHBRequestSeedScope(seed hBRequestSeed: HBRequestSeed, wireGraph _WireGraph: _WireGraph) async throws -> _HBRequestSeedWireScope {
+                let logger = _WireGraph.logger
                 let requestLogger = RequestLogger(base: logger, seed: hBRequestSeed)
                 return _HBRequestSeedWireScope(hBRequestSeed: hBRequestSeed, requestLogger: requestLogger)
             }
@@ -188,13 +187,17 @@ struct SeedScopeEmissionTests {
         let request = SeedScopeEmission(
             seedTypeExpression: "RequestSeed",
             identifierSuffix: "RequestSeed",
-            topologicalOrder: [syntheticProvider(boundType: "RequestSeed", accessPath: "seed")],
+            topologicalOrder: [
+                syntheticProvider(boundType: "RequestSeed", accessPath: "requestSeed")
+            ],
             borrowedBindingPropertyNames: []
         )
         let job = SeedScopeEmission(
             seedTypeExpression: "JobSeed",
             identifierSuffix: "JobSeed",
-            topologicalOrder: [syntheticProvider(boundType: "JobSeed", accessPath: "seed")],
+            topologicalOrder: [
+                syntheticProvider(boundType: "JobSeed", accessPath: "jobSeed")
+            ],
             borrowedBindingPropertyNames: []
         )
         let output = renderWireGraph(
@@ -231,7 +234,10 @@ struct SeedScopeEmissionTests {
             seedTypeExpression: "TenantSeed<String>",
             identifierSuffix: sanitizeIdentifier("TenantSeed<String>"),
             topologicalOrder: [
-                syntheticProvider(boundType: "TenantSeed<String>", accessPath: "seed")
+                syntheticProvider(
+                    boundType: "TenantSeed<String>",
+                    accessPath: "tenantSeedOfString"
+                )
             ],
             borrowedBindingPropertyNames: []
         )
@@ -243,9 +249,19 @@ struct SeedScopeEmissionTests {
         #expect(output.contains("internal struct _TenantSeedOfStringWireScope: Sendable {"))
         #expect(
             output.contains(
-                "static func bootstrap(seed: TenantSeed<String>, singletons: _WireGraph) async throws"
+                "static func bootstrap(seed: TenantSeed<String>, wireGraph: _WireGraph) async throws"
             )
         )
-        #expect(output.contains("private func _wireBootstrapTenantSeedOfStringScope("))
+        // The private function uses `seed tenantSeedOfString:` and
+        // `wireGraph _WireGraph:` — external labels are type-anchored
+        // (`seed:` because role is fixed; `wireGraph:` so future
+        // hierarchy models aren't constrained by a role-claim like
+        // `singletons:`), internal names use the standard property-
+        // name rule on the parameter type.
+        #expect(
+            output.contains(
+                "private func _wireBootstrapTenantSeedOfStringScope(seed tenantSeedOfString: TenantSeed<String>, wireGraph _WireGraph: _WireGraph)"
+            )
+        )
     }
 }

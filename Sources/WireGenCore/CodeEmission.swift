@@ -140,6 +140,18 @@ private func appendSeedScopeStruct(
     let storedBindings = scope.topologicalOrder.filter {
         !scope.borrowedBindingPropertyNames.contains(propertyName(for: $0))
     }
+    // Both bootstrap parameters take type-derived names — external
+    // labels and internal labels are both derived from the
+    // parameter's type. `seed:` is fixed since it's role-anchored to
+    // the scope-entering value; the singletons parameter uses
+    // `wireGraph:` (the type-derived form) rather than the
+    // role-anchored `singletons:` so the label doesn't pre-commit to
+    // a hierarchical-scope model where the parameter's type might
+    // change. Type-derivation everywhere also avoids collision with
+    // any user binding whose property name resolves to `seed` or
+    // `wireGraph`.
+    let seedLocal = identifierName(forType: scope.seedTypeExpression, key: nil)
+    let wireGraphLocal = wireGraphParameterInternalName
 
     lines.append("")
     lines.append("internal struct \(structName): Sendable {")
@@ -151,15 +163,15 @@ private func appendSeedScopeStruct(
         lines.append("")
     }
     lines.append(
-        "    static func bootstrap(seed: \(scope.seedTypeExpression), singletons: _WireGraph) async throws -> \(structName) {"
+        "    static func bootstrap(seed: \(scope.seedTypeExpression), wireGraph: _WireGraph) async throws -> \(structName) {"
     )
-    lines.append("        try await \(bootstrapFunction)(seed: seed, singletons: singletons)")
+    lines.append("        try await \(bootstrapFunction)(seed: seed, wireGraph: wireGraph)")
     lines.append("    }")
     lines.append("}")
 
     lines.append("")
     lines.append(
-        "private func \(bootstrapFunction)(seed: \(scope.seedTypeExpression), singletons: _WireGraph) async throws -> \(structName) {"
+        "private func \(bootstrapFunction)(seed \(seedLocal): \(scope.seedTypeExpression), wireGraph \(wireGraphLocal): _WireGraph) async throws -> \(structName) {"
     )
 
     if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {
@@ -171,6 +183,15 @@ private func appendSeedScopeStruct(
     for binding in scope.topologicalOrder {
         let local = propertyName(for: binding)
         let construction = constructionExpression(for: binding)
+        // Skip a redundant `let X = X` shadow: it happens when the
+        // construction expression equals the local name, which inside
+        // the seed bootstrap means the synthetic seed binding whose
+        // access path is the parameter's internal name. Subsequent
+        // bare references resolve to the parameter directly. The same
+        // shadow on a module-scope provider would cross from module
+        // scope into the function — that path stays in `appendStruct`
+        // and isn't affected.
+        guard local != construction else { continue }
         lines.append("    let \(local) = \(construction)")
     }
 
