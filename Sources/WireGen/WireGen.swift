@@ -55,9 +55,14 @@ struct WireGen {
                     )
                 )
             }
+        // Synthesise the singleton borrow set once and reuse across
+        // every seeded scope. Keeps `orchestrateSeedScope` ignorant of
+        // the borrow source so a future hierarchical model can union
+        // borrows from multiple parents at this layer.
+        let singletonBorrows = syntheticSingletonBorrowBindings(from: defaultBindings)
         let seedScopeOrchestrations = seedScopeOrchestrations(
             in: aggregate,
-            defaultGraphSingletons: defaultBindings
+            borrowBindings: singletonBorrows
         )
 
         printSkippedReport(
@@ -192,9 +197,14 @@ struct WireGen {
     /// graph scoped partitions (`container ≠ nil && scope ≠ nil`)
     /// aren't surfaced yet; see `containerSingletonBindings` for the
     /// matching restriction.
+    ///
+    /// `borrowBindings` is the synthetic borrow set every scope can
+    /// resolve singleton dependencies through. The caller constructs
+    /// it once via `syntheticSingletonBorrowBindings(from:)` and
+    /// passes it through so each per-seed call reuses the same set.
     private static func seedScopeOrchestrations(
         in aggregate: DiscoveryAggregate,
-        defaultGraphSingletons: [DiscoveredBinding]
+        borrowBindings: [DiscoveredBinding]
     ) -> [SeedScopeOrchestration] {
         var seedPartitions: [ScopeKey: [DiscoveredBinding]] = [:]
         for (partition, bindings) in aggregate.allBindings {
@@ -208,7 +218,7 @@ struct WireGen {
                 orchestrateSeedScope(
                     seedKey: seedKey,
                     scopeBindings: bindings,
-                    defaultGraphSingletons: defaultGraphSingletons,
+                    borrowBindings: borrowBindings,
                     typealiases: aggregate.typealiases
                 )
             }

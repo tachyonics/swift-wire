@@ -58,7 +58,7 @@ struct SeedScopeOrchestrationTests {
         let orchestration = orchestrateSeedScope(
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
-            defaultGraphSingletons: [],
+            borrowBindings: [],
             typealiases: []
         )
         let order = try #require(orchestration.result.outcome.topologicalOrder)
@@ -82,7 +82,7 @@ struct SeedScopeOrchestrationTests {
         let orchestration = orchestrateSeedScope(
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
-            defaultGraphSingletons: [singleton],
+            borrowBindings: syntheticSingletonBorrowBindings(from: [singleton]),
             typealiases: []
         )
         let order = try #require(orchestration.result.outcome.topologicalOrder)
@@ -106,7 +106,7 @@ struct SeedScopeOrchestrationTests {
         let orchestration = orchestrateSeedScope(
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
-            defaultGraphSingletons: [],
+            borrowBindings: [],
             typealiases: []
         )
         let errors = try #require(orchestration.result.outcome.validationErrors)
@@ -121,7 +121,7 @@ struct SeedScopeOrchestrationTests {
         let orchestration = orchestrateSeedScope(
             seedKey: ScopeKey(seed: "TenantSeed<String>"),
             scopeBindings: [],
-            defaultGraphSingletons: [],
+            borrowBindings: [],
             typealiases: []
         )
         #expect(orchestration.identifierSuffix == "TenantSeedOfString")
@@ -139,7 +139,7 @@ struct SeedScopeOrchestrationTests {
         let orchestration = orchestrateSeedScope(
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
-            defaultGraphSingletons: [unused],
+            borrowBindings: syntheticSingletonBorrowBindings(from: [unused]),
             typealiases: []
         )
         let order = try #require(orchestration.result.outcome.topologicalOrder)

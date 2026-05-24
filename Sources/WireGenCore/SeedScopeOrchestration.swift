@@ -32,28 +32,30 @@ package struct SeedScopeOrchestration: Sendable {
 }
 
 /// Build one per-seed scope graph by combining the scope's own
-/// bindings with a synthetic binding for the seed type and synthetic
-/// "borrow" bindings for every singleton in the default graph. The
-/// borrow bindings let the scope's `@Inject`-driven dependencies
-/// resolve against singleton bindings constructed elsewhere
-/// (`_WireGraph`) rather than re-construct them inside the scope.
+/// bindings with a synthetic binding for the seed type and the
+/// caller-supplied set of synthetic "borrow" bindings. The borrow
+/// bindings let the scope's `@Inject`-driven dependencies resolve
+/// against bindings constructed elsewhere (today: default-graph
+/// singletons; in a future hierarchical model: those plus parent
+/// seeded scopes) rather than re-construct them inside the scope.
 ///
 /// The borrowed bindings appear in the resulting graph's topological
 /// order; emission classifies them via
 /// `SeedScopeOrchestration.borrowedBindingPropertyNames` and emits
-/// them as `let x = <wireGraphLocal>.x` aliases rather than as
-/// constructor calls — `<wireGraphLocal>` is the bootstrap's
-/// wire-graph parameter internal name. The seed binding's `accessPath`
-/// is the seed type's canonical property-name form, matching the
-/// bootstrap's internal seed parameter name; emission then skips the
-/// redundant `let X = X` shadow so the parameter is referenced
-/// directly.
+/// them as `let x = <accessor>.x` aliases rather than as constructor
+/// calls — the accessor is encoded in each borrow's `accessPath` by
+/// whoever constructed it (see `syntheticSingletonBorrowBindings`).
+/// The seed binding's `accessPath` is the seed type's canonical
+/// property-name form, matching the bootstrap's internal seed
+/// parameter name; emission then skips the redundant `let X = X`
+/// shadow so the parameter is referenced directly.
 ///
-/// `defaultGraphSingletons` is the set of singleton bindings the
-/// scope can borrow — every binding in the default partition,
-/// scope-bound or provider, qualifies. Container-graph singletons are
-/// not borrow-eligible (a `@Container`-selected graph is atomic and
-/// the cross-scope borrowing mechanism doesn't span containers).
+/// `borrowBindings` is the set of synthetic borrows the caller has
+/// already constructed (typically via `syntheticSingletonBorrowBindings`).
+/// Keeping the synthesis at the caller level decouples this function
+/// from knowing the borrow source: future hierarchical scopes can
+/// union singleton borrows with parent-scope borrows before passing
+/// them in, without changing this signature.
 ///
 /// Returns the orchestration descriptor — caller integrates the
 /// embedded `GraphResult` into the validation pipeline alongside the
@@ -61,15 +63,14 @@ package struct SeedScopeOrchestration: Sendable {
 package func orchestrateSeedScope(
     seedKey: ScopeKey,
     scopeBindings: [DiscoveredBinding],
-    defaultGraphSingletons: [DiscoveredBinding],
+    borrowBindings: [DiscoveredBinding],
     typealiases: [DiscoveredTypealias]
 ) -> SeedScopeOrchestration {
     let identifierSuffix = sanitizeIdentifier(seedKey.seed)
 
     let seedBinding = syntheticSeedBinding(seedTypeExpression: seedKey.seed)
-    let borrowBindings = defaultGraphSingletons.map(syntheticBorrowBinding(for:))
 
-    let combined = scopeBindings + [seedBinding] + borrowBindings.map(DiscoveredBinding.provider)
+    let combined = scopeBindings + [seedBinding] + borrowBindings
     let result = buildDependencyGraph(from: combined, typealiases: typealiases)
 
     var borrowedNames: Set<String> = []
@@ -84,6 +85,28 @@ package func orchestrateSeedScope(
         result: result,
         borrowedBindingPropertyNames: borrowedNames
     )
+}
+
+/// Build synthetic borrow bindings for every singleton in the
+/// default graph. Each borrow is a property-form provider whose
+/// `accessPath` is `"<wireGraphLocal>.<property>"` so emission renders
+/// it as a `let <property> = <wireGraphLocal>.<property>` alias
+/// pulling from the bootstrap's wire-graph parameter. Singletons
+/// inside `@Container`-selected graphs are not borrow-eligible (a
+/// container's graph is atomic and the cross-scope borrowing
+/// mechanism doesn't span containers); call sites pass only
+/// default-graph bindings here.
+///
+/// Exposed at module level so callers can construct the borrow set
+/// once and reuse it across every per-seed orchestration in a
+/// build. Future hierarchical-scope work can introduce parallel
+/// `syntheticParentScopeBorrowBindings(from:)`-style helpers and
+/// `orchestrateSeedScope` will accept their union without needing
+/// to change.
+package func syntheticSingletonBorrowBindings(
+    from singletons: [DiscoveredBinding]
+) -> [DiscoveredBinding] {
+    singletons.map { .provider(syntheticBorrowBinding(for: $0)) }
 }
 
 /// Synthetic seed binding: a property-form provider whose
