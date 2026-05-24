@@ -142,6 +142,11 @@ private func syntheticSeedBinding(seedTypeExpression: String) -> DiscoveredBindi
 /// default graph and is already initialised by the time the scope's
 /// bootstrap runs.
 ///
+/// The borrow inherits the original singleton's source location so
+/// any diagnostic referencing the borrow (topological-order print,
+/// future borrow-related errors) lands on the user's declaration
+/// rather than a synthetic placeholder.
+///
 /// Keyed singletons carry their `keyIdentifier` through so keyed
 /// dependency resolution still matches; the borrow's access path
 /// references the keyed property name on the singletons struct.
@@ -156,7 +161,7 @@ private func syntheticBorrowBinding(for singleton: DiscoveredBinding) -> Discove
         form: .property,
         dependencies: [],
         genericParameterNames: [],
-        location: SourceLocation(file: "<synthetic>", line: 0, column: 0),
+        location: singleton.location,
         keyIdentifier: singleton.keyIdentifier
     )
 }
