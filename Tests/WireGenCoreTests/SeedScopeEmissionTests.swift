@@ -253,11 +253,9 @@ struct SeedScopeEmissionTests {
             )
         )
         // The private function uses `seed tenantSeedOfString:` and
-        // `wireGraph _WireGraph:` — external labels are type-anchored
-        // (`seed:` because role is fixed; `wireGraph:` so future
-        // hierarchy models aren't constrained by a role-claim like
-        // `singletons:`), internal names use the standard property-
-        // name rule on the parameter type.
+        // `wireGraph _WireGraph:` — external and internal labels are
+        // both derived from the parameter type via the standard
+        // property-name rule.
         #expect(
             output.contains(
                 "private func _wireBootstrapTenantSeedOfStringScope(seed tenantSeedOfString: TenantSeed<String>, wireGraph _WireGraph: _WireGraph)"

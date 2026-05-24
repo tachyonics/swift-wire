@@ -78,8 +78,8 @@ package func renderWireGraph(
     }
 
     // Per-seed scope graphs. Each emits a `_<Suffix>WireScope` struct
-    // whose `bootstrap(seed:singletons:)` takes the externally-owned
-    // seed value and the singletons graph; the body aliases singleton
+    // whose `bootstrap(seed:wireGraph:)` takes the externally-owned
+    // seed value and the wire graph; the body aliases singleton
     // dependencies as locals via the synthetic-borrow bindings, then
     // constructs scope-bound bindings in topological order.
     for scope in seedScopeOrders.sorted(by: { $0.identifierSuffix < $1.identifierSuffix }) {
@@ -100,7 +100,7 @@ package func renderWireGraph(
 /// suffix for the struct/function names, the topological order over
 /// the combined graph, and the borrowed-binding property names so
 /// the emitter knows which entries are singletons aliased from the
-/// `singletons:` bootstrap parameter rather than constructed in
+/// `wireGraph:` bootstrap parameter rather than constructed in
 /// place).
 package struct SeedScopeEmission: Sendable {
     package let seedTypeExpression: String
@@ -123,14 +123,17 @@ package struct SeedScopeEmission: Sendable {
 
 /// Emit one `_<Suffix>WireScope` struct + matching
 /// `_wireBootstrap<Suffix>Scope` free function pair. The bootstrap
-/// takes `(seed:, singletons:)` parameters. Synthetic borrow bindings
-/// in the topological order construct as `let prop = singletons.prop`
-/// aliases (handled by their `accessPath` already); the seed binding
-/// aliases as `let <camel(seed)> = seed`. Both pass through the
+/// takes `(seed:, wireGraph:)` parameters. Synthetic borrow bindings
+/// in the topological order construct as
+/// `let prop = <wireGraphLocal>.prop` aliases (handled by their
+/// `accessPath` already); the seed binding's bare reference resolves
+/// to the bootstrap's seed parameter directly. Both pass through the
 /// existing `constructionExpression` path — emission's only special
-/// case is filtering borrowed bindings out of the struct's stored
-/// properties so the scope struct doesn't double-expose singletons
-/// the caller already holds via `singletons`.
+/// cases are filtering borrowed bindings out of the struct's stored
+/// properties (so the scope struct doesn't double-expose singletons
+/// the caller already holds via `wireGraph`) and skipping the
+/// redundant `let X = X` shadow when a construction expression
+/// equals its local name.
 private func appendSeedScopeStruct(
     scope: SeedScopeEmission,
     into lines: inout [String]
@@ -140,16 +143,15 @@ private func appendSeedScopeStruct(
     let storedBindings = scope.topologicalOrder.filter {
         !scope.borrowedBindingPropertyNames.contains(propertyName(for: $0))
     }
-    // Both bootstrap parameters take type-derived names — external
-    // labels and internal labels are both derived from the
-    // parameter's type. `seed:` is fixed since it's role-anchored to
-    // the scope-entering value; the singletons parameter uses
-    // `wireGraph:` (the type-derived form) rather than the
-    // role-anchored `singletons:` so the label doesn't pre-commit to
-    // a hierarchical-scope model where the parameter's type might
-    // change. Type-derivation everywhere also avoids collision with
-    // any user binding whose property name resolves to `seed` or
-    // `wireGraph`.
+    // Both bootstrap parameter labels are type-anchored rather than
+    // role-anchored. `seed:` is the external label by convention (the
+    // role here is fixed — it's the scope-entering value), but the
+    // internal name uses the type-derived form. The wire-graph
+    // parameter uses `wireGraph:` externally too, so the label
+    // doesn't pre-commit to a hierarchical-scope model where the
+    // parameter's type might vary by scope depth. Type-derivation
+    // everywhere also avoids collisions with user bindings whose
+    // property names resolve to `seed` or `wireGraph`.
     let seedLocal = identifierName(forType: scope.seedTypeExpression, key: nil)
     let wireGraphLocal = wireGraphParameterInternalName
 

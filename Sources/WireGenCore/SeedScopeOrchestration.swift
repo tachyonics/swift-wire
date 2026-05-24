@@ -8,7 +8,7 @@
 /// `borrowedBindingPropertyNames` carries the property-name identities
 /// of bindings the scope "borrows" rather than constructs — the seed
 /// parameter alias and any singleton dependency reached via the
-/// `singletons:` bootstrap parameter. Code emission uses this to
+/// `wireGraph:` bootstrap parameter. Code emission uses this to
 /// filter the scope struct's stored-property list (borrowed bindings
 /// appear in the bootstrap body as locals but not as stored properties
 /// on the scope struct).
@@ -41,11 +41,13 @@ package struct SeedScopeOrchestration: Sendable {
 /// The borrowed bindings appear in the resulting graph's topological
 /// order; emission classifies them via
 /// `SeedScopeOrchestration.borrowedBindingPropertyNames` and emits
-/// them as `let x = singletons.x` aliases rather than as constructor
-/// calls. The seed binding's `accessPath` is the seed type's
-/// canonical property-name form — matching the private bootstrap
-/// function's internal seed parameter name — so the bootstrap body's
-/// `let <name> = <name>` line shadow-binds from the parameter.
+/// them as `let x = <wireGraphLocal>.x` aliases rather than as
+/// constructor calls — `<wireGraphLocal>` is the bootstrap's
+/// wire-graph parameter internal name. The seed binding's `accessPath`
+/// is the seed type's canonical property-name form, matching the
+/// bootstrap's internal seed parameter name; emission then skips the
+/// redundant `let X = X` shadow so the parameter is referenced
+/// directly.
 ///
 /// `defaultGraphSingletons` is the set of singleton bindings the
 /// scope can borrow — every binding in the default partition,
