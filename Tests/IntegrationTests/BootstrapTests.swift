@@ -115,4 +115,83 @@ struct BootstrapTests {
         #expect(graph.appName.value == "IntegrationTests")
         #expect(graph.appNameKeyedAppNameAlternate.value == "alternate")
     }
+
+    // MARK: - `@Scoped(seed:)` end-to-end
+
+    @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {
+        // The generated `_TestRequestSeedWireScope.bootstrap(seed:wireGraph:)`
+        // takes the seed value and the singletons graph; `RequestLogger`
+        // (`@Scoped(seed: TestRequestSeed.self)`) injects both the
+        // seed and the singleton `Logger`. The seed lands on the
+        // scope struct as a stored property; the singleton is
+        // borrowed (inlined at `RequestLogger`'s constructor site,
+        // not stored).
+        let graph = try await _WireGraph.bootstrap()
+        let scope = try await _TestRequestSeedWireScope.bootstrap(
+            seed: TestRequestSeed(id: "req-1"),
+            wireGraph: graph
+        )
+        #expect(scope.testRequestSeed.id == "req-1")
+        #expect(scope.requestLogger.log("hello") == "[log] [req-1] hello")
+    }
+
+    @Test func seedScopeBootstrapResolvesInScopeDependencies() async throws {
+        // `RequestHandler` depends on `RequestLogger` — both
+        // `@Scoped(seed: TestRequestSeed.self)`. The generated
+        // bootstrap must construct `RequestLogger` first and pass it
+        // into `RequestHandler`'s init. The handler reads through to
+        // the same scope's seed and singleton via the in-scope
+        // logger.
+        let graph = try await _WireGraph.bootstrap()
+        let scope = try await _TestRequestSeedWireScope.bootstrap(
+            seed: TestRequestSeed(id: "req-2"),
+            wireGraph: graph
+        )
+        #expect(scope.requestHandler.handle("create") == "[log] [req-2] handling create")
+    }
+
+    @Test func containerScopeBootstrapBorrowsFromContainerWireGraph() async throws {
+        // `TestContainer.JobRunner` is `@Scoped(seed: TestJobSeed.self)`
+        // and lives inside `@Container TestContainer`. The generated
+        // `_TestContainer_TestJobSeedWireScope.bootstrap(seed:testContainerWireGraph:)`
+        // takes the container's graph (not `_WireGraph`) and borrows
+        // its `banner` from there. Exercises the (container, scope)
+        // partition cell end-to-end: distinct struct name from any
+        // default-graph scope, distinct parent-graph parameter type,
+        // borrow path resolves against the container's graph.
+        let containerGraph = try await _TestContainerWireGraph.bootstrap()
+        let scope = try await _TestContainer_TestJobSeedWireScope.bootstrap(
+            seed: TestJobSeed(queue: "high"),
+            testContainerWireGraph: containerGraph
+        )
+        // The seed lands on the scope struct.
+        #expect(scope.testJobSeed.queue == "high")
+        // The borrow resolves to the *container's* banner, not the
+        // default graph's banner. (The container's banner is the
+        // fixed string "test container"; the default graph's is
+        // composed via `makeBanner(appName:buildNumber:)` and reads
+        // "IntegrationTests #42".)
+        #expect(scope.jobRunner.run() == "[high] running on test container")
+    }
+
+    @Test func seedScopeEntriesProduceDistinctInstances() async throws {
+        // Each `bootstrap(seed:wireGraph:)` call constructs a fresh
+        // scope. Two entries with distinct seeds yield distinct
+        // scope-bound instances and distinct seed-derived behaviour.
+        // Singletons are shared (same `graph` passed in both calls),
+        // so the underlying logger is the same instance both times.
+        let graph = try await _WireGraph.bootstrap()
+        let scopeA = try await _TestRequestSeedWireScope.bootstrap(
+            seed: TestRequestSeed(id: "a"),
+            wireGraph: graph
+        )
+        let scopeB = try await _TestRequestSeedWireScope.bootstrap(
+            seed: TestRequestSeed(id: "b"),
+            wireGraph: graph
+        )
+        #expect(scopeA.requestLogger.log("ping") == "[log] [a] ping")
+        #expect(scopeB.requestLogger.log("ping") == "[log] [b] ping")
+        // The scope-bound types are value types here; "distinct
+        // instances" is observable via the seed-derived output above.
+    }
 }
