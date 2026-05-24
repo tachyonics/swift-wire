@@ -35,35 +35,11 @@ struct WireGen {
         print(renderDiscoveryReport(perFile: aggregate.perFile))
 
         // One graph per scope — default, per-`@Container`, and per-seed.
-        // Default and container graphs are atomic; seed graphs borrow
-        // default singletons via `orchestrateSeedScope`'s synthetics.
-        let defaultBindings = defaultBindings(in: aggregate)
-        let defaultGraph = buildDependencyGraph(
-            from: defaultBindings,
-            typealiases: aggregate.typealiases
-        )
-        let containerSingletonBindings = containerSingletonBindings(in: aggregate)
-        let containerGraphs =
-            containerSingletonBindings
-            .sorted(by: { $0.key < $1.key })
-            .map { name, bindings in
-                (
-                    name: name,
-                    result: buildDependencyGraph(
-                        from: bindings,
-                        typealiases: aggregate.typealiases
-                    )
-                )
-            }
-        // Synthesise the singleton borrow set once and reuse across
-        // every seeded scope. Keeps `orchestrateSeedScope` ignorant of
-        // the borrow source so a future hierarchical model can union
-        // borrows from multiple parents at this layer.
-        let singletonBorrows = syntheticSingletonBorrowBindings(from: defaultBindings)
-        let seedScopeOrchestrations = seedScopeOrchestrations(
-            in: aggregate,
-            borrowBindings: singletonBorrows
-        )
+        let graphs = buildAllGraphs(in: aggregate)
+        let defaultGraph = graphs.defaultGraph
+        let containerGraphs = graphs.containerGraphs
+        let containerSingletonBindings = graphs.containerSingletonBindings
+        let seedScopeOrchestrations = graphs.seedScopeOrchestrations
 
         printSkippedReport(
             default: defaultGraph,
@@ -191,18 +167,70 @@ struct WireGen {
         return result
     }
 
+    /// Bundle of all per-graph build outputs. Held together so the
+    /// main flow can pull each output through the validation / print
+    /// / emit pipeline without recomputing slices.
+    private struct GraphBuilds {
+        var defaultGraph: GraphResult
+        var containerGraphs: [(name: String, result: GraphResult)]
+        var containerSingletonBindings: [String: [DiscoveredBinding]]
+        var seedScopeOrchestrations: [SeedScopeOrchestration]
+    }
+
+    /// Build every graph the input describes: the default graph, one
+    /// per `@Container`, and one per seeded scope (default-graph and
+    /// container-scope alike). Default and container graphs are
+    /// atomic; seed graphs borrow singletons via per-parent-graph
+    /// synthetics so each seeded scope's bootstrap points at the
+    /// right parent.
+    private static func buildAllGraphs(in aggregate: DiscoveryAggregate) -> GraphBuilds {
+        let defaultBindings = defaultBindings(in: aggregate)
+        let defaultGraph = buildDependencyGraph(
+            from: defaultBindings,
+            typealiases: aggregate.typealiases
+        )
+        let containerSingletonBindings = containerSingletonBindings(in: aggregate)
+        let containerGraphs =
+            containerSingletonBindings
+            .sorted(by: { $0.key < $1.key })
+            .map { name, bindings in
+                (
+                    name: name,
+                    result: buildDependencyGraph(
+                        from: bindings,
+                        typealiases: aggregate.typealiases
+                    )
+                )
+            }
+        let singletonBorrows = syntheticSingletonBorrowBindings(from: defaultBindings)
+        let defaultSeedScopes = defaultSeedScopeOrchestrations(
+            in: aggregate,
+            borrowBindings: singletonBorrows
+        )
+        let containerSeedScopes = containerSeedScopeOrchestrations(
+            in: aggregate,
+            containerSingletons: containerSingletonBindings
+        )
+        return GraphBuilds(
+            defaultGraph: defaultGraph,
+            containerGraphs: containerGraphs,
+            containerSingletonBindings: containerSingletonBindings,
+            seedScopeOrchestrations: defaultSeedScopes + containerSeedScopes
+        )
+    }
+
     /// Build one orchestrated per-seed scope graph per unique seed
-    /// type appearing in default-graph `@Scoped` partitions. Sorted by
-    /// seed-type text for deterministic output ordering. Container-
-    /// graph scoped partitions (`container ≠ nil && scope ≠ nil`)
-    /// aren't surfaced yet; see `containerSingletonBindings` for the
-    /// matching restriction.
+    /// type appearing in default-graph `@Scoped` partitions (i.e.
+    /// `container == nil`, `scope ≠ nil`). Sorted by seed-type text
+    /// for deterministic output ordering. Container-graph scoped
+    /// partitions are handled by `containerSeedScopeOrchestrations`.
     ///
-    /// `borrowBindings` is the synthetic borrow set every scope can
-    /// resolve singleton dependencies through. The caller constructs
-    /// it once via `syntheticSingletonBorrowBindings(from:)` and
-    /// passes it through so each per-seed call reuses the same set.
-    private static func seedScopeOrchestrations(
+    /// `borrowBindings` is the singleton borrow set every default-
+    /// graph scope can resolve singleton dependencies through. The
+    /// caller constructs it once via
+    /// `syntheticSingletonBorrowBindings(from:)` and passes it through
+    /// so each per-seed call reuses the same set.
+    private static func defaultSeedScopeOrchestrations(
         in aggregate: DiscoveryAggregate,
         borrowBindings: [DiscoveredBinding]
     ) -> [SeedScopeOrchestration] {
@@ -224,14 +252,60 @@ struct WireGen {
             }
     }
 
+    /// Build one orchestrated per-seed scope graph per unique
+    /// `(container, seed)` pair found in container-scope partitions
+    /// (`container ≠ nil && scope ≠ nil`). Each container's seeded
+    /// scopes borrow from that container's singletons (typed as
+    /// `_<Container>WireGraph`); the orchestration carries
+    /// `parentGraphType` through to emission so the bootstrap
+    /// signature, internal name, and borrow access paths all point
+    /// at the container's graph rather than the default `_WireGraph`.
+    ///
+    /// Sorted by `(container, seed)` for deterministic output. Each
+    /// per-container borrow set is synthesised once and shared across
+    /// every seed in that container.
+    private static func containerSeedScopeOrchestrations(
+        in aggregate: DiscoveryAggregate,
+        containerSingletons: [String: [DiscoveredBinding]]
+    ) -> [SeedScopeOrchestration] {
+        var partitions: [String: [ScopeKey: [DiscoveredBinding]]] = [:]
+        for (partition, bindings) in aggregate.allBindings {
+            guard let container = partition.container, let scope = partition.scope else {
+                continue
+            }
+            partitions[container, default: [:]][scope, default: []].append(contentsOf: bindings)
+        }
+        var orchestrations: [SeedScopeOrchestration] = []
+        for container in partitions.keys.sorted() {
+            let parentGraphType = "_\(container)WireGraph"
+            let borrows = syntheticSingletonBorrowBindings(
+                from: containerSingletons[container] ?? [],
+                inWireGraphOfType: parentGraphType
+            )
+            let seedsInContainer = partitions[container] ?? [:]
+            for (seedKey, scopeBindings) in seedsInContainer.sorted(by: { $0.key.seed < $1.key.seed }) {
+                let orchestration = orchestrateSeedScope(
+                    seedKey: seedKey,
+                    containerName: container,
+                    scopeBindings: scopeBindings,
+                    borrowBindings: borrows,
+                    parentGraphType: parentGraphType,
+                    typealiases: aggregate.typealiases
+                )
+                orchestrations.append(orchestration)
+            }
+        }
+        return orchestrations
+    }
+
     /// Flatten the per-seed orchestrations into the emission-side
     /// shape `renderWireGraph` consumes — each entry carries the seed
-    /// type expression, the identifier suffix, the topological order,
-    /// and the borrowed-binding property-name set the emitter uses to
-    /// distinguish locally-constructed bindings from singleton borrows.
-    /// Orchestrations whose graphs failed validation are excluded
-    /// (the validation-failure pipeline has already exited by this
-    /// point; the filter is defensive).
+    /// type expression, the identifier suffix, the parent graph type,
+    /// the topological order, and the borrowed-binding property-name
+    /// set the emitter uses to distinguish locally-constructed
+    /// bindings from singleton borrows. Orchestrations whose graphs
+    /// failed validation are excluded (the validation-failure pipeline
+    /// has already exited by this point; the filter is defensive).
     private static func collectSeedScopeOrders(
         _ orchestrations: [SeedScopeOrchestration]
     ) -> [SeedScopeEmission] {
@@ -240,6 +314,7 @@ struct WireGen {
             return SeedScopeEmission(
                 seedTypeExpression: orchestration.seedTypeExpression,
                 identifierSuffix: orchestration.identifierSuffix,
+                parentGraphType: orchestration.parentGraphType,
                 topologicalOrder: order,
                 borrowedBindingPropertyNames: orchestration.borrowedBindingPropertyNames
             )
