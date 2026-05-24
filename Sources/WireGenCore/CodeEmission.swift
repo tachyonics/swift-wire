@@ -38,7 +38,8 @@
 package func renderWireGraph(
     imports: [String],
     topologicalOrder: [DiscoveredBinding],
-    containerTopologicalOrders: [String: [DiscoveredBinding]] = [:]
+    containerTopologicalOrders: [String: [DiscoveredBinding]] = [:],
+    seedScopeOrders: [SeedScopeEmission] = []
 ) -> String {
     var lines: [String] = []
 
@@ -76,12 +77,109 @@ package func renderWireGraph(
         )
     }
 
+    // Per-seed scope graphs. Each emits a `_<Suffix>WireScope` struct
+    // whose `bootstrap(seed:singletons:)` takes the externally-owned
+    // seed value and the singletons graph; the body aliases singleton
+    // dependencies as locals via the synthetic-borrow bindings, then
+    // constructs scope-bound bindings in topological order.
+    for scope in seedScopeOrders.sorted(by: { $0.identifierSuffix < $1.identifierSuffix }) {
+        appendSeedScopeStruct(scope: scope, into: &lines)
+    }
+
     // Trailing newline at end of file. `appendStruct` is leading-blank
     // only, so the final struct's closing `}` doesn't end the file
     // without it.
     lines.append("")
 
     return lines.joined(separator: "\n")
+}
+
+/// Emission-side description of one per-seed scope graph. Mirrors
+/// the orchestration result's relevant fields (the seed type
+/// expression for the bootstrap parameter type, the identifier
+/// suffix for the struct/function names, the topological order over
+/// the combined graph, and the borrowed-binding property names so
+/// the emitter knows which entries are singletons aliased from the
+/// `singletons:` bootstrap parameter rather than constructed in
+/// place).
+package struct SeedScopeEmission: Sendable {
+    package let seedTypeExpression: String
+    package let identifierSuffix: String
+    package let topologicalOrder: [DiscoveredBinding]
+    package let borrowedBindingPropertyNames: Set<String>
+
+    package init(
+        seedTypeExpression: String,
+        identifierSuffix: String,
+        topologicalOrder: [DiscoveredBinding],
+        borrowedBindingPropertyNames: Set<String>
+    ) {
+        self.seedTypeExpression = seedTypeExpression
+        self.identifierSuffix = identifierSuffix
+        self.topologicalOrder = topologicalOrder
+        self.borrowedBindingPropertyNames = borrowedBindingPropertyNames
+    }
+}
+
+/// Emit one `_<Suffix>WireScope` struct + matching
+/// `_wireBootstrap<Suffix>Scope` free function pair. The bootstrap
+/// takes `(seed:, singletons:)` parameters. Synthetic borrow bindings
+/// in the topological order construct as `let prop = singletons.prop`
+/// aliases (handled by their `accessPath` already); the seed binding
+/// aliases as `let <camel(seed)> = seed`. Both pass through the
+/// existing `constructionExpression` path — emission's only special
+/// case is filtering borrowed bindings out of the struct's stored
+/// properties so the scope struct doesn't double-expose singletons
+/// the caller already holds via `singletons`.
+private func appendSeedScopeStruct(
+    scope: SeedScopeEmission,
+    into lines: inout [String]
+) {
+    let structName = "_\(scope.identifierSuffix)WireScope"
+    let bootstrapFunction = "_wireBootstrap\(scope.identifierSuffix)Scope"
+    let storedBindings = scope.topologicalOrder.filter {
+        !scope.borrowedBindingPropertyNames.contains(propertyName(for: $0))
+    }
+
+    lines.append("")
+    lines.append("internal struct \(structName): Sendable {")
+    for binding in storedBindings {
+        let property = propertyName(for: binding)
+        lines.append("    let \(property): \(binding.boundTypeReference)")
+    }
+    if !storedBindings.isEmpty {
+        lines.append("")
+    }
+    lines.append(
+        "    static func bootstrap(seed: \(scope.seedTypeExpression), singletons: _WireGraph) async throws -> \(structName) {"
+    )
+    lines.append("        try await \(bootstrapFunction)(seed: seed, singletons: singletons)")
+    lines.append("    }")
+    lines.append("}")
+
+    lines.append("")
+    lines.append(
+        "private func \(bootstrapFunction)(seed: \(scope.seedTypeExpression), singletons: _WireGraph) async throws -> \(structName) {"
+    )
+
+    if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {
+        lines.append("    \(structName)()")
+        lines.append("}")
+        return
+    }
+
+    for binding in scope.topologicalOrder {
+        let local = propertyName(for: binding)
+        let construction = constructionExpression(for: binding)
+        lines.append("    let \(local) = \(construction)")
+    }
+
+    let returnArgs = storedBindings.map { binding -> String in
+        let name = propertyName(for: binding)
+        return "\(name): \(name)"
+    }.joined(separator: ", ")
+    lines.append("    return \(structName)(\(returnArgs))")
+    lines.append("}")
 }
 
 /// Emit one `_<Name>WireGraph` struct + matching `_wireBootstrap<Name>`
@@ -295,7 +393,7 @@ private func renderArguments(_ dependencies: [DependencyParameter]) -> String {
 /// a collision (two distinct bound types that sanitize to the same
 /// identifier), iteration 3's diagnostic pass will detect it. Until
 /// then the recommended fix is a typealias.
-private func sanitizeIdentifier(_ raw: String) -> String {
+package func sanitizeIdentifier(_ raw: String) -> String {
     var result = ""
     for char in raw {
         switch char {

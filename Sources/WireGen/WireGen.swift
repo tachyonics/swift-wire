@@ -34,11 +34,12 @@ struct WireGen {
         let aggregate = discoverAllSources(at: sourcePaths)
         print(renderDiscoveryReport(perFile: aggregate.perFile))
 
-        // One graph per scope — default plus one per `@Container`.
-        // Each is validated independently (atomic; no cross-graph
-        // leakage).
+        // One graph per scope — default, per-`@Container`, and per-seed.
+        // Default and container graphs are atomic; seed graphs borrow
+        // default singletons via `orchestrateSeedScope`'s synthetics.
+        let defaultBindings = defaultBindings(in: aggregate)
         let defaultGraph = buildDependencyGraph(
-            from: defaultBindings(in: aggregate),
+            from: defaultBindings,
             typealiases: aggregate.typealiases
         )
         let containerSingletonBindings = containerSingletonBindings(in: aggregate)
@@ -54,40 +55,40 @@ struct WireGen {
                     )
                 )
             }
+        let seedScopeOrchestrations = seedScopeOrchestrations(
+            in: aggregate,
+            defaultGraphSingletons: defaultBindings
+        )
 
-        printSkippedReport(default: defaultGraph, containers: containerGraphs)
-        let containerNames = Set(containerSingletonBindings.keys)
-        let singletonTypeNames = singletonTypeNames(in: aggregate)
-        let unannotatedExtensionContainerWarnings = unannotatedExtensionContainerWarnings(
-            candidates: aggregate.unannotatedExtensionProvides,
-            containerNames: containerNames
+        printSkippedReport(
+            default: defaultGraph,
+            containers: containerGraphs,
+            seedScopes: seedScopeOrchestrations
         )
-        let crossModuleExtensionWarnings = crossModuleExtensionWarnings(
-            candidates: aggregate.unannotatedExtensionProvides,
-            containerNames: containerNames,
-            declaredTypeNames: aggregate.declaredTypeNames
+        let crossFileWarnings = collectCrossFileWarnings(
+            in: aggregate,
+            containerNames: Set(containerSingletonBindings.keys)
         )
-        let extensionInitConflictWarnings = extensionInitConflictWarnings(
-            candidates: aggregate.nonInjectExtensionInits,
-            singletonTypeNames: singletonTypeNames
-        )
-        let crossFileWarnings =
-            unannotatedExtensionContainerWarnings
-            + crossModuleExtensionWarnings
-            + extensionInitConflictWarnings
         printWarnings(aggregate.warnings + crossFileWarnings)
-        failIfAnyGraphInvalid(default: defaultGraph, containers: containerGraphs)
+        failIfAnyGraphInvalid(
+            default: defaultGraph,
+            containers: containerGraphs,
+            seedScopes: seedScopeOrchestrations
+        )
 
         let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
         let containerOrders = printAndCollectTopologicalOrders(
             defaultOrder: defaultOrder,
-            containers: containerGraphs
+            containers: containerGraphs,
+            seedScopes: seedScopeOrchestrations
         )
 
+        let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
         let generated = renderWireGraph(
             imports: aggregate.imports,
             topologicalOrder: defaultOrder,
-            containerTopologicalOrders: containerOrders
+            containerTopologicalOrders: containerOrders,
+            seedScopeOrders: seedScopeOrders
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -171,9 +172,9 @@ struct WireGen {
     }
 
     /// Singleton bindings inside each named container, grouped by
-    /// container name. Today every entry has `scope == nil`; when
-    /// `@Scoped` recognition lands, per-container scoped bindings
-    /// will live in their own partitions and be derived separately.
+    /// container name. Restricted to the `(container ≠ nil, scope ==
+    /// nil)` partition cell — container-graph scoped bindings (both
+    /// axes non-nil) are deferred until a real use case forces them.
     private static func containerSingletonBindings(
         in aggregate: DiscoveryAggregate
     ) -> [String: [DiscoveredBinding]] {
@@ -183,6 +184,79 @@ struct WireGen {
             result[container, default: []].append(contentsOf: bindings)
         }
         return result
+    }
+
+    /// Build one orchestrated per-seed scope graph per unique seed
+    /// type appearing in default-graph `@Scoped` partitions. Sorted by
+    /// seed-type text for deterministic output ordering. Container-
+    /// graph scoped partitions (`container ≠ nil && scope ≠ nil`)
+    /// aren't surfaced yet; see `containerSingletonBindings` for the
+    /// matching restriction.
+    private static func seedScopeOrchestrations(
+        in aggregate: DiscoveryAggregate,
+        defaultGraphSingletons: [DiscoveredBinding]
+    ) -> [SeedScopeOrchestration] {
+        var seedPartitions: [ScopeKey: [DiscoveredBinding]] = [:]
+        for (partition, bindings) in aggregate.allBindings {
+            guard partition.container == nil, let scope = partition.scope else { continue }
+            seedPartitions[scope, default: []].append(contentsOf: bindings)
+        }
+        return
+            seedPartitions
+            .sorted(by: { $0.key.seed < $1.key.seed })
+            .map { seedKey, bindings in
+                orchestrateSeedScope(
+                    seedKey: seedKey,
+                    scopeBindings: bindings,
+                    defaultGraphSingletons: defaultGraphSingletons,
+                    typealiases: aggregate.typealiases
+                )
+            }
+    }
+
+    /// Flatten the per-seed orchestrations into the emission-side
+    /// shape `renderWireGraph` consumes — each entry carries the seed
+    /// type expression, the identifier suffix, the topological order,
+    /// and the borrowed-binding property-name set the emitter uses to
+    /// distinguish locally-constructed bindings from singleton borrows.
+    /// Orchestrations whose graphs failed validation are excluded
+    /// (the validation-failure pipeline has already exited by this
+    /// point; the filter is defensive).
+    private static func collectSeedScopeOrders(
+        _ orchestrations: [SeedScopeOrchestration]
+    ) -> [SeedScopeEmission] {
+        orchestrations.compactMap { orchestration in
+            guard let order = orchestration.result.outcome.topologicalOrder else { return nil }
+            return SeedScopeEmission(
+                seedTypeExpression: orchestration.seedTypeExpression,
+                identifierSuffix: orchestration.identifierSuffix,
+                topologicalOrder: order,
+                borrowedBindingPropertyNames: orchestration.borrowedBindingPropertyNames
+            )
+        }
+    }
+
+    /// WireGen-level warnings that need module-wide context to fire:
+    /// unannotated `@Provides`-in-extension, cross-module-extension,
+    /// and extension-init conflicts on `@Singleton`/`@Scoped` types.
+    /// Per-file warnings come straight from `aggregate.warnings`.
+    private static func collectCrossFileWarnings(
+        in aggregate: DiscoveryAggregate,
+        containerNames: Set<String>
+    ) -> [Warning] {
+        unannotatedExtensionContainerWarnings(
+            candidates: aggregate.unannotatedExtensionProvides,
+            containerNames: containerNames
+        )
+            + crossModuleExtensionWarnings(
+                candidates: aggregate.unannotatedExtensionProvides,
+                containerNames: containerNames,
+                declaredTypeNames: aggregate.declaredTypeNames
+            )
+            + extensionInitConflictWarnings(
+                candidates: aggregate.nonInjectExtensionInits,
+                singletonTypeNames: singletonTypeNames(in: aggregate)
+            )
     }
 
     /// Collect type names of `@Singleton` bindings across every graph
@@ -227,10 +301,13 @@ struct WireGen {
     /// Informational; doesn't affect validation.
     private static func printSkippedReport(
         default defaultGraph: GraphResult,
-        containers containerGraphs: [(name: String, result: GraphResult)]
+        containers containerGraphs: [(name: String, result: GraphResult)],
+        seedScopes seedScopeOrchestrations: [SeedScopeOrchestration]
     ) {
         let allSkipped =
-            defaultGraph.skipped + containerGraphs.flatMap { $0.result.skipped }
+            defaultGraph.skipped
+            + containerGraphs.flatMap { $0.result.skipped }
+            + seedScopeOrchestrations.flatMap { $0.result.skipped }
         let report = renderSkipped(allSkipped)
         guard !report.isEmpty else { return }
         print("")
@@ -242,10 +319,19 @@ struct WireGen {
     /// treats a missing output as a failed generation step.
     private static func failIfAnyGraphInvalid(
         default defaultGraph: GraphResult,
-        containers containerGraphs: [(name: String, result: GraphResult)]
+        containers containerGraphs: [(name: String, result: GraphResult)],
+        seedScopes seedScopeOrchestrations: [SeedScopeOrchestration]
     ) {
-        let allNamedGraphs: [(name: String, result: GraphResult)] =
+        var allNamedGraphs: [(name: String, result: GraphResult)] =
             [(name: "default", result: defaultGraph)] + containerGraphs
+        for orchestration in seedScopeOrchestrations {
+            allNamedGraphs.append(
+                (
+                    name: "scope '\(orchestration.seedTypeExpression)'",
+                    result: orchestration.result
+                )
+            )
+        }
         let failures = allNamedGraphs.compactMap {
             named -> (name: String, errors: GraphResult.ValidationErrors)? in
             if let errors = named.result.outcome.validationErrors {
@@ -267,10 +353,12 @@ struct WireGen {
     /// Print the topological order for each successful graph and
     /// return the per-container orders keyed by name (the default
     /// order is the caller's responsibility since the caller already
-    /// holds it).
+    /// holds it). Seed-scope orchestrations carry their own orders
+    /// inside their result; the caller reads them from there.
     private static func printAndCollectTopologicalOrders(
         defaultOrder: [DiscoveredBinding],
-        containers containerGraphs: [(name: String, result: GraphResult)]
+        containers containerGraphs: [(name: String, result: GraphResult)],
+        seedScopes seedScopeOrchestrations: [SeedScopeOrchestration]
     ) -> [String: [DiscoveredBinding]] {
         print("")
         print("default graph:")
@@ -281,6 +369,12 @@ struct WireGen {
             containerOrders[name] = order
             print("")
             print("container '\(name)':")
+            print(renderTopologicalOrder(order))
+        }
+        for orchestration in seedScopeOrchestrations {
+            let order = orchestration.result.outcome.topologicalOrder ?? []
+            print("")
+            print("scope '\(orchestration.seedTypeExpression)':")
             print(renderTopologicalOrder(order))
         }
         return containerOrders
