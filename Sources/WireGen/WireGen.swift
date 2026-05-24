@@ -38,7 +38,6 @@ struct WireGen {
         let graphs = buildAllGraphs(in: aggregate)
         let defaultGraph = graphs.defaultGraph
         let containerGraphs = graphs.containerGraphs
-        let containerSingletonBindings = graphs.containerSingletonBindings
         let seedScopeOrchestrations = graphs.seedScopeOrchestrations
 
         printSkippedReport(
@@ -48,7 +47,7 @@ struct WireGen {
         )
         let crossFileWarnings = collectCrossFileWarnings(
             in: aggregate,
-            containerNames: Set(containerSingletonBindings.keys)
+            containerNames: Set(containerGraphs.map { $0.name })
         )
         printWarnings(aggregate.warnings + crossFileWarnings)
         failIfAnyGraphInvalid(
@@ -144,158 +143,101 @@ struct WireGen {
         return aggregate
     }
 
-    /// Default-graph singleton bindings.
-    /// `partition.container == nil && partition.scope == nil`.
-    private static func defaultBindings(
-        in aggregate: DiscoveryAggregate
-    ) -> [DiscoveredBinding] {
-        aggregate.allBindings[.default] ?? []
-    }
-
-    /// Singleton bindings inside each named container, grouped by
-    /// container name. Restricted to the `(container ≠ nil, scope ==
-    /// nil)` partition cell — container-graph scoped bindings (both
-    /// axes non-nil) are deferred until a real use case forces them.
-    private static func containerSingletonBindings(
-        in aggregate: DiscoveryAggregate
-    ) -> [String: [DiscoveredBinding]] {
-        var result: [String: [DiscoveredBinding]] = [:]
-        for (partition, bindings) in aggregate.allBindings {
-            guard let container = partition.container, partition.scope == nil else { continue }
-            result[container, default: []].append(contentsOf: bindings)
-        }
-        return result
-    }
-
     /// Bundle of all per-graph build outputs. Held together so the
     /// main flow can pull each output through the validation / print
     /// / emit pipeline without recomputing slices.
     private struct GraphBuilds {
         var defaultGraph: GraphResult
         var containerGraphs: [(name: String, result: GraphResult)]
-        var containerSingletonBindings: [String: [DiscoveredBinding]]
         var seedScopeOrchestrations: [SeedScopeOrchestration]
+    }
+
+    /// Partition `aggregate.allBindings` along both axes in a single
+    /// pass. Outer key: container name (`nil` for the default graph).
+    /// Inner key: scope (`nil` for the singleton scope). The default
+    /// graph is just "the container with no name" — the data model
+    /// treats `(container: nil)` and `(container: "Foo")` symmetrically
+    /// and `buildAllGraphs` iterates uniformly across both.
+    private static func partitionBindings(
+        in aggregate: DiscoveryAggregate
+    ) -> [String?: [ScopeKey?: [DiscoveredBinding]]] {
+        var partitions: [String?: [ScopeKey?: [DiscoveredBinding]]] = [:]
+        for (partition, bindings) in aggregate.allBindings {
+            partitions[partition.container, default: [:]][
+                partition.scope,
+                default: []
+            ].append(contentsOf: bindings)
+        }
+        return partitions
     }
 
     /// Build every graph the input describes: the default graph, one
     /// per `@Container`, and one per seeded scope (default-graph and
-    /// container-scope alike). Default and container graphs are
-    /// atomic; seed graphs borrow singletons via per-parent-graph
-    /// synthetics so each seeded scope's bootstrap points at the
-    /// right parent.
+    /// container-scope alike). Iterates the partitioned bindings
+    /// uniformly — for each container (including the default with
+    /// `containerName == nil`), build the singleton graph from the
+    /// scope=nil cell, synthesise the singleton borrow set, then
+    /// orchestrate each seeded scope keyed off scope≠nil cells. The
+    /// default and container singleton graphs are atomic; seeded
+    /// scopes borrow from their parent container's singletons.
     private static func buildAllGraphs(in aggregate: DiscoveryAggregate) -> GraphBuilds {
-        let defaultBindings = defaultBindings(in: aggregate)
-        let defaultGraph = buildDependencyGraph(
-            from: defaultBindings,
-            typealiases: aggregate.typealiases
-        )
-        let containerSingletonBindings = containerSingletonBindings(in: aggregate)
-        let containerGraphs =
-            containerSingletonBindings
-            .sorted(by: { $0.key < $1.key })
-            .map { name, bindings in
-                (
-                    name: name,
-                    result: buildDependencyGraph(
-                        from: bindings,
+        let partitions = partitionBindings(in: aggregate)
+        var defaultGraph = GraphResult(outcome: .success(topologicalOrder: []), skipped: [])
+        var containerGraphs: [(name: String, result: GraphResult)] = []
+        var seedScopeOrchestrations: [SeedScopeOrchestration] = []
+        for containerKey in partitions.keys.sorted(by: containerKeyOrder) {
+            let scopes = partitions[containerKey] ?? [:]
+            let singletons = scopes[nil] ?? []
+            let parentGraphType = containerKey.map { "_\($0)WireGraph" } ?? "_WireGraph"
+            let graph = buildDependencyGraph(
+                from: singletons,
+                typealiases: aggregate.typealiases
+            )
+            if let containerName = containerKey {
+                containerGraphs.append((name: containerName, result: graph))
+            } else {
+                defaultGraph = graph
+            }
+            let borrows = syntheticSingletonBorrowBindings(
+                from: singletons,
+                inWireGraphOfType: parentGraphType
+            )
+            let seedKeys =
+                scopes.keys
+                .compactMap { $0 }
+                .sorted(by: { $0.seed < $1.seed })
+            for seedKey in seedKeys {
+                let scopeBindings = scopes[seedKey] ?? []
+                seedScopeOrchestrations.append(
+                    orchestrateSeedScope(
+                        seedKey: seedKey,
+                        containerName: containerKey,
+                        scopeBindings: scopeBindings,
+                        borrowBindings: borrows,
+                        parentGraphType: parentGraphType,
                         typealiases: aggregate.typealiases
                     )
                 )
             }
-        let singletonBorrows = syntheticSingletonBorrowBindings(from: defaultBindings)
-        let defaultSeedScopes = defaultSeedScopeOrchestrations(
-            in: aggregate,
-            borrowBindings: singletonBorrows
-        )
-        let containerSeedScopes = containerSeedScopeOrchestrations(
-            in: aggregate,
-            containerSingletons: containerSingletonBindings
-        )
+        }
         return GraphBuilds(
             defaultGraph: defaultGraph,
             containerGraphs: containerGraphs,
-            containerSingletonBindings: containerSingletonBindings,
-            seedScopeOrchestrations: defaultSeedScopes + containerSeedScopes
+            seedScopeOrchestrations: seedScopeOrchestrations
         )
     }
 
-    /// Build one orchestrated per-seed scope graph per unique seed
-    /// type appearing in default-graph `@Scoped` partitions (i.e.
-    /// `container == nil`, `scope ≠ nil`). Sorted by seed-type text
-    /// for deterministic output ordering. Container-graph scoped
-    /// partitions are handled by `containerSeedScopeOrchestrations`.
-    ///
-    /// `borrowBindings` is the singleton borrow set every default-
-    /// graph scope can resolve singleton dependencies through. The
-    /// caller constructs it once via
-    /// `syntheticSingletonBorrowBindings(from:)` and passes it through
-    /// so each per-seed call reuses the same set.
-    private static func defaultSeedScopeOrchestrations(
-        in aggregate: DiscoveryAggregate,
-        borrowBindings: [DiscoveredBinding]
-    ) -> [SeedScopeOrchestration] {
-        var seedPartitions: [ScopeKey: [DiscoveredBinding]] = [:]
-        for (partition, bindings) in aggregate.allBindings {
-            guard partition.container == nil, let scope = partition.scope else { continue }
-            seedPartitions[scope, default: []].append(contentsOf: bindings)
+    /// Sort container keys with `nil` first (the default graph
+    /// processes before any named container), then alphabetically by
+    /// container name. Used to give the unified partition iteration
+    /// a deterministic, predictable order.
+    private static func containerKeyOrder(_ lhs: String?, _ rhs: String?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return false
+        case (nil, _): return true
+        case (_, nil): return false
+        case (.some(let lhsName), .some(let rhsName)): return lhsName < rhsName
         }
-        return
-            seedPartitions
-            .sorted(by: { $0.key.seed < $1.key.seed })
-            .map { seedKey, bindings in
-                orchestrateSeedScope(
-                    seedKey: seedKey,
-                    scopeBindings: bindings,
-                    borrowBindings: borrowBindings,
-                    typealiases: aggregate.typealiases
-                )
-            }
-    }
-
-    /// Build one orchestrated per-seed scope graph per unique
-    /// `(container, seed)` pair found in container-scope partitions
-    /// (`container ≠ nil && scope ≠ nil`). Each container's seeded
-    /// scopes borrow from that container's singletons (typed as
-    /// `_<Container>WireGraph`); the orchestration carries
-    /// `parentGraphType` through to emission so the bootstrap
-    /// signature, internal name, and borrow access paths all point
-    /// at the container's graph rather than the default `_WireGraph`.
-    ///
-    /// Sorted by `(container, seed)` for deterministic output. Each
-    /// per-container borrow set is synthesised once and shared across
-    /// every seed in that container.
-    private static func containerSeedScopeOrchestrations(
-        in aggregate: DiscoveryAggregate,
-        containerSingletons: [String: [DiscoveredBinding]]
-    ) -> [SeedScopeOrchestration] {
-        var partitions: [String: [ScopeKey: [DiscoveredBinding]]] = [:]
-        for (partition, bindings) in aggregate.allBindings {
-            guard let container = partition.container, let scope = partition.scope else {
-                continue
-            }
-            partitions[container, default: [:]][scope, default: []].append(contentsOf: bindings)
-        }
-        var orchestrations: [SeedScopeOrchestration] = []
-        for container in partitions.keys.sorted() {
-            let parentGraphType = "_\(container)WireGraph"
-            let borrows = syntheticSingletonBorrowBindings(
-                from: containerSingletons[container] ?? [],
-                inWireGraphOfType: parentGraphType
-            )
-            let seedsInContainer = partitions[container] ?? [:]
-            for (seedKey, scopeBindings) in seedsInContainer.sorted(by: { $0.key.seed < $1.key.seed }) {
-                let orchestration = orchestrateSeedScope(
-                    seedKey: seedKey,
-                    containerName: container,
-                    scopeBindings: scopeBindings,
-                    borrowBindings: borrows,
-                    parentGraphType: parentGraphType,
-                    typealiases: aggregate.typealiases
-                )
-                orchestrations.append(orchestration)
-            }
-        }
-        return orchestrations
     }
 
     /// Flatten the per-seed orchestrations into the emission-side
