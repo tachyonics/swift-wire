@@ -172,6 +172,41 @@ struct SeedScopeOrchestrationTests {
         }
     }
 
+    @Test func withResultReturnsCopyCarryingOtherFields() throws {
+        // `withResult` is used by the cross-scope-hint enrichment to
+        // round-trip an orchestration with an updated GraphResult
+        // while preserving the rest of the descriptor. Verify the
+        // copy carries seedTypeExpression, identifierSuffix,
+        // parentGraphType, and borrowedBindingPropertyNames
+        // unchanged, and the new result replaces the old.
+        let original = orchestrateSeedScope(
+            seedKey: ScopeKey(seed: "HBRequestSeed"),
+            containerName: "TestContainer",
+            scopeBindings: [],
+            borrowBindings: [],
+            parentGraphType: "_TestContainerWireGraph",
+            typealiases: []
+        )
+        // Replace the result with one that has a different
+        // topological order so we can assert the new value is what's
+        // exposed.
+        let first = singletonProvider("first", type: "First")
+        let second = singletonProvider("second", type: "Second")
+        let newResult = buildDependencyGraph(from: [first, second], typealiases: [])
+        let updated = original.withResult(newResult)
+        #expect(updated.seedTypeExpression == original.seedTypeExpression)
+        #expect(updated.identifierSuffix == original.identifierSuffix)
+        #expect(updated.parentGraphType == original.parentGraphType)
+        #expect(updated.borrowedBindingPropertyNames == original.borrowedBindingPropertyNames)
+        let updatedOrder = try #require(updated.result.outcome.topologicalOrder)
+        // The new result has two bindings — distinct from the
+        // original's single synthetic seed entry, proving the result
+        // field is the only thing replaced.
+        #expect(updatedOrder.count == 2)
+        #expect(updatedOrder.contains { $0.boundType == "First" })
+        #expect(updatedOrder.contains { $0.boundType == "Second" })
+    }
+
     @Test func unreferencedSingletonsStillAppearInTopologicalOrderButAreBorrowed() throws {
         // Every default-graph singleton becomes a synthetic borrow,
         // whether or not any scope binding actually `@Inject`s it. The
