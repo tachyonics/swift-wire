@@ -36,6 +36,20 @@ package struct SeedScopeOrchestration: Sendable {
         self.result = result
         self.borrowedBindingPropertyNames = borrowedBindingPropertyNames
     }
+
+    /// Return a copy of this orchestration with a different `result`.
+    /// Used by the diagnostic-enrichment pipeline to attach cross-
+    /// scope hints to missing-binding errors without breaking the
+    /// `let`-only field convention.
+    package func withResult(_ newResult: GraphResult) -> SeedScopeOrchestration {
+        SeedScopeOrchestration(
+            seedTypeExpression: seedTypeExpression,
+            identifierSuffix: identifierSuffix,
+            parentGraphType: parentGraphType,
+            result: newResult,
+            borrowedBindingPropertyNames: borrowedBindingPropertyNames
+        )
+    }
 }
 
 /// Build one per-seed scope graph by combining the scope's own

@@ -83,15 +83,23 @@ package struct MissingBinding: Sendable {
     /// Renders as a `note:` line beneath the primary missing-binding
     /// error.
     package let typealiasHint: TypealiasHint?
+    /// Optional hint surfaced when the dependency's type IS bound,
+    /// but in a different scope partition than the consumer's. The
+    /// most common case: a `@Singleton` `@Inject`s a `@Scoped` type
+    /// directly. Renders as `note:` lines beneath the primary
+    /// missing-binding error, including a fix-it suggestion.
+    package let crossScopeHint: CrossScopeHint?
 
     package init(
         consumer: DiscoveredBinding,
         dependency: DependencyParameter,
-        typealiasHint: TypealiasHint? = nil
+        typealiasHint: TypealiasHint? = nil,
+        crossScopeHint: CrossScopeHint? = nil
     ) {
         self.consumer = consumer
         self.dependency = dependency
         self.typealiasHint = typealiasHint
+        self.crossScopeHint = crossScopeHint
     }
 }
 
@@ -117,6 +125,54 @@ package struct TypealiasHint: Sendable {
         self.typealiasName = typealiasName
         self.underlyingType = underlyingType
         self.typealiasLocation = typealiasLocation
+    }
+}
+
+/// Carries the data needed to render the cross-scope missing-binding
+/// note + fix-it. Surfaced when a missing dependency's `(type, key)`
+/// is bound in one or more partitions — just not in the consumer's
+/// scope partition. The most common case is a `@Singleton` directly
+/// `@Inject`ing a `@Scoped(seed:)` binding: the binding exists, but
+/// in a per-seed scope the consumer can't reach without scoping
+/// itself or borrowing through an appropriate wrapper.
+///
+/// `matches` lists every partition where the binding lives, in
+/// deterministic sorted order. When only one match exists, the
+/// fix-it is tailored to that specific mismatch shape (wider-vs-
+/// narrower scope, sibling seeded scopes, cross-container). When
+/// multiple matches exist (the type is bound in several
+/// partitions, none reachable from the consumer), the fix-it
+/// shifts to a multiplicity-aware message.
+///
+/// `consumerScopeDescription` is the human-readable scope label
+/// for the consumer (`"@Singleton"`, `"@Scoped(seed: X.self)"`,
+/// `"@Container Foo"`, etc.).
+package struct CrossScopeHint: Sendable {
+    package let matches: [Match]
+    package let consumerScopeDescription: String
+    package let fixItSuggestion: String
+
+    package init(
+        matches: [Match],
+        consumerScopeDescription: String,
+        fixItSuggestion: String
+    ) {
+        self.matches = matches
+        self.consumerScopeDescription = consumerScopeDescription
+        self.fixItSuggestion = fixItSuggestion
+    }
+
+    /// One partition where the missing dependency's type is bound.
+    /// Multiple matches render as multiple `note:` lines so the
+    /// user sees every place the binding lives.
+    package struct Match: Sendable {
+        package let scopeDescription: String
+        package let location: SourceLocation
+
+        package init(scopeDescription: String, location: SourceLocation) {
+            self.scopeDescription = scopeDescription
+            self.location = location
+        }
     }
 }
 
@@ -249,7 +305,7 @@ extension DependencyParameter {
 /// (whatever the user wrote) — only the *identity* used for graph
 /// lookup is canonicalised. The generated file keeps idiomatic
 /// formatting; only the resolution layer normalises.
-private func canonicalTypeName(_ raw: String) -> String {
+package func canonicalTypeName(_ raw: String) -> String {
     raw.filter { !$0.isWhitespace }
 }
 

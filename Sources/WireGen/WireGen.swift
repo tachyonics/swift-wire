@@ -189,9 +189,14 @@ struct WireGen {
             let scopes = partitions[containerKey] ?? [:]
             let singletons = scopes[nil] ?? []
             let parentGraphType = containerKey.map { "_\($0)WireGraph" } ?? "_WireGraph"
-            let graph = buildDependencyGraph(
+            let rawGraph = buildDependencyGraph(
                 from: singletons,
                 typealiases: aggregate.typealiases
+            )
+            let graph = enrichMissingBindingsWithCrossScopeHints(
+                rawGraph,
+                consumerPartition: Partition(container: containerKey, scope: nil),
+                allBindings: aggregate.allBindings
             )
             if let containerName = containerKey {
                 containerGraphs.append((name: containerName, result: graph))
@@ -208,16 +213,20 @@ struct WireGen {
                 .sorted(by: { $0.seed < $1.seed })
             for seedKey in seedKeys {
                 let scopeBindings = scopes[seedKey] ?? []
-                seedScopeOrchestrations.append(
-                    orchestrateSeedScope(
-                        seedKey: seedKey,
-                        containerName: containerKey,
-                        scopeBindings: scopeBindings,
-                        borrowBindings: borrows,
-                        parentGraphType: parentGraphType,
-                        typealiases: aggregate.typealiases
-                    )
+                let orchestration = orchestrateSeedScope(
+                    seedKey: seedKey,
+                    containerName: containerKey,
+                    scopeBindings: scopeBindings,
+                    borrowBindings: borrows,
+                    parentGraphType: parentGraphType,
+                    typealiases: aggregate.typealiases
                 )
+                let enrichedResult = enrichMissingBindingsWithCrossScopeHints(
+                    orchestration.result,
+                    consumerPartition: Partition(container: containerKey, scope: seedKey),
+                    allBindings: aggregate.allBindings
+                )
+                seedScopeOrchestrations.append(orchestration.withResult(enrichedResult))
             }
         }
         return GraphBuilds(

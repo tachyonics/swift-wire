@@ -114,6 +114,28 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
                 "\(hint.typealiasLocation.formattedPrefix): note: '\(hint.typealiasName)' is a typealias of '\(hint.underlyingType)' which is bound; typealiases aren't unwrapped at resolution, so inject '\(hint.underlyingType)' directly or add a separate binding for '\(hint.typealiasName)'"
             )
         }
+        if let hint = missing.crossScopeHint, !hint.matches.isEmpty {
+            // Primary note: where the binding lives, contrasted with
+            // the consumer's scope. Follows Swift compiler convention
+            // for `note:` lines.
+            let primary = hint.matches[0]
+            lines.append(
+                "\(primary.location.formattedPrefix): note: '\(missing.dependency.type)' is bound in \(primary.scopeDescription) scope, not \(hint.consumerScopeDescription)"
+            )
+            // Additional notes for any other partitions that hold
+            // the same binding — the user sees every place the type
+            // lives, not just the first sorted match.
+            for additional in hint.matches.dropFirst() {
+                lines.append(
+                    "\(additional.location.formattedPrefix): note: '\(missing.dependency.type)' is also bound in \(additional.scopeDescription) scope"
+                )
+            }
+            // Fix-it: tailored when single match, multiplicity-aware
+            // when multiple.
+            lines.append(
+                "\(missing.dependency.location.formattedPrefix): note: \(hint.fixItSuggestion)"
+            )
+        }
     }
 
     // Identifier collisions: primary error at the first colliding
