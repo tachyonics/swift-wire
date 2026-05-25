@@ -201,6 +201,16 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// `within` slot reserved for future hierarchical-scope work,
     /// always `nil` today).
     package let scopeKey: ScopeKey?
+    /// `true` when the type carries a user-written `@Inject init`
+    /// with `async` in its effect specifiers. The macro-synthesised
+    /// init (from `@Inject` stored properties) is always sync, so
+    /// this is `false` unless a custom `@Inject init() async`
+    /// declaration overrides synthesis.
+    package let initIsAsync: Bool
+    /// `true` when the type carries a user-written `@Inject init`
+    /// with `throws` in its effect specifiers. Same caveat as
+    /// `initIsAsync` for macro-synthesised inits.
+    package let initIsThrowing: Bool
 
     package var sourcePath: String { location.file }
 
@@ -211,7 +221,9 @@ package struct DiscoveredScopeBoundType: Sendable {
         genericParameterNames: [String],
         dependencies: [DependencyParameter],
         location: SourceLocation,
-        scopeKey: ScopeKey? = nil
+        scopeKey: ScopeKey? = nil,
+        initIsAsync: Bool = false,
+        initIsThrowing: Bool = false
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -223,6 +235,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.dependencies = dependencies
         self.location = location
         self.scopeKey = scopeKey
+        self.initIsAsync = initIsAsync
+        self.initIsThrowing = initIsThrowing
     }
 }
 
@@ -257,6 +271,17 @@ package struct DiscoveredProvider: Sendable {
     /// providers (concrete property and function bindings); only the
     /// generic-specialisation phase populates this.
     package let concreteGenericArguments: [String]
+    /// `true` when the binding's source is `async` — `@Provides func
+    /// makeFoo() async -> Foo`, or a computed `@Provides var x: Foo
+    /// { get async }`. Drives `await ` prefixing at the call site
+    /// during code emission. Stored `@Provides let` bindings can't be
+    /// async, so this is `false` for property-form providers other
+    /// than computed properties with `get async`.
+    package let isAsync: Bool
+    /// `true` when the binding's source is `throws` — `@Provides func
+    /// makeFoo() throws -> Foo`, or a computed `@Provides var x: Foo
+    /// { get throws }`. Drives `try ` prefixing at the call site.
+    package let isThrowing: Bool
 
     package var sourcePath: String { location.file }
 
@@ -268,7 +293,9 @@ package struct DiscoveredProvider: Sendable {
         genericParameterNames: [String],
         location: SourceLocation,
         keyIdentifier: String? = nil,
-        concreteGenericArguments: [String] = []
+        concreteGenericArguments: [String] = [],
+        isAsync: Bool = false,
+        isThrowing: Bool = false
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -278,6 +305,8 @@ package struct DiscoveredProvider: Sendable {
         self.location = location
         self.keyIdentifier = keyIdentifier
         self.concreteGenericArguments = concreteGenericArguments
+        self.isAsync = isAsync
+        self.isThrowing = isThrowing
     }
 
     /// Whether the binding source is a property (read its value directly)

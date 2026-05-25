@@ -431,6 +431,11 @@ final class BindingDiscovery: SyntaxVisitor {
         let key = attribute(in: node.attributes, named: "Provides")
             .flatMap { keyIdentifier(from: $0) }
         let providerLocation = location(of: pattern.identifier)
+        // Computed properties (`@Provides var x: T { get async throws { … } }`)
+        // can carry effect specifiers on the `get` accessor. Stored
+        // `@Provides let` bindings can't, so the flags stay `false`
+        // for those.
+        let propertyEffects = computedPropertyEffectFlags(binding)
         record(
             .provider(
                 DiscoveredProvider(
@@ -440,7 +445,9 @@ final class BindingDiscovery: SyntaxVisitor {
                     dependencies: [],
                     genericParameterNames: [],
                     location: providerLocation,
-                    keyIdentifier: key
+                    keyIdentifier: key,
+                    isAsync: propertyEffects.isAsync,
+                    isThrowing: propertyEffects.isThrowing
                 )
             )
         )
@@ -489,6 +496,7 @@ final class BindingDiscovery: SyntaxVisitor {
                 extendedType: scopes.last?.unannotatedExtensionTarget
             )
         )
+        let effects = functionEffectFlags(node.signature.effectSpecifiers)
         record(
             .provider(
                 DiscoveredProvider(
@@ -498,7 +506,9 @@ final class BindingDiscovery: SyntaxVisitor {
                     dependencies: dependencies,
                     genericParameterNames: genericParameterNames,
                     location: providerLocation,
-                    keyIdentifier: key
+                    keyIdentifier: key,
+                    isAsync: effects.isAsync,
+                    isThrowing: effects.isThrowing
                 )
             )
         )
@@ -531,7 +541,7 @@ extension BindingDiscovery {
             return
         }
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
-        let dependencies = extractInjectDependencies(
+        let injectInfo = extractInjectDependencies(
             from: members,
             sourcePath: sourcePath,
             converter: converter
@@ -547,9 +557,11 @@ extension BindingDiscovery {
                     qualifiedTypeName: qualified,
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
-                    dependencies: dependencies,
+                    dependencies: injectInfo.dependencies,
                     location: location(of: nameToken),
-                    scopeKey: scopeKey
+                    scopeKey: scopeKey,
+                    initIsAsync: injectInfo.initIsAsync,
+                    initIsThrowing: injectInfo.initIsThrowing
                 )
             )
         )
@@ -685,12 +697,21 @@ private func makeSourceLocation(
 /// `SingletonMacro`: an `@Inject`-marked init's parameter list wins
 /// over `@Inject` properties; if neither is present the result is
 /// empty.
+///
+/// When the init is `@Inject`-marked, its effect specifiers
+/// (`async`/`throws`) propagate to the returned tuple so emission
+/// can prefix the call site with the right combination of
+/// `try`/`await`. The macro-synthesised init for `@Inject`
+/// properties is always sync, so the flags are `false` when the
+/// property path is taken.
 private func extractInjectDependencies(
     from members: MemberBlockItemListSyntax,
     sourcePath: String,
     converter: SourceLocationConverter
-) -> [DependencyParameter] {
+) -> (dependencies: [DependencyParameter], initIsAsync: Bool, initIsThrowing: Bool) {
     var injectInitDependencies: [DependencyParameter]?
+    var initIsAsync = false
+    var initIsThrowing = false
     var propertyDependencies: [DependencyParameter] = []
     for member in members {
         if let initDecl = member.decl.as(InitializerDeclSyntax.self) {
@@ -711,6 +732,9 @@ private func extractInjectDependencies(
                         keyIdentifier: parameterKey
                     )
                 }
+                let effects = functionEffectFlags(initDecl.signature.effectSpecifiers)
+                initIsAsync = effects.isAsync
+                initIsThrowing = effects.isThrowing
             }
             continue
         }
@@ -736,8 +760,14 @@ private func extractInjectDependencies(
             )
         }
     }
-    return injectInitDependencies ?? propertyDependencies
+    return (
+        dependencies: injectInitDependencies ?? propertyDependencies,
+        initIsAsync: initIsAsync,
+        initIsThrowing: initIsThrowing
+    )
 }
+
+// Effect-specifier extraction helpers live in `EffectSpecifiers.swift`.
 
 /// `@Container` plus a scope macro on the same type is almost always a
 /// user error: `@Container` routes the type's static members into a

@@ -201,6 +201,148 @@ struct DiscoveryTests {
         #expect(Set(result.map { $0.typeName }) == ["A", "B"])
     }
 
+    // MARK: - Effect-specifier capture
+
+    @Test func injectInitWithoutEffectsHasFalseFlags() {
+        // Sync, non-throwing init — both flags default to `false`.
+        // Guards against accidentally tagging plain inits as
+        // effectful.
+        let source = """
+            @Singleton
+            struct A {
+                @Inject init(b: B) {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.count == 1)
+        #expect(result[0].initIsAsync == false)
+        #expect(result[0].initIsThrowing == false)
+    }
+
+    @Test func injectInitWithAsyncCapturesFlag() {
+        let source = """
+            @Singleton
+            struct A {
+                @Inject init(b: B) async {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.count == 1)
+        #expect(result[0].initIsAsync == true)
+        #expect(result[0].initIsThrowing == false)
+    }
+
+    @Test func injectInitWithThrowsCapturesFlag() {
+        let source = """
+            @Singleton
+            struct A {
+                @Inject init(b: B) throws {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.count == 1)
+        #expect(result[0].initIsAsync == false)
+        #expect(result[0].initIsThrowing == true)
+    }
+
+    @Test func injectInitWithAsyncThrowsCapturesBothFlags() {
+        let source = """
+            @Singleton
+            struct A {
+                @Inject init(b: B) async throws {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.count == 1)
+        #expect(result[0].initIsAsync == true)
+        #expect(result[0].initIsThrowing == true)
+    }
+
+    @Test func injectPropertySynthesizedInitIsSync() {
+        // Macro-synthesised init (from `@Inject` stored properties)
+        // is always sync, non-throwing — it's a memberwise store of
+        // already-resolved values. Effect flags stay `false`.
+        let source = """
+            @Singleton
+            struct A {
+                @Inject var b: B
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.count == 1)
+        #expect(result[0].initIsAsync == false)
+        #expect(result[0].initIsThrowing == false)
+    }
+
+    @Test func providesFunctionWithEffectsCapturesFlags() {
+        let source = """
+            @Provides
+            func makeAsync() async -> Foo { Foo() }
+
+            @Provides
+            func makeThrows() throws -> Bar { Bar() }
+
+            @Provides
+            func makeBoth() async throws -> Baz { Baz() }
+
+            @Provides
+            func makeSync() -> Qux { Qux() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Source.swift")
+        let byType = Dictionary(uniqueKeysWithValues: result.map { ($0.boundType, $0) })
+        #expect(byType["Foo"]?.isAsync == true)
+        #expect(byType["Foo"]?.isThrowing == false)
+        #expect(byType["Bar"]?.isAsync == false)
+        #expect(byType["Bar"]?.isThrowing == true)
+        #expect(byType["Baz"]?.isAsync == true)
+        #expect(byType["Baz"]?.isThrowing == true)
+        #expect(byType["Qux"]?.isAsync == false)
+        #expect(byType["Qux"]?.isThrowing == false)
+    }
+
+    @Test func providesComputedPropertyWithEffectsCapturesFlags() {
+        // Computed `@Provides var x: T { get async throws { ... } }`
+        // — accessor effect specifiers propagate the same way as
+        // function ones.
+        let source = """
+            @Provides
+            var asyncFoo: Foo {
+                get async { Foo() }
+            }
+
+            @Provides
+            var throwingBar: Bar {
+                get throws { Bar() }
+            }
+
+            @Provides
+            var bothBaz: Baz {
+                get async throws { Baz() }
+            }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Source.swift")
+        let byType = Dictionary(uniqueKeysWithValues: result.map { ($0.boundType, $0) })
+        #expect(byType["Foo"]?.isAsync == true)
+        #expect(byType["Foo"]?.isThrowing == false)
+        #expect(byType["Bar"]?.isAsync == false)
+        #expect(byType["Bar"]?.isThrowing == true)
+        #expect(byType["Baz"]?.isAsync == true)
+        #expect(byType["Baz"]?.isThrowing == true)
+    }
+
+    @Test func providesStoredPropertyHasNoEffects() {
+        // `@Provides let logger = Logger()` — stored binding, no
+        // accessor, so no effect specifiers possible. Flags stay
+        // `false`.
+        let source = """
+            @Provides let logger = Logger()
+            """
+        let result = discoverProviders(in: source, sourcePath: "Source.swift")
+        #expect(result.count == 1)
+        #expect(result[0].isAsync == false)
+        #expect(result[0].isThrowing == false)
+    }
+
     // MARK: - Parameter name edge cases
 
     @Test func injectInitWithWildcardParameterLabel() {
