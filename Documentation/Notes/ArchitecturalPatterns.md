@@ -303,3 +303,34 @@ Wire wires the top layer; capability protocols and adapters
 inhabit the middle; the runtime is at the bottom. The arrows
 between layers all point upward (dependencies on abstractions,
 not implementations).
+
+## DI vs data resolution — a unified surface
+
+The "Application code" layer above is conventionally split in
+many frameworks: providers (DI) for capabilities, separate
+mechanisms (loaders, resolvers, reactive operators) for data.
+Wire doesn't draw that line. Once `@Provides` admits
+`async throws` returns and `@Scoped(seed:)` provides per-request
+lifecycle, the same machinery resolves both:
+
+- `@Singleton struct DatabasePool` with async setup — a
+  capability, long-lived, configured once.
+- `@Scoped(seed: HBRequest.self) struct CurrentUser` with async
+  fetch — data, per-request, derived from the request.
+
+Both are bindings; both go through the same dependency graph
+with the same validation, the same effect-aware emission, the
+same scope rules. There's nothing structural separating them at
+the framework level — and there doesn't need to be, because
+Swift's concurrency model doesn't impose a sync/async-DI split
+the way most JVM frameworks do.
+
+The mechanism is captured in
+`Documentation/Notes/EffectAwareResolution.md`, including the
+levels-of-construction-strategy trajectory: sequential
+async resolution today (Level 1), parallel-where-independent
+and beyond deferred until concrete workloads make the case.
+Wire's positioning extends naturally from "DI framework" to
+"graph-resolution framework where construction is computation";
+documenting the trajectory now preserves the option to claim
+that territory explicitly as adopter patterns make it concrete.
