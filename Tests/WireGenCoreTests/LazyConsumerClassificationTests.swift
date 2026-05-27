@@ -4,84 +4,6 @@ import Testing
 
 @Suite("Lazy consumer classification")
 struct LazyConsumerClassificationTests {
-    // MARK: - classifyLazyConsumers
-
-    @Test func directOnlyClassificationWhenNoLazyConsumers() {
-        let bindings: [DiscoveredBinding] = [
-            makeConsumer(name: "A", deps: [makeDep(type: "B", isLazyWrapped: false)])
-        ]
-        let result = classifyLazyConsumers(in: bindings)
-        #expect(result[LazyConsumerKey(type: "B")] == .directOnly)
-    }
-
-    @Test func lazyOnlyClassificationWhenAllConsumersWrapTheSameType() {
-        let bindings: [DiscoveredBinding] = [
-            makeConsumer(name: "A", deps: [makeDep(type: "B", isLazyWrapped: true)]),
-            makeConsumer(name: "C", deps: [makeDep(type: "B", isLazyWrapped: true)]),
-        ]
-        let result = classifyLazyConsumers(in: bindings)
-        #expect(result[LazyConsumerKey(type: "B")] == .lazyOnly)
-    }
-
-    @Test func mixedClassificationWhenBothDirectAndLazyConsumersExist() {
-        let bindings: [DiscoveredBinding] = [
-            makeConsumer(name: "A", deps: [makeDep(type: "B", isLazyWrapped: true)]),
-            makeConsumer(name: "C", deps: [makeDep(type: "B", isLazyWrapped: false)]),
-        ]
-        let result = classifyLazyConsumers(in: bindings)
-        #expect(result[LazyConsumerKey(type: "B")] == .mixed)
-    }
-
-    @Test func keyedConsumersClassifyIndependentlyFromUnkeyed() {
-        // `B` and `B@primary` are distinct binding slots — Dagger
-        // semantics, keys partition the binding space. Same-type
-        // mixed-consumer cases at different keys don't bleed.
-        let bindings: [DiscoveredBinding] = [
-            makeConsumer(
-                name: "A",
-                deps: [makeDep(type: "B", isLazyWrapped: true)]
-            ),
-            makeConsumer(
-                name: "C",
-                deps: [makeDep(type: "B", isLazyWrapped: false, keyIdentifier: "primary")]
-            ),
-        ]
-        let result = classifyLazyConsumers(in: bindings)
-        #expect(result[LazyConsumerKey(type: "B")] == .lazyOnly)
-        #expect(result[LazyConsumerKey(type: "B", keyIdentifier: "primary")] == .directOnly)
-    }
-
-    @Test func canonicalisesWhitespaceInTypeExpressionsAcrossConsumers() {
-        // `Router<X, Y>` and `Router<X,Y>` are the same graph slot —
-        // canonicalisation strips whitespace, matching the graph
-        // builder's identity rule.
-        let bindings: [DiscoveredBinding] = [
-            makeConsumer(
-                name: "A",
-                deps: [makeDep(type: "Router<X, Y>", isLazyWrapped: true)]
-            ),
-            makeConsumer(
-                name: "C",
-                deps: [makeDep(type: "Router<X,Y>", isLazyWrapped: false)]
-            ),
-        ]
-        let result = classifyLazyConsumers(in: bindings)
-        #expect(result[LazyConsumerKey(type: "Router<X,Y>")] == .mixed)
-    }
-
-    @Test func typesWithoutConsumersAreAbsentFromResult() {
-        // A binding with no deps doesn't appear in any classification
-        // slot — classification is about consumer presence, not
-        // bindings themselves.
-        let bindings: [DiscoveredBinding] = [
-            makeConsumer(name: "A", deps: [])
-        ]
-        let result = classifyLazyConsumers(in: bindings)
-        #expect(result.isEmpty)
-    }
-
-    // MARK: - lazyNoEffectWarnings
-
     @Test func emitsWarningAtEachLazyConsumerSiteWhenMixed() {
         let lazyLocation = WireGenCore.SourceLocation(file: "Source.swift", line: 8, column: 17)
         let directLocation = WireGenCore.SourceLocation(file: "Source.swift", line: 15, column: 23)
@@ -217,6 +139,25 @@ struct LazyConsumerClassificationTests {
                 deps: [
                     makeDep(type: "DatabasePool", isLazyWrapped: true)
                 ]
+            ),
+        ]
+        let warnings = lazyNoEffectWarnings(in: bindings)
+        #expect(warnings.count == 1)
+    }
+
+    @Test func slotIdentityCanonicalisesWhitespaceInTypeExpressions() {
+        // `Router<X, Y>` and `Router<X,Y>` resolve to the same slot —
+        // canonicalisation strips whitespace, matching the graph
+        // builder's identity rule. A direct consumer of `Router<X,Y>`
+        // forces a warning at the Lazy consumer of `Router<X, Y>`.
+        let bindings: [DiscoveredBinding] = [
+            makeConsumer(
+                name: "A",
+                deps: [makeDep(type: "Router<X, Y>", isLazyWrapped: true)]
+            ),
+            makeConsumer(
+                name: "C",
+                deps: [makeDep(type: "Router<X,Y>", isLazyWrapped: false)]
             ),
         ]
         let warnings = lazyNoEffectWarnings(in: bindings)
