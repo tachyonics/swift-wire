@@ -278,9 +278,12 @@ via `Lazy<T>`, some directly), we deduplicate so the binding
 constructs exactly once even under parallel resolution. We
 already have this for sequential resolution (the topological
 order ensures single construction); under parallel resolution
-it needs careful synchronisation. `Lazy<T>`'s
-`Mutex<Task<T, Error>?>` pattern is exactly the right primitive
-to generalise from.
+it needs careful synchronisation. `Lazy<T>`'s internal
+tri-state `Mutex<State>` (`.unmarked → .pending(Task) →
+.resolved(Value)`) and `AtomicState<T>`'s lifecycle pattern
+are siblings — both coordinate first-caller-wins computation,
+and either is suitable as the deduplication primitive parallel
+resolution needs.
 
 ### Level 4 — cross-binding batching (DataLoader-style)
 
@@ -480,8 +483,9 @@ The questions to resolve when the forcing function arrives:
 
 5. **Lazy<T> + parallel.** A `Lazy<T>`'s factory may be
    triggered concurrently by multiple consumers. The existing
-   `Mutex<Task<T, Error>?>` pattern handles this — it
-   generalises to Level 4 deduplication.
+   tri-state `Mutex<State>` inside `LazyBox` handles this —
+   it's a sibling of `AtomicState<T>`'s pattern and
+   generalises naturally to Level 3 deduplication.
 
 6. **User control.** Should users be able to opt out of
    parallelism for predictability (logging order, side-effect
@@ -498,9 +502,11 @@ The questions to resolve when the forcing function arrives:
 
 - **`Lazy<T>` (`LazyTypeSupport.md`)** depends on Level 1 effect-
   aware emission (the deferred construction is async). Builds
-  on the same effect-spec infrastructure. At higher levels,
-  Lazy<T>'s `Mutex<Task<T, Error>?>` becomes the pattern for
-  deduplicated parallel construction.
+  on the same effect-spec infrastructure. Its internal tri-
+  state `Mutex<State>` is a sibling primitive to
+  `AtomicState<T>` — both coordinate first-caller-wins
+  computation, and at higher levels either is suitable as the
+  deduplication primitive for parallel construction.
 
 - **Seeded scopes (`@Scoped(seed:)`)** provide the per-request
   lifecycle that data resolution needs. Async-init scoped

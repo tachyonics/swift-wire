@@ -16,9 +16,11 @@ supported, and (b) the levels-of-construction-strategy
 trajectory (sequential now; parallel and beyond when
 workloads make the case). `Lazy<T>` is a Level 1 feature: it
 provides intra-scope deferred-and-cached construction without
-introducing parallelism. At higher levels, `Lazy<T>`'s
-`Mutex<Task<T, Error>?>` pattern generalises into the
-deduplication primitive parallel resolution needs.
+introducing parallelism. The internal `Mutex<State>` tri-state
+machine `Lazy<T>` uses is a sibling of `AtomicState<T>`'s
+lifecycle vocabulary; both primitives coordinate first-caller-
+wins computation, and the patterns reinforce each other when
+parallel-resolution codegen lands.
 
 The 4b-pre work (effect-spec capture in discovery + effect-
 aware codegen) is a prerequisite for `Lazy<T>` because the
@@ -90,34 +92,66 @@ public struct Lazy<T: Sendable>: Sendable {
     }
 
     public func get() async throws -> T {
-        try await box.value()
+        try await box.get()
     }
 }
 
-private final class LazyBox<T: Sendable>: @unchecked Sendable {
-    private let factory: @Sendable () async throws -> T
-    private let mutex = Mutex<Task<T, Error>?>(nil)
+private final class LazyBox<Value: Sendable>: @unchecked Sendable {
+    enum State {
+        case unmarked
+        case pending(Task<Value, Error>)
+        case resolved(Value)
+    }
 
-    init(factory: @escaping @Sendable () async throws -> T) {
+    private enum Outcome {
+        case resolved(Value)
+        case awaitTask(Task<Value, Error>)
+    }
+
+    private let factory: @Sendable () async throws -> Value
+    private let mutex: Mutex<State> = Mutex(.unmarked)
+
+    init(factory: @escaping @Sendable () async throws -> Value) {
         self.factory = factory
     }
 
-    func value() async throws -> T {
-        let task = mutex.withLock { task in
-            if let existing = task { return existing }
-            let new = Task { try await factory() }
-            task = new
-            return new
+    func get() async throws -> Value {
+        let outcome: Outcome = mutex.withLock { state in
+            switch state {
+            case .resolved(let value):
+                return .resolved(value)
+            case .pending(let existing):
+                return .awaitTask(existing)
+            case .unmarked:
+                let factory = self.factory
+                let new = Task<Value, Error> {
+                    let value = try await factory()
+                    self.mutex.withLock { storedState in
+                        storedState = .resolved(value)
+                    }
+                    return value
+                }
+                state = .pending(new)
+                return .awaitTask(new)
+            }
         }
-        return try await task.value
+        switch outcome {
+        case .resolved(let value): return value
+        case .awaitTask(let task): return try await task.value
+        }
     }
 }
 ```
 
-First caller under the lock creates the `Task` and stores it;
-subsequent callers see the same Task and await its value.
-Concurrent first-callers race to the lock but only one Task gets
-created and executed. Failure is cached: if the factory throws,
+Tri-state lifecycle (`.unmarked → .pending(Task) → .resolved(Value)`)
+mirrors `AtomicState<T>`'s vocabulary, adapted for Lazy's
+create-or-await coordination. First caller under the lock creates
+the Task and transitions to `.pending`; subsequent and concurrent
+first-callers see the same Task and await its value. The Task
+writes `.resolved(Value)` on success, after which gets read the
+value directly through the lock — no Task hop on the hot path, and
+the Task's closure capture is released as awaiters resume. Failure
+is cached: if the factory throws,
 every subsequent `get()` rethrows the same error (the `Task`'s
 value rethrows for every awaiter). This matches Kotlin's `lazy {}`
 and Dagger's `Provider.get()` semantics.
