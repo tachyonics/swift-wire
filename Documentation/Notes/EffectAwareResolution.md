@@ -68,41 +68,210 @@ Correct, simple, no scheduling sophistication. `makePool`
 finishes before `makeCache` starts even when they're
 independent — a latency cost but not a correctness cost.
 
-### Level 2 — parallel-where-independent via `async let`
+### Level 2 — parallel-where-independent via `TaskGroup`
 
-Bindings without inter-dependencies launch concurrently:
+Bindings without inter-dependencies launch concurrently. Codegen
+uses `withThrowingTaskGroup` rather than `async let`:
 
 ```swift
 let config = Config()
-async let poolTask = makePool(config: config)
-async let cacheTask = makeCache()
-let pool = try await poolTask
-let cache = try await cacheTask
+let (pool, cache) = try await withThrowingTaskGroup(
+    of: ParallelResult.self
+) { group in
+    group.addTask { .pool(try await makePool(config: config)) }
+    group.addTask { .cache(try await makeCache()) }
+    var pool: DatabasePool?
+    var cache: Cache?
+    for try await result in group {
+        switch result {
+        case .pool(let value): pool = value
+        case .cache(let value): cache = value
+        }
+    }
+    return (pool!, cache!)
+}
 let app = Application(pool: pool, cache: cache)
 ```
 
+Skipping `async let` is deliberate — its semantics actively
+don't fit Wire's use case:
+
+- **Cancellation timing.** `try await asyncLetA` blocks in
+  source order; if a sibling fails fast while `a` is slow, the
+  error doesn't propagate until `a` resolves. Sibling
+  cancellation fires at the function-exit cleanup, by which
+  time the latency is already paid. `TaskGroup` lets the first
+  failure propagate the moment it lands, with explicit
+  `cancelAll()` for in-flight siblings.
+- **Error precedence.** `async let` rethrows the first awaited,
+  not the first failed — losing earlier-failed siblings'
+  errors. `TaskGroup`'s iterator yields completions in actual
+  occurrence order.
+- **Variadic doesn't scale.** Wire's parallel groups can be any
+  size based on the dep graph's shape; `async let` patterns
+  diverge per group size while `TaskGroup` handles N uniformly.
+
 The build plugin computes "parallel groups" from the topological
-order: every binding whose deps are all satisfied at the same
-level can launch together. Sync bindings emit as bare calls;
-async bindings in a parallel group emit as `async let` and are
-awaited just before their first consumer.
+order — every binding whose deps are all satisfied at the same
+level can launch together. Sync bindings still emit as bare
+calls; async bindings in a parallel group emit through a single
+`TaskGroup` block whose results are matched back to their
+bindings via an enum or indexed marker.
 
-### Level 3 — structured concurrency via `TaskGroup`
+#### Strict per-level vs dynamic ready-as-deps-resolve
 
-Explicit control over cancellation when one parallel task fails,
-and ordered error handling:
+The sketch above is the **strict per-level** form: one
+`TaskGroup` per topological level, each level waiting for the
+entire previous level to complete before starting. Simple
+codegen, predictable structure, statically-typed result
+collection.
+
+A **dynamic** alternative uses a single `TaskGroup` for the
+whole graph plus per-binding atomic-state cells. Each binding
+emits as an `AtomicState<T>` declaration and a local
+`addBinding()` function whose body (a) checks deps via the
+atomic-state cells, (b) atomically transitions its own state
+from `unmarked` to `pending` via CAS, and (c) on success adds
+a Task that constructs the binding, marks its own state
+`resolved`, and calls each dependent binding's `addBinding()`
+function. Cascading: each completion triggers its dependents,
+which check their own deps and either fire (if all resolved)
+or short-circuit (if any still pending):
 
 ```swift
-let (pool, cache) = try await withThrowingTaskGroup(of: ...) { group in
-    group.addTask { try await makePool(config: config) }
-    group.addTask { try await makeCache() }
-    // Cancellation policy + error aggregation handled here
+let (pool, cache, data) = try await withThrowingTaskGroup(of: Void.self) { group in
+    let poolState = AtomicState<DatabasePool>()
+    let cacheState = AtomicState<Cache>()
+    let dataState = AtomicState<Data>()
+
+    func addPool() {
+        guard poolState.asPending() else { return }
+        group.addTask {
+            poolState.asResolved(try await makePool(config: config))
+            addData()
+        }
+    }
+    func addCache() {
+        guard cacheState.asPending() else { return }
+        group.addTask {
+            cacheState.asResolved(try await makeCache())
+            addData()
+        }
+    }
+    func addData() {
+        // Check deps BEFORE the CAS: otherwise we'd mark data pending
+        // while waiting on deps, and dependents-firing wouldn't get a
+        // chance to schedule us.
+        guard case .resolved(let pool) = poolState.read(),
+              case .resolved(let cache) = cacheState.read()
+        else { return }
+        guard dataState.asPending() else { return }
+        group.addTask {
+            dataState.asResolved(try await makeData(pool: pool, cache: cache))
+        }
+    }
+
+    addPool()
+    addCache()
+    for try await _ in group { }  // drain; errors propagate via the group
+    return (poolState, cacheState, dataState).unwrapped  // typed via read()
 }
 ```
 
-More expressive than `async let`; more codegen complexity.
+Properties of this shape:
 
-### Level 4 — selective caching / deduplication under parallel resolution
+- **Statically typed throughout.** Each `AtomicState<T>` knows
+  its exact type. The closures capturing resolved deps get
+  them typed from the pattern-match. No `Any` casts.
+- **Codegen is structured, not a runtime dispatch table.**
+  Per-binding closures encode their dep checks and dependent
+  triggers directly. No id-→-closure routing layer.
+- **Idempotency from CAS.** `asPending()` returning false makes
+  duplicate `addX()` calls into no-ops; the cascading triggers
+  can call freely.
+- **Maximum parallelism.** Each binding fires the instant its
+  specific deps complete; no "wait for the level boundary"
+  overhead.
+- **Selective Task allocation.** Each `addX()` function knows
+  at codegen time whether its binding's construction is sync
+  or async. Sync bindings don't spin up a Task at all — they
+  construct inline inside whichever Task resolved their last
+  async dep (or directly in the bootstrap entry, if the whole
+  dependency chain to the root is sync). Only async bindings
+  pay the Task-allocation + scheduling overhead. For graphs
+  with mostly-sync bindings (the typical capability-DI shape)
+  and a few async ones (DB pool, HTTP client), this is
+  significant — we get async scheduling only where it earns
+  its keep. Dagger Producers wraps every binding in
+  `ListenableFuture` regardless; Wire's compile-time effect
+  knowledge lets the codegen be selective.
+- **Unified with the strict-per-level shape.** When
+  intra-level duration variance is zero, this pattern produces
+  level-aligned execution naturally (dependents can only fire
+  after their deps complete; if level-mates take roughly the
+  same time, dependents fire roughly together at the level
+  boundary). The strict-per-level form is a degenerate case
+  rather than a distinct implementation.
+- **Wholly-sync subgraphs degenerate to zero overhead.** If
+  every binding in a graph is sync, no `TaskGroup` is needed
+  at all — the cascade of `addX()` calls runs entirely
+  inline in the bootstrap entry. Same shape as today's
+  strict-sequential bootstrap, with the eager-trigger
+  mechanism replacing explicit ordering.
+
+Sync-binding emission shape (for contrast with the async case
+in the earlier sketch):
+
+```swift
+func addSyncConsumer() {
+    guard case .resolved(let pool) = poolState.read() else { return }
+    guard syncConsumerState.asPending() else { return }
+    // No group.addTask — sync construction runs inline.
+    syncConsumerState.asResolved(SyncConsumer(pool: pool))
+    addDependentsOfSyncConsumer()
+}
+```
+
+`SyncConsumer`'s construction executes on whatever thread the
+caller of `addSyncConsumer()` happens to be on. If the caller
+is the Task that resolved `pool` (the typical case when
+SyncConsumer depends on an async binding), the sync work runs
+in that Task's body. Cancellation is cooperative — sync work
+runs to completion since it has no `await` to check; the next
+`await` after the inline call observes any pending cancellation
+and propagates appropriately.
+
+Where this wins materially over a "wait-for-the-level"
+implementation: graphs with high intra-level duration variance.
+Concretely, when a "level" mixes a fast binding (config
+reader) with a slow one (DB pool opening connections), and a
+later binding depends only on the fast one. Strict-per-level
+would make the later binding wait for the slow level-mate;
+the dynamic form starts it as soon as the fast dep completes.
+
+Costs:
+- **Per-binding atomic-state machinery** — N `AtomicState<T>`
+  declarations + N closures per parallel-eligible binding
+  group. Manageable codegen, but more lines than the
+  per-level form.
+- **Sendability** — `AtomicState<T>` is `Sendable` when
+  `T: Sendable` (which Wire requires anyway); the captured
+  closures and `addX()` nested functions need to be Sendable
+  too, which falls out as long as all captures are Sendable
+  values or Sendable class references.
+- **Partial-completion semantics on failure** — if some
+  bindings have resolved when a sibling fails, the framework
+  has to decide whether to surface them (for cleanup,
+  logging) or discard. Same concern as any structured-
+  concurrency error path; worth deciding explicitly.
+
+Wire's Level 2 implementation should target this pattern from
+the start rather than a strict-per-level form — the codegen
+isn't much more expensive (per-binding `AtomicState` + a
+closure is just structured code), and the unified shape means
+no later refactor when intra-level variance starts mattering.
+
+### Level 3 — selective caching / deduplication under parallel resolution
 
 If two consumers want the same binding via different paths (some
 via `Lazy<T>`, some directly), we deduplicate so the binding
@@ -113,7 +282,7 @@ it needs careful synchronisation. `Lazy<T>`'s
 `Mutex<Task<T, Error>?>` pattern is exactly the right primitive
 to generalise from.
 
-### Level 5 — cross-binding batching (DataLoader-style)
+### Level 4 — cross-binding batching (DataLoader-style)
 
 If `User(id: 1)` and `User(id: 2)` are both injected as
 scope-bound bindings, batch their fetches into a single query.
@@ -128,11 +297,11 @@ mental model.
 | Framework | Highest level | Notes |
 |-----------|---------------|-------|
 | Most JVM DI (Dagger core, Spring DI, Guice) | 1 | Sequential resolution; no parallelism notion |
-| Dagger Producers | 3 | Explicit `ListenableFuture` graph within a `ProductionComponent`; closest direct analog |
-| Spring reactive WebFlux | 2–3 | `Mono.zip()` for parallel composition; reactive operators handle ordering + errors |
+| Dagger Producers | 2 | Explicit `ListenableFuture` graph within a `ProductionComponent`; cancellation + error aggregation handled; closest direct analog |
+| Spring reactive WebFlux | 2 | `Mono.zip()` for parallel composition; reactive operators handle ordering + errors |
 | Remix / Next.js loaders | 2 | Parallel loaders per route; errors handled at route level |
-| GraphQL DataLoader (Apollo etc.) | 5 | Batching + memoization; usually hand-written on top of DI, not unified |
-| swift-dependencies, SafeDI, Factory (current Swift DI) | 0–1 | Mostly sync; async support via TaskLocal or factory closures, no scheduling |
+| GraphQL DataLoader (Apollo etc.) | 4 | Batching + memoization; usually hand-written on top of DI, not unified |
+| swift-dependencies, SafeDI, Factory (current Swift DI) | 0–1 | Mostly sync; framework doesn't participate in async at all (swift-dependencies) or only sync construction supported (SafeDI, Factory) |
 
 The unified-framework camp (Dagger Producers, remix loaders) makes
 parallel data resolution a first-class concern. The separated
@@ -148,10 +317,16 @@ the JVM/JS picture above: **no current Swift DI framework treats
 async construction as a first-class concern, and none attempts
 the unified DI + data resolution model**.
 
-- **swift-dependencies (Point-Free)**: TaskLocal injection,
-  no graph/topological resolution, dependencies-can-have-async-
-  methods but the framework itself doesn't schedule async-init
-  setup. Level 0 in our framing.
+- **swift-dependencies (Point-Free)**: TaskLocal injection, no
+  graph/topological resolution. Sync at the framework's
+  construction surface — `liveValue` is a sync expression
+  evaluated lazily on first access. The framework doesn't
+  itself participate in async at all; users who need async
+  work either put it inside the values' methods (which is just
+  what any Swift instance can do, not a framework affordance)
+  or hand-roll setup outside the DI surface (eager
+  construction in `main` + `withDependencies` override, lazy
+  closure patterns, wrapper hacks). Level 0 in our framing.
 - **SafeDI (Cash App)**: compile-time-validated, macro-based —
   closest conceptual neighbour to Wire. Hierarchical scopes are
   supported. **Constructors are sync.** No async resolution path;
@@ -314,7 +489,7 @@ The questions to resolve when the forcing function arrives:
    `@Provides(execution: .sequential)` is conceivable but adds
    surface area. Probably defer unless real cases demand it.
 
-7. **Batching annotations (Level 5).** What does a
+7. **Batching annotations (Level 4).** What does a
    `@Batchable` `@Provides` look like? How does it interact
    with scope boundaries? Pure speculative design at this
    point; revisit if the case becomes concrete.
@@ -396,7 +571,7 @@ preserves the option to claim it explicitly later.
   with sequential async.** Trigger: design Level 3 semantics
   against their use case.
 - **Multiple scope-bound bindings make redundant DB queries.**
-  Trigger: explore Level 5 batching.
+  Trigger: explore Level 4 batching.
 - **None of the above ever happens.** Outcome: Wire ships Level
   1, the unified-resolution direction stays a documented
   possibility, the framework remains a clean DI library that
