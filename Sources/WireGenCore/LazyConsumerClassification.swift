@@ -149,19 +149,5 @@ package func lazyNoEffectWarnings(
             )
         }
     }
-    return warnings.sorted(by: sourceLocationOrder)
-}
-
-/// Stable order on warnings — `(file, line, column)` ascending.
-/// Keeps output deterministic when the input binding order varies
-/// (which happens when callers iterate `[Partition: [...]]` dicts
-/// without sorting first).
-private func sourceLocationOrder(_ lhs: Warning, _ rhs: Warning) -> Bool {
-    if lhs.location.file != rhs.location.file {
-        return lhs.location.file < rhs.location.file
-    }
-    if lhs.location.line != rhs.location.line {
-        return lhs.location.line < rhs.location.line
-    }
-    return lhs.location.column < rhs.location.column
+    return warnings.sorted { $0.location < $1.location }
 }

@@ -584,7 +584,7 @@ package func renderWireKeyChecks(
     // Emit functions in deterministic (sorted) order — sort by type
     // first, then key — so the file is stable across runs.
     for (index, pair) in groupedSites.keys.sorted().enumerated() {
-        let sites = (groupedSites[pair] ?? []).sorted(by: locationOrder)
+        let sites = (groupedSites[pair] ?? []).sorted { $0.location < $1.location }
         let functionName = "_wireTypeCheck_\(index + 1)"
         lines.append("")
         lines.append("private func \(functionName)() {")
@@ -623,19 +623,6 @@ private struct KeyCheckPair: Hashable, Comparable {
         if lhs.type != rhs.type { return lhs.type < rhs.type }
         return lhs.key < rhs.key
     }
-}
-
-/// Stable ordering for sites within a function — file, then line, then
-/// column. Ensures the emitted file is byte-for-byte deterministic
-/// across runs given the same input set.
-private func locationOrder(_ lhs: KeyCheckSite, _ rhs: KeyCheckSite) -> Bool {
-    if lhs.location.file != rhs.location.file {
-        return lhs.location.file < rhs.location.file
-    }
-    if lhs.location.line != rhs.location.line {
-        return lhs.location.line < rhs.location.line
-    }
-    return lhs.location.column < rhs.location.column
 }
 
 /// Walk every binding and pull out the keyed sites we need to check.

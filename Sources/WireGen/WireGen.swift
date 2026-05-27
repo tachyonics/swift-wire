@@ -307,17 +307,9 @@ struct WireGen {
     private static func collectLazyNoEffectWarnings(
         in aggregate: DiscoveryAggregate
     ) -> [Warning] {
-        let warnings = aggregate.allBindings.values
+        aggregate.allBindings.values
             .flatMap { lazyNoEffectWarnings(in: $0) }
-        return warnings.sorted { lhs, rhs in
-            if lhs.location.file != rhs.location.file {
-                return lhs.location.file < rhs.location.file
-            }
-            if lhs.location.line != rhs.location.line {
-                return lhs.location.line < rhs.location.line
-            }
-            return lhs.location.column < rhs.location.column
-        }
+            .sorted { $0.location < $1.location }
     }
 
     /// Collect type names of `@Singleton` bindings across every graph

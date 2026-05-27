@@ -9,7 +9,7 @@ import SwiftSyntax
 /// (Xcode, the swiftc-driven build pipeline) surface as clickable
 /// errors. Discovery populates these from `SwiftSyntax`'s
 /// `SourceLocationConverter`; tests construct them directly.
-package struct SourceLocation: Sendable, Hashable {
+package struct SourceLocation: Sendable, Hashable, Comparable {
     package let file: String
     package let line: Int
     package let column: Int
@@ -25,6 +25,15 @@ package struct SourceLocation: Sendable, Hashable {
     /// source.
     package var formattedPrefix: String {
         "\(file):\(line):\(column)"
+    }
+
+    /// Lexicographic order on `(file, line, column)` — the canonical
+    /// sort used wherever diagnostic output needs to be deterministic
+    /// across runs (warning lists, generated-file site ordering).
+    package static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.file != rhs.file { return lhs.file < rhs.file }
+        if lhs.line != rhs.line { return lhs.line < rhs.line }
+        return lhs.column < rhs.column
     }
 }
 
