@@ -274,8 +274,10 @@ struct WireGen {
 
     /// WireGen-level warnings that need module-wide context to fire:
     /// unannotated `@Provides`-in-extension, cross-module-extension,
-    /// and extension-init conflicts on `@Singleton`/`@Scoped` types.
-    /// Per-file warnings come straight from `aggregate.warnings`.
+    /// extension-init conflicts on `@Singleton`/`@Scoped` types, and
+    /// no-effect `Lazy<T>` consumers (mixed direct + Lazy consumers
+    /// of the same T). Per-file warnings come straight from
+    /// `aggregate.warnings`.
     private static func collectCrossFileWarnings(
         in aggregate: DiscoveryAggregate,
         containerNames: Set<String>
@@ -293,6 +295,29 @@ struct WireGen {
                 candidates: aggregate.nonInjectExtensionInits,
                 singletonTypeNames: singletonTypeNames(in: aggregate)
             )
+            + collectLazyNoEffectWarnings(in: aggregate)
+    }
+
+    /// Run `lazyNoEffectWarnings` over every partition independently
+    /// — `Lazy<T>` is intra-scope only, so a partition's classification
+    /// is local to its own bindings. Each per-partition call already
+    /// sorts its output by source location; the concatenated list is
+    /// resorted globally so the merged output is stable regardless of
+    /// the partition-dict iteration order.
+    private static func collectLazyNoEffectWarnings(
+        in aggregate: DiscoveryAggregate
+    ) -> [Warning] {
+        let warnings = aggregate.allBindings.values
+            .flatMap { lazyNoEffectWarnings(in: $0) }
+        return warnings.sorted { lhs, rhs in
+            if lhs.location.file != rhs.location.file {
+                return lhs.location.file < rhs.location.file
+            }
+            if lhs.location.line != rhs.location.line {
+                return lhs.location.line < rhs.location.line
+            }
+            return lhs.location.column < rhs.location.column
+        }
     }
 
     /// Collect type names of `@Singleton` bindings across every graph
