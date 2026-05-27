@@ -116,6 +116,45 @@ struct BootstrapTests {
         #expect(graph.appNameKeyedAppNameAlternate.value == "alternate")
     }
 
+    // MARK: - Effect-aware emission
+
+    @Test func asyncThrowsProviderFunctionResolvesThroughBootstrap() async throws {
+        // `@Provides func makeAsyncToken() async throws -> AsyncToken`
+        // exercises effect-aware emission for the function-provider
+        // shape end-to-end. The generated bootstrap emits
+        // `try await makeAsyncToken()`; if the prefix is missing the
+        // file wouldn't compile, if the runtime semantics are wrong
+        // the assertion fails.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.asyncToken.value == "async-token-resolved")
+        #expect(graph.asyncTokenConsumer.describe() == "consumer holds async-token-resolved")
+    }
+
+    @Test func asyncThrowsComputedPropertyResolvesThroughBootstrap() async throws {
+        // `@Provides static var asyncMessage: AsyncMessage { get async throws }`
+        // exercises the computed-property accessor path. Discovery
+        // walks the accessor block and tags the binding; codegen
+        // emits `let asyncMessage = try await AsyncFactories.asyncMessage`
+        // — the property reference itself is the call site of the
+        // effectful getter.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.asyncMessage.payload == "computed-property-resolved")
+    }
+
+    @Test func asyncThrowsInjectInitResolvesThroughBootstrap() async throws {
+        // User-written `@Inject init(...) async throws` on a
+        // `@Singleton` type. Discovery reads the init's effect
+        // specifiers; codegen emits
+        // `let asyncInitConsumer = try await AsyncInitConsumer(token:, message:)`.
+        // The init's body performs real async work (Task.sleep) so
+        // the suspension propagates through bootstrap evaluation.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(
+            graph.asyncInitConsumer.describe()
+                == "init received async-token-resolved + computed-property-resolved"
+        )
+    }
+
     // MARK: - `@Scoped(seed:)` end-to-end
 
     @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {

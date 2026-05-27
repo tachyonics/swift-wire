@@ -398,11 +398,19 @@ private func constructionExpression(
         // nested inside a `@Container` resolves correctly when called
         // from the module-scope `_wireBootstrap...` free function.
         let args = renderArguments(scopeBound.dependencies, resolvingLocal: resolvingLocal)
-        return "\(scopeBound.qualifiedTypeName)(\(args))"
+        let call = "\(scopeBound.qualifiedTypeName)(\(args))"
+        return effectPrefix(
+            isAsync: scopeBound.initIsAsync,
+            isThrowing: scopeBound.initIsThrowing
+        ) + call
     case .provider(let provider):
+        let prefix = effectPrefix(
+            isAsync: provider.isAsync,
+            isThrowing: provider.isThrowing
+        )
         switch provider.form {
         case .property:
-            return provider.accessPath
+            return prefix + provider.accessPath
         case .function:
             let args = renderArguments(provider.dependencies, resolvingLocal: resolvingLocal)
             // A specialised generic provider function carries the
@@ -416,10 +424,26 @@ private func constructionExpression(
                 let generics =
                     provider.concreteGenericArguments
                     .joined(separator: ", ")
-                return "\(provider.accessPath)<\(generics)>(\(args))"
+                return "\(prefix)\(provider.accessPath)<\(generics)>(\(args))"
             }
-            return "\(provider.accessPath)(\(args))"
+            return "\(prefix)\(provider.accessPath)(\(args))"
         }
+    }
+}
+
+/// Combine `isAsync` / `isThrowing` into the call-site prefix Swift
+/// expects on an effectful call expression. Returns an empty string
+/// for sync, non-throwing calls so the construction expression stays
+/// `Type(args)` shape; otherwise returns `"try "`, `"await "`, or
+/// `"try await "`. The enclosing bootstrap function is `async
+/// throws` (the widest contract) so any combination is permitted
+/// at the call site.
+private func effectPrefix(isAsync: Bool, isThrowing: Bool) -> String {
+    switch (isThrowing, isAsync) {
+    case (false, false): return ""
+    case (true, false): return "try "
+    case (false, true): return "await "
+    case (true, true): return "try await "
     }
 }
 
