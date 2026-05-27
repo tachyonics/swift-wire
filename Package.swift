@@ -5,7 +5,13 @@ import PackageDescription
 let package = Package(
     name: "swift-wire",
     platforms: [
-        .macOS(.v14)
+        // macOS 15 is required for the `Synchronization` module's
+        // `Mutex` type, used by `Wire.AtomicState<T>`. Linux is
+        // unaffected (Synchronization ships with Swift 6.0+ on
+        // Linux); this constraint only narrows the development-on-
+        // macOS audience to macOS 15+. Servers run Linux, where
+        // the deployment target is Swift 6.0+ regardless.
+        .macOS(.v15)
     ],
     products: [
         .library(name: "Wire", targets: ["Wire"]),
@@ -47,6 +53,10 @@ let package = Package(
             name: "WireBuildPlugin",
             capability: .buildTool(),
             dependencies: ["WireGen"]
+        ),
+        .testTarget(
+            name: "WireTests",
+            dependencies: ["Wire"]
         ),
         .testTarget(
             name: "WireMacrosImplTests",
