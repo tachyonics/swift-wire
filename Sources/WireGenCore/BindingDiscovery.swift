@@ -767,8 +767,6 @@ private func extractInjectDependencies(
     )
 }
 
-// Effect-specifier extraction helpers live in `EffectSpecifiers.swift`.
-
 /// `@Container` plus a scope macro on the same type is almost always a
 /// user error: `@Container` routes the type's static members into a
 /// separate graph, while a scope macro makes the type a binding in the
