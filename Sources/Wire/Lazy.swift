@@ -36,17 +36,21 @@ import Synchronization
 /// ## Concurrency
 ///
 /// `Lazy<T>` is `Sendable` when `T: Sendable` (which Wire requires
-/// of all bindings). First-call coordination uses a
-/// `Mutex<Task<T, Error>?>` inside the internal `LazyBox`: the
-/// first caller in the lock creates a `Task<T, Error>` and stores
-/// it; subsequent and concurrent callers see the same `Task` and
-/// await its value. Exactly one factory invocation regardless of
-/// how many concurrent callers race for the first `get()`.
+/// of all bindings). First-call coordination uses a tri-state
+/// `Mutex<State>` inside the internal `LazyBox`
+/// (`.unmarked → .pending(Task) → .resolved(Value)`): the first
+/// caller in the lock creates a `Task<T, Error>` and transitions
+/// state to `.pending`; subsequent and concurrent first-callers
+/// see the same Task and await its value. The Task writes
+/// `.resolved(Value)` on success, so post-resolution gets read
+/// the value directly without a Task hop and the Task's closure
+/// capture is released. Exactly one factory invocation regardless
+/// of how many concurrent callers race for the first `get()`.
 ///
-/// Failure caching: if the factory throws, the `Task`'s
-/// `.value` rethrows for every awaiter, and the failed `Task`
-/// stays cached — subsequent `get()` calls observe the same
-/// error rather than retrying. Matches Kotlin's `lazy { }` and
+/// Failure caching: if the factory throws, the state stays at
+/// `.pending(task)`; subsequent `get()` calls await the same
+/// cached Task and observe the same error rather than retrying.
+/// Matches Kotlin's `lazy { }` and
 /// Dagger's `Provider.get()` semantics.
 ///
 /// ## Scope rules

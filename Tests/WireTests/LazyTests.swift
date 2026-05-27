@@ -40,7 +40,7 @@ struct LazyTests {
     @Test func factoryCalledOnceAcrossConcurrentFirstCallers() async throws {
         // 100 concurrent first-callers should all see the same
         // value, with the factory invoked exactly once. The
-        // Mutex<Task<T, Error>?> coordination is the central
+        // Tri-state Mutex<State> coordination is the central
         // correctness invariant — this hammers it.
         let callCount = CallCount()
         let lazy = Lazy<Int> {
