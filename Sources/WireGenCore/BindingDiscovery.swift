@@ -476,14 +476,12 @@ final class BindingDiscovery: SyntaxVisitor {
             // since `@Provides func` parameters are implicitly deps.
             let parameterKey = attribute(in: parameter.attributes, named: "Inject")
                 .flatMap { keyIdentifier(from: $0) }
-            let unwrapped = unwrapLazyType(parameter.type)
             return DependencyParameter(
                 name: parameterName(parameter),
-                type: unwrapped.typeText,
+                type: parameter.type.trimmedDescription,
                 kind: .providerFunctionParameter,
                 location: location(of: parameter.firstName),
-                keyIdentifier: parameterKey,
-                isLazyWrapped: unwrapped.isLazyWrapped
+                keyIdentifier: parameterKey
             )
         }
         let genericParameterNames =
@@ -722,18 +720,16 @@ private func extractInjectDependencies(
                     parameter in
                     let parameterKey = attribute(in: parameter.attributes, named: "Inject")
                         .flatMap { keyIdentifier(from: $0) }
-                    let unwrapped = unwrapLazyType(parameter.type)
                     return DependencyParameter(
                         name: parameterName(parameter),
-                        type: unwrapped.typeText,
+                        type: parameter.type.trimmedDescription,
                         kind: .injectInitParameter,
                         location: makeSourceLocation(
                             of: parameter.firstName,
                             sourcePath: sourcePath,
                             converter: converter
                         ),
-                        keyIdentifier: parameterKey,
-                        isLazyWrapped: unwrapped.isLazyWrapped
+                        keyIdentifier: parameterKey
                     )
                 }
                 let effects = functionEffectFlags(initDecl.signature.effectSpecifiers)
@@ -749,19 +745,17 @@ private func extractInjectDependencies(
         for binding in varDecl.bindings {
             guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
             guard let typeAnnotation = binding.typeAnnotation else { continue }
-            let unwrapped = unwrapLazyType(typeAnnotation.type)
             propertyDependencies.append(
                 DependencyParameter(
                     name: pattern.identifier.text,
-                    type: unwrapped.typeText,
+                    type: typeAnnotation.type.trimmedDescription,
                     kind: .injectProperty,
                     location: makeSourceLocation(
                         of: pattern.identifier,
                         sourcePath: sourcePath,
                         converter: converter
                     ),
-                    keyIdentifier: propertyKey,
-                    isLazyWrapped: unwrapped.isLazyWrapped
+                    keyIdentifier: propertyKey
                 )
             )
         }

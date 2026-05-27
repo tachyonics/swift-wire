@@ -340,29 +340,19 @@ package struct DependencyParameter: Sendable {
     /// match only same-key bindings (Dagger-style — keys partition the
     /// binding space).
     package let keyIdentifier: String?
-    /// `true` when the original dep type was `Lazy<T>` and `type`
-    /// holds the unwrapped `T`. Discovery unwraps so the graph
-    /// identity is the inner type — cycle detection, missing-binding,
-    /// and cross-scope diagnostics all apply against `T`, not against
-    /// `Lazy<T>`. Codegen reads this flag to decide whether the
-    /// consumer's construction-argument slot receives the eagerly-
-    /// constructed `T` (false) or a `Lazy<T>` wrapper around it (true).
-    package let isLazyWrapped: Bool
 
     package init(
         name: String?,
         type: String,
         kind: DependencyKind,
         location: SourceLocation,
-        keyIdentifier: String? = nil,
-        isLazyWrapped: Bool = false
+        keyIdentifier: String? = nil
     ) {
         self.name = name
         self.type = type
         self.kind = kind
         self.location = location
         self.keyIdentifier = keyIdentifier
-        self.isLazyWrapped = isLazyWrapped
     }
 }
 
