@@ -219,19 +219,39 @@ Weak refs in DI have two failure modes worth pinning:
    `@Singleton` consumer can't reach into a `@Scoped` value's
    partition. Weak doesn't paper over the partition mismatch.
 
-## Asymmetry with `Lazy<T>`
+## Asymmetry with `Lazy<T>` (and a hypothetical future `lazy`)
 
-| | `Lazy<T>` | `weak` |
-|---|---|---|
-| What is it? | A regular Swift type Wire happens to ship | A Swift language keyword |
-| Producer-side meaning? | Yes — "I produce a deferred-construction view" | No — producers always return strong refs |
-| Framework recognition? | None | The macro recognises `weak` on `@Inject` properties to exclude them from the init |
-| Graph effect | None — `Lazy<T>` is just another binding type | Weak edges skip cycle detection; ordering still applies |
-| Cycle-breaking? | No — construction-time edge still exists | Yes — that's the whole point |
+| | `Lazy<T>` (today) | `lazy` (hypothetical future) | `weak` |
+|---|---|---|---|
+| What is it? | A regular Swift type Wire happens to ship | A Swift language keyword (consumer-side) | A Swift language keyword (consumer-side) |
+| Producer-side meaning? | Yes — "I produce a deferred-construction view" | No (modifier on the consumer's property) | No (modifier on the consumer's property) |
+| Framework recognition? | None | Macro recognises `lazy` on `@Inject` properties (consistent with the `weak` pattern below) | Macro recognises `weak` on `@Inject` properties to exclude them from the init |
+| Graph effect | None — just another binding type | Edge participates in cycle detection like any strong edge | Weak edges skip cycle detection; ordering still applies |
+| Cycle-breaking? | No — graph edge persists | **No — still participates in cycle detection.** Cycle-breaking is `weak`'s job. | Yes — that's the whole point |
+| Lifetime extension? | Yes (strong reference) | Yes (strong reference, post-first-access) | No (non-owning) |
 
 The framing converges on one rule: lean on Swift's language
 features when they fit, don't invent a framework type when a
-keyword already says the same thing.
+keyword already says the same thing. Cycle-breaking is `weak`'s
+exclusive job because it's the only modifier that combines the
+two correctness properties (cycle-break + non-owning lifetime).
+
+Combining `lazy` and `weak` on the *same* binding doesn't
+usefully exist: deferring construction of a value you'll then
+only hold weakly means materialising it and then immediately
+allowing it to deallocate, with the lazy cache defeating itself
+because the weak slot zeros between construction and any reader.
+The narrow edge case where the combination might matter — a
+constructor whose side effects (not the returned value) are
+the actual purpose — isn't a primary design driver.
+
+The legitimate composite case — "deferred construction of a
+*subsystem* with mutual internal references" — keeps deferral
+and cycle-breaking at different granularities: deferral at the
+subsystem (a seeded scope wrapped in `Lazy`), cycle-breaking at
+per-reference within the subsystem (`weak`). That's what makes
+the composition coherent. See `LazyTypeSupport.md` § "Atomic-
+unit deferral via seeded scopes" for the worked example.
 
 ## Out of scope
 

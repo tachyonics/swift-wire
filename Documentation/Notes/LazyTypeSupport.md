@@ -232,6 +232,98 @@ If the user instead wants *independent* lazy and direct instances,
 they write two unrelated producers — the binding-identity rule
 makes that the default.
 
+### Atomic-unit deferral via seeded scopes
+
+The case for "a deferred subsystem with internal mutual references" — a
+heavy resource plus the types that compose around it, with cycle-break
+needs inside — composes naturally from three primitives Wire already
+provides (or will provide): seeded scopes (iteration 4a), `weak`
+injection (planned iteration 4e), and `Lazy<T>` (this iteration).
+
+The shape:
+
+1. **Group the mutually-referencing bindings inside a seeded scope.**
+   The scope struct becomes the atomic unit of construction. Mutual
+   references between scoped types are kept inside the scope, where
+   the scope struct holds both ends.
+
+2. **Break cycles inside the scope with `weak`.** Scope-held types
+   with mutual `weak` refs are leak-free at scope exit, because the
+   weak side doesn't extend lifetime. Iteration 4e's macro recognition
+   of `@Inject weak var` handles the construction-order side.
+
+3. **Wrap the scope itself in `Lazy` for deferred materialisation.**
+   The scope's generated `_<Seed>WireScope` struct is a normal Swift
+   type; wrapping it in `Lazy` defers the entire subsystem's
+   bootstrap until the first `.get()` call. The scope and everything
+   in it stays cached after first materialisation, giving a "first-
+   use init for the whole subsystem" lifecycle.
+
+Worked example:
+
+```swift
+struct HeavyResourceSeed {}
+
+@Scoped(seed: HeavyResourceSeed.self)
+final class HeavyResource {
+    @Inject var client: HeavyResourceClient
+    // ... expensive init ...
+}
+
+@Scoped(seed: HeavyResourceSeed.self)
+final class HeavyResourceClient {
+    @Inject weak var owner: HeavyResource?
+    @Inject init(owner: HeavyResource) { /* ... */ }
+}
+
+// At the bootstrap site (or wrapped inside another binding):
+let lazyHeavyScope = Lazy {
+    try await _HeavyResourceSeedWireScope.bootstrap(
+        seed: HeavyResourceSeed(),
+        _wireGraph: rootGraph
+    )
+}
+
+// First request that needs the subsystem:
+let scope = try await lazyHeavyScope.get()
+scope.client.doWork()
+
+// Subsequent calls return the cached scope; the heavy resource
+// constructs once and lives for the process's remaining lifetime.
+```
+
+What you get from this composition:
+
+- **First-use init at subsystem granularity.** One `.get()` triggers
+  the entire scope's construction; cached thereafter. This is the
+  "first-use singleton" pattern at a coarser, more useful granularity
+  than per-binding deferral.
+- **Cycle-breaking inside the unit.** `weak` keeps mutual references
+  leak-free under the scope-struct lifecycle. The scope struct holds
+  the strong side; weak refs zero correctly if the scope ever
+  deallocates.
+- **Right level of abstraction.** Deferral applies to the whole
+  subsystem, not to individual bindings. Cycle-breaking applies to
+  individual references inside, where it has correct lifetime
+  semantics.
+
+This composition pattern is materially better than any per-binding
+"lazy as cycle-break" mechanism would be. It uses three existing
+primitives at their respective sweet spots — scope for atomic
+construction unit, weak for cycle-breaking with lifetime safety,
+Lazy for deferred materialisation — without needing a new framework
+affordance.
+
+**Friction point worth flagging:** the bootstrap call to
+`_<Seed>WireScope.bootstrap(seed:_wireGraph:)` needs access to the
+parent `_WireGraph`. The user holds it at the bootstrap site where
+they called `_wireBootstrap()`, so this works for `Lazy` wrappers
+constructed in user code. Wrapping inside a `@Provides Lazy<Scope>`
+binding would require the graph to be self-injectable (`@Inject var
+graph: _WireGraph`) — a small future affordance that isn't on the
+M1 critical path. The bootstrap-site composition shown above works
+today without it.
+
 ## Why not wrapper-marker recognition
 
 An earlier design pursued framework-level recognition of `Lazy<T>`
@@ -322,13 +414,87 @@ prominently when explaining Lazy.
 
 - The `Lazy<T>` type's API is fixed at `.get()` from day one.
   Adding `callAsFunction` later as a synonym is non-breaking.
-- A future iteration could introduce cross-partition transitive
-  deferral *if* a real adopter case demands it — i.e., "this
-  singleton is only consumed by request-scope Lazy<T> wrappers,
-  defer it in the parent scope too." That's a graph optimisation
-  on top of explicit user intent, not a change to the user-facing
-  API. The just-a-type model leaves room for that without
-  prejudicing it.
+
+- **If Swift gains async-capable thread-safe `lazy`**, the
+  natural ergonomic surface for *consumer-side* deferral becomes
+  `@Inject lazy var x: T` (language keyword, no producer-side
+  ambiguity — `lazy` isn't a type modifier, so the wrapper-
+  marker footgun doesn't apply). The macro would recognise the
+  keyword on `@Inject` properties — same structural pattern as
+  the `weak` recognition for cycle-breaking — and emit codegen
+  that stores `Lazy<T>` internally with synthesised accessors.
+  Under that future, `Lazy<T>` recedes to implementation detail
+  for the auto-wrap path; new code reads `@Inject lazy var x: T`
+  and never types `Lazy<T>` directly.
+
+  The explicit `@Provides Lazy<T>` pattern continues to serve a
+  *different* role under that future — producer-side, graph-
+  wide guarantee of deferred construction. The two are
+  complementary, not redundant:
+
+  - `@Inject lazy var x: T` — consumer-side convenience, weak
+    guarantee. Useful for cycle-breaking and ergonomic per-
+    property deferral. If T has any direct consumer in the
+    graph, T constructs eagerly anyway and the lazy keyword
+    is no-op at this site — a no-effect warning fires to tell
+    the user their intent wasn't honoured.
+  - `@Provides Lazy<T>` — producer-side intent, strong
+    guarantee. Useful for "this resource's construction
+    lifecycle must be deferred regardless of who consumes
+    it" — the heavy-init singleton, the first-use-init
+    singleton shared across requests. Auto-wrap can't
+    substitute for this because any direct consumer would
+    still force eager construction.
+
+  The no-effect warning re-emerges for the consumer-side
+  pattern, but it's defensible there: it's the contract
+  telling the user their language-keyword intent didn't take
+  effect because another consumer forced eagerness. Anchored
+  on a Swift language modifier, not on a framework wrapper
+  type, so the "two paths to satisfy one consumer shape"
+  problem the wrapper-marker design suffered from doesn't
+  reappear.
+
+- A future iteration could also introduce cross-partition
+  transitive deferral *if* a real adopter case demands it —
+  i.e., "this singleton is only consumed by request-scope
+  Lazy-wrapped consumers, defer it in the parent scope too."
+  That's a graph optimisation on top of explicit user intent,
+  not a change to the user-facing API. The just-a-type model
+  leaves room for that without prejudicing it.
+
+- **Cycle-breaking is `weak`'s job, not `lazy`'s.** Lazy edges
+  (whether via the current `@Provides Lazy<T>` pattern or a
+  hypothetical future `@Inject lazy var`) still participate in
+  cycle detection — they're not a cycle-break primitive.
+
+  The combination "deferred construction + non-retaining
+  reference" on the *same* binding doesn't usefully exist:
+  deferring construction of something you'll then only hold
+  weakly means materialising it and then immediately allowing
+  it to deallocate — the lazy cache defeats itself because
+  the weak slot can zero between construction and any reader.
+  The only scenarios where the combination is meaningful at
+  all involve construction side-effects unrelated to the
+  returned value (registering with a service locator on
+  init, opening a background connection that runs
+  independently). Those edge cases aren't primary design
+  drivers and don't justify a per-binding `lazy weak`
+  affordance even hypothetically.
+
+  The legitimate composite use case — "deferred construction
+  of a subsystem that has internal mutual references" —
+  composes cleanly from three existing primitives at *different
+  granularities*: seeded scope as the atomic unit (subsystem-
+  level), `weak` inside the scope for cycle-breaking with
+  leak-safe lifetime semantics (per-reference), `Lazy` around
+  the scope struct for deferred materialisation (subsystem-
+  level). The deferral and the cycle-break apply to different
+  things, which is what makes the composition coherent. See
+  "Atomic-unit deferral via seeded scopes" under Idiomatic
+  patterns for the worked example. This collapses the design
+  space — no framework affordance for "lazy as cycle-break"
+  is needed.
 
 ## Open implementation questions
 
