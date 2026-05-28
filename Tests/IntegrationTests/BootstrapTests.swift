@@ -155,6 +155,42 @@ struct BootstrapTests {
         )
     }
 
+    // MARK: - User-written `@Provides -> Lazy<T>`
+
+    @Test func userWrittenLazyProviderDoesNotInvokeFactoryAtBootstrap() async throws {
+        // The canonical Wire posture: `Lazy<LazyResource>` is just a
+        // binding type, bootstrap allocates the wrapper, the factory
+        // closure inside doesn't run until someone calls `.get()`.
+        // Counter at zero after bootstrap = factory deferred correctly.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(await graph.lazyResourceCallCount.value == 0)
+    }
+
+    @Test func userWrittenLazyProviderInvokesFactoryOnFirstGet() async throws {
+        // First `.get()` runs the factory exactly once; counter goes
+        // from zero to one. Pins the "deferred until first use" half
+        // of the Lazy semantics.
+        let graph = try await _WireGraph.bootstrap()
+        let materialised = try await graph.lazyResourceConsumer.materialise()
+        #expect(materialised.value == "materialised")
+        #expect(await graph.lazyResourceCallCount.value == 1)
+    }
+
+    @Test func userWrittenLazyProviderCachesAcrossMultipleGets() async throws {
+        // Multiple `.get()` calls return the same instance and never
+        // re-invoke the factory. Pins the "cached after first use" half
+        // of the Lazy semantics — the first-use-singleton pattern's
+        // load-bearing property.
+        let graph = try await _WireGraph.bootstrap()
+        let consumer = graph.lazyResourceConsumer
+        let first = try await consumer.materialise()
+        let second = try await consumer.materialise()
+        let third = try await consumer.materialise()
+        #expect(first === second)
+        #expect(second === third)
+        #expect(await graph.lazyResourceCallCount.value == 1)
+    }
+
     // MARK: - `@Scoped(seed:)` end-to-end
 
     @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {
