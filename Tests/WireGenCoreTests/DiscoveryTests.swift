@@ -343,6 +343,114 @@ struct DiscoveryTests {
         #expect(result[0].isThrowing == false)
     }
 
+    // MARK: - Member injection: `@Inject weak var` sugar + `@Inject func`
+
+    @Test func weakInjectVarBecomesPropertyAssignmentMemberInjection() {
+        // `@Inject weak var x: T?` is sugar for a member injection
+        // with `.propertyAssignment` shape. The Optional `?` is
+        // stripped from the parameter's resolution type so the dep
+        // matches the producer's `T` binding (Swift requires weak
+        // storage to be Optional, but the graph identity is on `T`).
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.isEmpty)
+        #expect(result[0].memberInjections.count == 1)
+        let injection = result[0].memberInjections[0]
+        #expect(injection.shape == .propertyAssignment(propertyName: "coordinator"))
+        #expect(injection.parameters.count == 1)
+        #expect(injection.parameters[0].type == "Coordinator")
+        #expect(injection.parameters[0].kind == .injectMethodParameter)
+        #expect(injection.isAsync == false)
+        #expect(injection.isThrowing == false)
+    }
+
+    @Test func injectFuncBecomesMethodCallMemberInjection() {
+        // The general form: `@Inject func setX(_ x: T)` captures the
+        // method's parameter list as the injection's parameters and
+        // records the function name for the post-init call site.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject
+                func receiveCoordinator(_ coordinator: Coordinator) {
+                    // user wires storage however they like
+                }
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.isEmpty)
+        let injection = try! #require(result[0].memberInjections.first)
+        #expect(injection.shape == .methodCall(methodName: "receiveCoordinator"))
+        #expect(injection.parameters.count == 1)
+        #expect(injection.parameters[0].type == "Coordinator")
+        #expect(injection.parameters[0].name == nil)  // wildcard `_` label
+        #expect(injection.parameters[0].kind == .injectMethodParameter)
+    }
+
+    @Test func injectFuncCapturesEffectSpecifiers() {
+        // `async throws` on an `@Inject func` propagates to the
+        // member injection; codegen emits `try await consumer.method(...)`
+        // at the post-init call site.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject
+                func setup(db: Database) async throws {
+                    try await db.warmUp()
+                }
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        let injection = try! #require(result[0].memberInjections.first)
+        #expect(injection.isAsync)
+        #expect(injection.isThrowing)
+    }
+
+    @Test func nonWeakInjectPropertyStaysInInitDependencies() {
+        // Symmetry check: without `weak`, the property stays as an
+        // init-time dep (`.injectProperty`), the type isn't unwrapped,
+        // and `memberInjections` is empty.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].memberInjections.isEmpty)
+        let dep = result[0].dependencies[0]
+        #expect(dep.kind == .injectProperty)
+        #expect(dep.type == "Coordinator?")
+    }
+
+    @Test func weakAndStrongInjectPropertiesPartitionAcrossInitAndMemberInjections() {
+        // Mixed shape: strong @Inject vars stay in `dependencies`
+        // (delivered through the synthesised init); weak @Inject vars
+        // move to `memberInjections` (delivered post-construct).
+        let source = """
+            @Singleton
+            final class View {
+                @Inject var name: String
+                @Inject weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].name == "name")
+        #expect(result[0].memberInjections.count == 1)
+        #expect(
+            result[0].memberInjections[0].shape == .propertyAssignment(propertyName: "coordinator")
+        )
+    }
+
     // MARK: - Parameter name edge cases
 
     @Test func injectInitWithWildcardParameterLabel() {

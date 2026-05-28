@@ -228,6 +228,21 @@ private func appendSeedScopeStruct(
         lines.append("    let \(local) = \(construction)")
     }
 
+    // Post-init member injection block for bindings constructed in
+    // this scope. Borrowed bindings are skipped — their post-init
+    // wiring (if any) belongs to the scope that owns them. Member
+    // injection parameters pointing at a borrowed target route
+    // through `resolveBorrow` so the assignment / method call uses
+    // the borrow's access path (`_WireGraph.logger`) rather than a
+    // non-existent local.
+    lines.append(
+        contentsOf: renderMemberInjections(
+            for: scope.topologicalOrder,
+            resolvingLocal: resolveBorrow,
+            skipConsumers: scope.borrowedBindingPropertyNames
+        )
+    )
+
     let returnArgs = storedBindings.map { binding -> String in
         let name = propertyName(for: binding)
         return "\(name): \(name)"
@@ -290,6 +305,12 @@ private func appendStruct(
         let construction = constructionExpression(for: binding)
         lines.append("    let \(local) = \(construction)")
     }
+
+    // Post-init member injection block — emits after all locals
+    // are bound so each injection's target references are in
+    // scope. Empty when no `@Inject weak var` sugar or
+    // `@Inject func` member injections exist in the graph.
+    lines.append(contentsOf: renderMemberInjections(for: topologicalOrder))
 
     // Final return — memberwise init takes one argument per stored
     // property in declaration order. Label is the property name;
@@ -462,15 +483,75 @@ private func renderArguments(
     _ dependencies: [DependencyParameter],
     resolvingLocal: ((String) -> String?)? = nil
 ) -> String {
-    dependencies.map { dependency in
-        let localName = identifierName(forType: dependency.type, key: dependency.keyIdentifier)
-        let value = resolvingLocal?(localName) ?? localName
-        if let label = dependency.name {
-            return "\(label): \(value)"
+    dependencies
+        .map { dependency in
+            let localName = identifierName(forType: dependency.type, key: dependency.keyIdentifier)
+            let value = resolvingLocal?(localName) ?? localName
+            if let label = dependency.name {
+                return "\(label): \(value)"
+            }
+            // Wildcard external label — the call site omits it entirely.
+            return value
+        }.joined(separator: ", ")
+}
+
+/// Emit the post-construction member-injection block for every
+/// binding in the topological order. Each `MemberInjection`
+/// renders to one source line — either a property assignment
+/// (`consumer.prop = parameter`) or a method call
+/// (`[try] [await] consumer.method(args...)`), chosen by the
+/// injection's `Shape`.
+///
+/// The block emits *after* all construction lines so every target
+/// reference is in scope as a local. Cycle-breaking comes from
+/// this two-phase structure: the graph's init-time-edge topo sort
+/// decides construction order, and the member-injection block
+/// closes any post-construction wiring (including cycles whose
+/// other side is a weak ref or a setter method).
+///
+/// `resolvingLocal`, when supplied, lets the seed-scope path
+/// inline borrowed singletons at the target reference — same
+/// callback shape as `renderArguments`. A member injection
+/// parameter pointing at a borrowed binding resolves through the
+/// borrow's `_WireGraph.foo` access path rather than a local.
+///
+/// `skipConsumers` excludes bindings that aren't constructed in
+/// the current scope (e.g. borrowed singletons inside a seed
+/// scope's bootstrap). Their post-init wiring belongs to whichever
+/// scope owns their construction, not to scopes that merely
+/// reference them.
+private func renderMemberInjections(
+    for topologicalOrder: [DiscoveredBinding],
+    resolvingLocal: ((String) -> String?)? = nil,
+    skipConsumers: Set<String> = []
+) -> [String] {
+    var lines: [String] = []
+    for binding in topologicalOrder {
+        let consumerLocal = propertyName(for: binding)
+        if skipConsumers.contains(consumerLocal) { continue }
+        for injection in binding.memberInjections {
+            let args = renderArguments(injection.parameters, resolvingLocal: resolvingLocal)
+            switch injection.shape {
+            case .propertyAssignment(let propertyName):
+                // Sugar form: single parameter, sync, non-throwing.
+                // Direct property assignment — Swift's weak-storage
+                // handling (or whatever the user's property does)
+                // takes care of the write.
+                lines.append("    \(consumerLocal).\(propertyName) = \(args)")
+            case .methodCall(let methodName):
+                // General form: user-written method, may have any
+                // effect colour. The call's prefix is driven by the
+                // method's signature, same logic as init/provider
+                // construction expressions.
+                let prefix = effectPrefix(
+                    isAsync: injection.isAsync,
+                    isThrowing: injection.isThrowing
+                )
+                lines.append("    \(prefix)\(consumerLocal).\(methodName)(\(args))")
+            }
         }
-        // Wildcard external label — the call site omits it entirely.
-        return value
-    }.joined(separator: ", ")
+    }
+    return lines
 }
 
 /// Strip a type expression down to a Swift-identifier-safe form for

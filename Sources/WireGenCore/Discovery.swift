@@ -136,6 +136,18 @@ extension DiscoveredBinding {
         }
     }
 
+    /// Post-construction injection points on the binding. Empty for
+    /// providers (functions/properties can't host post-init injection
+    /// — only `@Singleton`/`@Scoped` types can). For scope-bound
+    /// types this carries `@Inject weak var` sugar entries plus any
+    /// `@Inject func` entries.
+    package var memberInjections: [MemberInjection] {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.memberInjections
+        case .provider: return []
+        }
+    }
+
     /// Generic-parameter names declared on the binding. The graph uses
     /// these to skip bindings that can't be resolved without a concrete
     /// specialisation pass (not yet implemented).
@@ -211,6 +223,18 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// with `throws` in its effect specifiers. Same caveat as
     /// `initIsAsync` for macro-synthesised inits.
     package let initIsThrowing: Bool
+    /// Post-construction injection points on this type. Comes from
+    /// two source forms:
+    /// - `@Inject weak var x: T?` — sugar, becomes a
+    ///   `.propertyAssignment` member injection.
+    /// - `@Inject func setX(_ x: T)` — general form, becomes a
+    ///   `.methodCall` member injection.
+    /// Each member injection's parameters resolve through the graph
+    /// the same way init-time deps do, but they're excluded from
+    /// cycle detection (post-init delivery breaks construction-time
+    /// edges) and emitted as a separate block after the construction
+    /// sequence in the generated bootstrap.
+    package let memberInjections: [MemberInjection]
 
     package var sourcePath: String { location.file }
 
@@ -223,7 +247,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         location: SourceLocation,
         scopeKey: ScopeKey? = nil,
         initIsAsync: Bool = false,
-        initIsThrowing: Bool = false
+        initIsThrowing: Bool = false,
+        memberInjections: [MemberInjection] = []
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -237,6 +262,69 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.scopeKey = scopeKey
         self.initIsAsync = initIsAsync
         self.initIsThrowing = initIsThrowing
+        self.memberInjections = memberInjections
+    }
+}
+
+/// One post-construction injection point on a `@Singleton` / `@Scoped`
+/// type. Delivers deps that don't (or can't) flow through the type's
+/// constructor:
+///
+/// - `@Inject weak var x: T?` — Swift won't let `weak` be an init
+///   parameter, so the dep is delivered post-construct by direct
+///   property assignment. Shape: `.propertyAssignment`.
+/// - `@Inject func setX(_ x: T) [async] [throws]` — user chose
+///   method-level injection deliberately, typically to wire deps
+///   into custom storage (Mutex-wrapped weak ref, actor message,
+///   etc.). Shape: `.methodCall`. The function's effect specifiers
+///   carry through to the call site.
+///
+/// The graph treats member injection parameters as edges-for-
+/// missing-binding but NOT for cycle detection — the construction-
+/// time edge doesn't exist, the consumer's init completes without
+/// these deps, and the bootstrap wires them after. See
+/// `Documentation/Notes/WeakInjectionSupport.md` for the design
+/// depth and `WireGenCore/Graph.swift` for the cycle-detection
+/// branch.
+package struct MemberInjection: Sendable {
+    package let shape: Shape
+    package let parameters: [DependencyParameter]
+    /// `true` for `@Inject func ... async` methods. Drives `await`
+    /// prefixing at the post-init call site. Always `false` for
+    /// `.propertyAssignment` (a direct assignment is sync by
+    /// language design).
+    package let isAsync: Bool
+    /// `true` for `@Inject func ... throws` methods. Drives `try`
+    /// prefixing. Always `false` for `.propertyAssignment`.
+    package let isThrowing: Bool
+    /// Position of the source-level declaration — the `weak var`
+    /// property identifier, or the `func` name.
+    package let location: SourceLocation
+
+    package init(
+        shape: Shape,
+        parameters: [DependencyParameter],
+        isAsync: Bool = false,
+        isThrowing: Bool = false,
+        location: SourceLocation
+    ) {
+        self.shape = shape
+        self.parameters = parameters
+        self.isAsync = isAsync
+        self.isThrowing = isThrowing
+        self.location = location
+    }
+
+    package enum Shape: Sendable, Equatable {
+        /// Sugar form from `@Inject weak var x: T?`. Codegen emits
+        /// `consumer.<propertyName> = <parameter[0]>` at the post-
+        /// init step. Single-parameter, sync, non-throwing.
+        case propertyAssignment(propertyName: String)
+        /// General form from `@Inject func setX(_ x: T)`. Codegen
+        /// emits `[try] [await] consumer.<methodName>(<args...>)`
+        /// at the post-init step. Multi-parameter, effects driven
+        /// by the method's signature.
+        case methodCall(methodName: String)
     }
 }
 
@@ -359,6 +447,17 @@ package struct DependencyParameter: Sendable {
 package enum DependencyKind: Sendable, Equatable {
     case injectProperty
     case injectInitParameter
+    /// A parameter of an `@Inject func` method (or of a synthesised
+    /// member-injection entry derived from `@Inject weak var` sugar).
+    /// Lives inside a `MemberInjection` on the host type's
+    /// `DiscoveredScopeBoundType` rather than directly in the binding's
+    /// init-time `dependencies` list. Downstream stages distinguish:
+    /// graph excludes these from cycle detection (post-init delivery),
+    /// codegen emits them in the post-construction block via the
+    /// member injection's call shape (property assignment or method
+    /// call). See `Documentation/Notes/WeakInjectionSupport.md` for
+    /// the design depth.
+    case injectMethodParameter
     case providerFunctionParameter
 }
 
@@ -620,6 +719,7 @@ private func dependencyLine(_ dep: DependencyParameter) -> String {
     switch dep.kind {
     case .injectProperty: kindLabel = "@Inject property"
     case .injectInitParameter: kindLabel = "@Inject init parameter"
+    case .injectMethodParameter: kindLabel = "@Inject method parameter"
     case .providerFunctionParameter: kindLabel = "@Provides function parameter"
     }
     // Wildcard-label parameters render as `_` to match the source-level
