@@ -114,8 +114,6 @@ final class SingletonMacroTests: XCTestCase {
                     weak var coordinator: Coordinator?
 
                     let name: String
-
-                    @Inject
                     init(name: String) {
                         self.name = name
                     }

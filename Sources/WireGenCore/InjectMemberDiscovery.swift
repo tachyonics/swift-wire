@@ -1,0 +1,243 @@
+import SwiftSyntax
+
+/// Output of a one-pass walk over a `@Singleton` / `@Scoped` type's
+/// member list — the type's init-time dependencies plus its post-
+/// construction member injections, with effect flags propagated
+/// from a user-written `@Inject init`.
+///
+/// Returned as a struct rather than a tuple so the codebase doesn't
+/// have to thread a four-element tuple through call sites (the
+/// SwiftLint `large_tuple` rule caps tuples at two members anyway).
+struct InjectExtractionResult {
+    /// Init-time dependencies — `@Inject` properties (delivered via
+    /// the macro-synthesised init's parameters) OR an `@Inject`-marked
+    /// init's parameter list, with the same priority rule
+    /// `SingletonMacro` uses: a user-written `@Inject init` wins
+    /// over `@Inject` properties.
+    var dependencies: [DependencyParameter] = []
+    /// `true` iff a user-written `@Inject init() async` declaration
+    /// was found. The macro-synthesised init is always sync.
+    var initIsAsync: Bool = false
+    /// `true` iff a user-written `@Inject init() throws` declaration
+    /// was found. The macro-synthesised init is always non-throwing.
+    var initIsThrowing: Bool = false
+    /// Post-construction injection points — `@Inject weak var` (sugar
+    /// form, `.propertyAssignment` shape) and `@Inject func` (general
+    /// form, `.methodCall` shape). Always collected regardless of
+    /// which init-time path the type uses.
+    var memberInjections: [MemberInjection] = []
+}
+
+/// Walk the type's member list once and collect every `@Inject`-
+/// related declaration into an `InjectExtractionResult`. Three forms
+/// are recognised:
+///
+/// - `@Inject init(...) [async] [throws]` — init parameters become
+///   `.injectInitParameter` deps, effects propagate to the result.
+///   Wins over `@Inject` property deps if both are declared.
+/// - `@Inject func setX(_ x: T) [async] [throws]` — function
+///   parameters become `.injectMethodParameter` deps inside a
+///   `.methodCall` member injection. Effects carry to the call site.
+/// - `@Inject [weak] var x: T[?]` — non-weak properties become
+///   `.injectProperty` init-time deps; weak properties become
+///   `.propertyAssignment` member injections with the Optional `?`
+///   stripped for graph identity.
+///
+/// Each form is dispatched to its own helper to keep this function
+/// short enough to satisfy the `function_body_length` lint rule and
+/// to localise the per-shape extraction logic.
+func extractInjectDependencies(
+    from members: MemberBlockItemListSyntax,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> InjectExtractionResult {
+    var result = InjectExtractionResult()
+    var propertyDependencies: [DependencyParameter] = []
+    for member in members {
+        if let initDecl = member.decl.as(InitializerDeclSyntax.self) {
+            applyInjectInit(
+                initDecl,
+                into: &result,
+                sourcePath: sourcePath,
+                converter: converter
+            )
+            continue
+        }
+        if let funcDecl = member.decl.as(FunctionDeclSyntax.self),
+            hasAttribute(funcDecl.attributes, named: "Inject")
+        {
+            result.memberInjections.append(
+                methodCallInjection(
+                    from: funcDecl,
+                    sourcePath: sourcePath,
+                    converter: converter
+                )
+            )
+            continue
+        }
+        guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
+        applyInjectVar(
+            varDecl,
+            into: &result,
+            propertyDependencies: &propertyDependencies,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+    }
+    // Priority rule: a user-written `@Inject init` (captured into
+    // `result.dependencies` by `applyInjectInit`) wins over property
+    // deps. If no `@Inject init` was found, the accumulated property
+    // deps become the binding's init-time list.
+    if result.dependencies.isEmpty {
+        result.dependencies = propertyDependencies
+    }
+    return result
+}
+
+/// Capture an `@Inject`-marked initialiser's parameter list and
+/// effect specifiers. No-op for unmarked inits. Writes through to
+/// `result.dependencies` (overwriting any property deps accumulated
+/// so far) since the marked init wins the priority rule.
+private func applyInjectInit(
+    _ initDecl: InitializerDeclSyntax,
+    into result: inout InjectExtractionResult,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) {
+    guard hasAttribute(initDecl.attributes, named: "Inject") else { return }
+    result.dependencies = initDecl.signature.parameterClause.parameters.map { parameter in
+        let parameterKey = attribute(in: parameter.attributes, named: "Inject")
+            .flatMap { keyIdentifier(from: $0) }
+        return DependencyParameter(
+            name: parameterName(parameter),
+            type: parameter.type.trimmedDescription,
+            kind: .injectInitParameter,
+            location: makeSourceLocation(
+                of: parameter.firstName,
+                sourcePath: sourcePath,
+                converter: converter
+            ),
+            keyIdentifier: parameterKey
+        )
+    }
+    let effects = functionEffectFlags(initDecl.signature.effectSpecifiers)
+    result.initIsAsync = effects.isAsync
+    result.initIsThrowing = effects.isThrowing
+}
+
+/// Build a `.methodCall` member injection from an `@Inject func`
+/// declaration. Each parameter resolves through the graph the same
+/// way as init params; codegen emits the call after the
+/// construction sequence with `[try] [await]` driven by the
+/// function's effect specifiers.
+private func methodCallInjection(
+    from funcDecl: FunctionDeclSyntax,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> MemberInjection {
+    let parameters = funcDecl.signature.parameterClause.parameters.map {
+        parameter -> DependencyParameter in
+        let parameterKey = attribute(in: parameter.attributes, named: "Inject")
+            .flatMap { keyIdentifier(from: $0) }
+        return DependencyParameter(
+            name: parameterName(parameter),
+            type: parameter.type.trimmedDescription,
+            kind: .injectMethodParameter,
+            location: makeSourceLocation(
+                of: parameter.firstName,
+                sourcePath: sourcePath,
+                converter: converter
+            ),
+            keyIdentifier: parameterKey
+        )
+    }
+    let effects = functionEffectFlags(funcDecl.signature.effectSpecifiers)
+    return MemberInjection(
+        shape: .methodCall(methodName: funcDecl.name.text),
+        parameters: parameters,
+        isAsync: effects.isAsync,
+        isThrowing: effects.isThrowing,
+        location: makeSourceLocation(
+            of: funcDecl.name,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+    )
+}
+
+/// Dispatch an `@Inject var` declaration into either init-time
+/// property deps (non-weak) or `.propertyAssignment` member
+/// injections (weak). Swift requires weak storage to be Optional;
+/// the Optional `?` is stripped for graph identity so the parameter
+/// resolves against the producer's `T` binding.
+private func applyInjectVar(
+    _ varDecl: VariableDeclSyntax,
+    into result: inout InjectExtractionResult,
+    propertyDependencies: inout [DependencyParameter],
+    sourcePath: String,
+    converter: SourceLocationConverter
+) {
+    guard let injectAttribute = attribute(in: varDecl.attributes, named: "Inject") else { return }
+    let propertyKey = keyIdentifier(from: injectAttribute)
+    let isWeak = varDecl.modifiers.contains { $0.name.text == "weak" }
+    for binding in varDecl.bindings {
+        guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
+        guard let typeAnnotation = binding.typeAnnotation else { continue }
+        let location = makeSourceLocation(
+            of: pattern.identifier,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+        if isWeak {
+            result.memberInjections.append(
+                propertyAssignmentInjection(
+                    propertyName: pattern.identifier.text,
+                    typeAnnotation: typeAnnotation.type,
+                    propertyKey: propertyKey,
+                    location: location
+                )
+            )
+        } else {
+            propertyDependencies.append(
+                DependencyParameter(
+                    name: pattern.identifier.text,
+                    type: typeAnnotation.type.trimmedDescription,
+                    kind: .injectProperty,
+                    location: location,
+                    keyIdentifier: propertyKey
+                )
+            )
+        }
+    }
+}
+
+/// Build a `.propertyAssignment` member injection from an `@Inject
+/// weak var x: T?` binding. Strips the Optional `?` (when present)
+/// so the parameter resolves against the producer's `T` binding,
+/// not against `T?`. The storage shape on the consumer's class
+/// stays `T?` — that's Swift's requirement for weak.
+private func propertyAssignmentInjection(
+    propertyName: String,
+    typeAnnotation: TypeSyntax,
+    propertyKey: String?,
+    location: SourceLocation
+) -> MemberInjection {
+    let resolutionType: String
+    if let optType = typeAnnotation.as(OptionalTypeSyntax.self) {
+        resolutionType = optType.wrappedType.trimmedDescription
+    } else {
+        resolutionType = typeAnnotation.trimmedDescription
+    }
+    let parameter = DependencyParameter(
+        name: nil,
+        type: resolutionType,
+        kind: .injectMethodParameter,
+        location: location,
+        keyIdentifier: propertyKey
+    )
+    return MemberInjection(
+        shape: .propertyAssignment(propertyName: propertyName),
+        parameters: [parameter],
+        location: location
+    )
+}

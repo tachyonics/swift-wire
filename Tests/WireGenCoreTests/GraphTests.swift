@@ -283,7 +283,7 @@ struct GraphTests {
         // a strong dep would produce — the cycle-break affordance
         // doesn't compromise the missing-binding guarantee.
         let result = buildDependencyGraph(from: [
-            singletonWithWeakDep("A", depName: "b", depType: "B"),
+            singletonWithWeakDep("A", depName: "b", depType: "B")
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.missingBindings.count == 1)
