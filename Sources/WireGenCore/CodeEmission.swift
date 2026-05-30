@@ -483,29 +483,6 @@ private func effectPrefix(isAsync: Bool, isThrowing: Bool) -> String {
     }
 }
 
-/// The call-site prefix for a member-injection method call,
-/// considering both the method's own effect specifiers AND the
-/// consumer's isolation. Calling any method on an actor from
-/// outside its isolation requires `await` regardless of whether
-/// the method is declared `async` — the await pays for the
-/// isolation crossing, not the method's asynchrony. So for actor
-/// consumers we force `await` (and add `try` separately if the
-/// method throws); for class / struct consumers the method's
-/// declared effects drive the prefix as usual.
-private func memberCallEffectPrefix(
-    isAsync: Bool,
-    isThrowing: Bool,
-    consumerIsActor: Bool
-) -> String {
-    let needsAwait = isAsync || consumerIsActor
-    switch (isThrowing, needsAwait) {
-    case (false, false): return ""
-    case (true, false): return "try "
-    case (false, true): return "await "
-    case (true, true): return "try await "
-    }
-}
-
 /// Render a constructor's argument list. Each dependency is resolved
 /// to the local-name for its `(type, key?)` identity; the argument
 /// label comes from the dependency's external label (or is omitted
@@ -578,19 +555,18 @@ private func renderMemberInjections(
                 lines.append("    \(consumerLocal).\(propertyName) = \(args)")
             case .methodCall(let methodName):
                 // General form: user-written method, may have any
-                // effect colour. The call's prefix is driven by the
-                // method's signature *plus* the consumer's typeKind:
-                // calls into an actor from outside its isolation
-                // always require `await`, regardless of whether the
-                // method itself is declared `async` (the await is
-                // paying for the isolation crossing, not for the
-                // method's own asynchrony). For class / struct
-                // consumers the prefix is purely the method's
-                // declared effects.
-                let prefix = memberCallEffectPrefix(
-                    isAsync: injection.isAsync,
-                    isThrowing: injection.isThrowing,
-                    consumerIsActor: binding.consumerIsActor
+                // effect colour. The prefix combines the method's
+                // own effects with the consumer's isolation: calling
+                // any method on an actor from outside its isolation
+                // requires `await` regardless of whether the method
+                // itself is declared `async` (the await pays for the
+                // isolation crossing, not for the method's
+                // asynchrony). `consumerIsActor` folds into `isAsync`
+                // at the call site so `effectPrefix` stays
+                // single-purpose.
+                let prefix = effectPrefix(
+                    isAsync: injection.isAsync || binding.consumerIsActor,
+                    isThrowing: injection.isThrowing
                 )
                 lines.append("    \(prefix)\(consumerLocal).\(methodName)(\(args))")
             }
