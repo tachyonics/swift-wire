@@ -314,7 +314,7 @@ struct WireGen {
     }
 
     /// Emit warnings to stderr in the `file:line:col: warning:` form.
-    /// They need to be surfaced to the user, even when they don't fail 
+    /// They need to be surfaced to the user, even when they don't fail
     /// the build. WireGen prints them before
     /// any validation-error block so a failing build's error message
     /// remains the last thing on stderr.
