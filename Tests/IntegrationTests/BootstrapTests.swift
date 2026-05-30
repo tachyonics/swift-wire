@@ -239,6 +239,22 @@ struct BootstrapTests {
         #expect(graph.view.coordinator === graph.coordinator)
     }
 
+    @Test func weakInjectionOnActorRoutesThroughGeneratedSetterExtension() async throws {
+        // `@Inject weak var workshop: Workshop?` on a `Toolbelt`
+        // actor compiles by virtue of the synthesised
+        // `_wireSetWorkshop(_:)` extension method WireGen emits;
+        // direct property assignment from outside actor isolation
+        // would have been rejected by Swift. Bootstrap completes,
+        // the mutual reference is established post-init via
+        // `await`, and the runtime relationship is observable
+        // through the actor's isolated property reads.
+        let graph = try await _WireGraph.bootstrap()
+        let toolbeltWorkshop = await graph.toolbelt.workshop
+        #expect(toolbeltWorkshop === graph.workshop)
+        let workshopToolbelt = await graph.workshop.toolbelt
+        #expect(workshopToolbelt === graph.toolbelt)
+    }
+
     // MARK: - `@Scoped(seed:)` end-to-end
 
     @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {

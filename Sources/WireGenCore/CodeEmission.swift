@@ -86,6 +86,16 @@ package func renderWireGraph(
         appendSeedScopeStruct(scope: scope, into: &lines)
     }
 
+    // Setter extensions for `@Inject weak var` on actor consumers.
+    // Aggregated across every graph + scope so each actor type's
+    // setters emit once at module scope, regardless of how many
+    // partitions reference it.
+    let allBindings =
+        topologicalOrder
+        + containerTopologicalOrders.values.flatMap { $0 }
+        + seedScopeOrders.flatMap { $0.topologicalOrder }
+    lines.append(contentsOf: renderActorWeakSetterExtensions(for: allBindings))
+
     // Trailing newline at end of file. `appendStruct` is leading-blank
     // only, so the final struct's closing `}` doesn't end the file
     // without it.
@@ -413,6 +423,70 @@ private func upperCamelCased(_ name: String) -> String {
     return first.uppercased() + name.dropFirst()
 }
 
+/// Conventional name of the setter extension method WireGen
+/// synthesises for `@Inject weak var <property>` on an actor host.
+/// Class hosts use direct property assignment and don't need this.
+/// `_wire` prefix reserves the name space against collisions with
+/// user-written members.
+private func actorWeakSetterName(forProperty propertyName: String) -> String {
+    "_wireSet\(upperCamelCased(propertyName))"
+}
+
+/// Emit `extension <Actor> { func _wireSet<Property>(_ value: T) {
+/// self.<property> = value } }` blocks for every weak `@Inject`
+/// property on an actor host type that appears in the topological
+/// order. Direct property assignment from outside an actor's
+/// isolation isn't legal Swift, so the setter extension is the
+/// language-supported mechanism — the method is implicitly actor-
+/// isolated, and codegen's post-init call site invokes it with
+/// `await`.
+///
+/// Deduplicates by `(consumer type, property name)` so a type
+/// bound in multiple graph partitions still emits the extension
+/// once at the module level. Extensions emit AFTER all struct/
+/// bootstrap blocks so the file's main shape (structs first,
+/// per-type extensions afterwards) reads top-down.
+private func renderActorWeakSetterExtensions(
+    for bindings: [DiscoveredBinding]
+) -> [String] {
+    var seen: Set<String> = []
+    var perType: [(typeReference: String, setters: [(name: String, propertyName: String, type: String)])] = []
+    var typeIndex: [String: Int] = [:]
+    for binding in bindings where binding.consumerIsActor {
+        guard case .scopeBound(let scopeBound) = binding else { continue }
+        for injection in scopeBound.memberInjections {
+            guard case .propertyAssignment(let propertyName) = injection.shape else { continue }
+            guard let parameter = injection.parameters.first else { continue }
+            let dedupeKey = "\(scopeBound.qualifiedTypeName)::\(propertyName)"
+            guard !seen.contains(dedupeKey) else { continue }
+            seen.insert(dedupeKey)
+            let setter = (
+                name: actorWeakSetterName(forProperty: propertyName),
+                propertyName: propertyName,
+                type: parameter.type
+            )
+            if let index = typeIndex[scopeBound.qualifiedTypeName] {
+                perType[index].setters.append(setter)
+            } else {
+                typeIndex[scopeBound.qualifiedTypeName] = perType.count
+                perType.append((scopeBound.qualifiedTypeName, [setter]))
+            }
+        }
+    }
+    var lines: [String] = []
+    for entry in perType {
+        lines.append("")
+        lines.append("extension \(entry.typeReference) {")
+        for setter in entry.setters {
+            lines.append("    func \(setter.name)(_ value: \(setter.type)) {")
+            lines.append("        self.\(setter.propertyName) = value")
+            lines.append("    }")
+        }
+        lines.append("}")
+    }
+    return lines
+}
+
 /// The RHS expression that constructs a single binding inside
 /// `bootstrap()`. Uses bare references — the consumer's source-file
 /// imports are propagated to the generated file so user-supplied
@@ -548,11 +622,22 @@ private func renderMemberInjections(
             let args = renderArguments(injection.parameters, resolvingLocal: resolvingLocal)
             switch injection.shape {
             case .propertyAssignment(let propertyName):
-                // Sugar form: single parameter, sync, non-throwing.
-                // Direct property assignment — Swift's weak-storage
-                // handling (or whatever the user's property does)
-                // takes care of the write.
-                lines.append("    \(consumerLocal).\(propertyName) = \(args)")
+                // Sugar form for `@Inject weak var`. For class
+                // consumers, direct property assignment is the
+                // natural Swift idiom — zero-overhead and lines up
+                // with what the user would have written manually.
+                // For actor consumers, direct assignment from
+                // outside isolation isn't legal Swift; codegen
+                // routes the write through a synthesised setter
+                // extension method (`_wireSet<Property>`) emitted
+                // elsewhere in the generated file, and the call
+                // crosses isolation via `await`.
+                if binding.consumerIsActor {
+                    let setterName = actorWeakSetterName(forProperty: propertyName)
+                    lines.append("    await \(consumerLocal).\(setterName)(\(args))")
+                } else {
+                    lines.append("    \(consumerLocal).\(propertyName) = \(args)")
+                }
             case .methodCall(let methodName):
                 // General form: user-written method, may have any
                 // effect colour. The prefix combines the method's
