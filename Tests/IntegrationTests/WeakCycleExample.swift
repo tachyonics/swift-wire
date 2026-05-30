@@ -15,15 +15,16 @@ import Wire
 /// Both runtime relationships are visible after bootstrap:
 ///   - `coordinator.view === view` (strong, established at init).
 ///   - `view.coordinator === coordinator` (weak, established post-init).
-/// `@unchecked Sendable` because `weak var coordinator` is mutable
-/// (Swift requires weak storage to be `var`). Real adopters of this
-/// pattern would typically use `@MainActor` isolation (UIKit/SwiftUI
-/// coordinator pattern) or accept the unchecked label after auditing
-/// concurrency. The test fixture stays single-threaded so the audit
-/// is trivial — the weak slot is set once during bootstrap and read
-/// from test code thereafter.
+///
+/// No `Sendable` conformance on either class — `weak var coordinator`
+/// is mutable storage that defeats auto-derivation, and the test
+/// fixture doesn't cross any actor / Task isolation boundary so
+/// `Sendable` isn't required. The generated `_WireGraph` becomes
+/// non-Sendable too (auto-derivation propagates the constraint),
+/// which is also fine: this test holds the graph in a single test
+/// task and never sends it elsewhere.
 @Singleton
-package final class Coordinator: @unchecked Sendable {
+package final class Coordinator {
     package let view: View
 
     @Inject
@@ -33,7 +34,7 @@ package final class Coordinator: @unchecked Sendable {
 }
 
 @Singleton
-package final class View: @unchecked Sendable {
+package final class View {
     @Inject package weak var coordinator: Coordinator?
 
     package func describeCoordinator() -> String {
