@@ -209,18 +209,11 @@ package struct DuplicateBinding: Sendable {
 /// Severity controls whether the build fails:
 /// - `.warning` — informational. Build proceeds normally. Used for
 ///   patterns Wire can work around (`@Inject` on a non-scope type,
-///   `@Provides` in an unannotated extension, etc.).
+///   `@Provides` in an unannotated extension, etc.). The default.
 /// - `.error` — blocks emission. WireGen exits non-zero before
 ///   writing the generated file. Used for source patterns whose
 ///   generated code wouldn't compile or would silently produce
 ///   wrong results (`@Inject mutating func` on a struct, etc.).
-///
-/// The type is named `Diagnostic` for historical reasons — most of
-/// the existing uses are warnings — but the severity field lets us
-/// promote individual diagnostics to error-level without splitting
-/// into a separate type. Use `.warning` (the default) for
-/// informational diagnostics and `.error` only when the build
-/// genuinely can't proceed.
 ///
 /// `notes` carry related-source pointers (e.g. "also bound here"
 /// secondary locations), rendered as `file:line:col: note: ...`
