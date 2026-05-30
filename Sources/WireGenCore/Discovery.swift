@@ -148,6 +148,19 @@ extension DiscoveredBinding {
         }
     }
 
+    /// `true` iff the binding's host type is an `actor`. Member
+    /// injection codegen reads this to force an `await` prefix on
+    /// method-call injections — calling any method on an actor from
+    /// outside its isolation requires `await` regardless of whether
+    /// the method itself is `async`. Providers and non-actor
+    /// scope-bound types return `false`.
+    package var consumerIsActor: Bool {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.typeKind == "actor"
+        case .provider: return false
+        }
+    }
+
     /// Generic-parameter names declared on the binding. The graph uses
     /// these to skip bindings that can't be resolved without a concrete
     /// specialisation pass (not yet implemented).

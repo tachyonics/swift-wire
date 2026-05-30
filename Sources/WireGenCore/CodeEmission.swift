@@ -555,11 +555,17 @@ private func renderMemberInjections(
                 lines.append("    \(consumerLocal).\(propertyName) = \(args)")
             case .methodCall(let methodName):
                 // General form: user-written method, may have any
-                // effect colour. The call's prefix is driven by the
-                // method's signature, same logic as init/provider
-                // construction expressions.
+                // effect colour. The prefix combines the method's
+                // own effects with the consumer's isolation: calling
+                // any method on an actor from outside its isolation
+                // requires `await` regardless of whether the method
+                // itself is declared `async` (the await pays for the
+                // isolation crossing, not for the method's
+                // asynchrony). `consumerIsActor` folds into `isAsync`
+                // at the call site so `effectPrefix` stays
+                // single-purpose.
                 let prefix = effectPrefix(
-                    isAsync: injection.isAsync,
+                    isAsync: injection.isAsync || binding.consumerIsActor,
                     isThrowing: injection.isThrowing
                 )
                 lines.append("    \(prefix)\(consumerLocal).\(methodName)(\(args))")
