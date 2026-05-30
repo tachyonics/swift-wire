@@ -181,7 +181,17 @@ private func appendSeedScopeStruct(
     let resolveBorrow: (String) -> String? = { borrowAccessPaths[$0] }
 
     lines.append("")
-    lines.append("internal struct \(structName): Sendable {")
+    // No explicit `Sendable` conformance — Swift auto-derives it when
+    // every stored binding is itself `Sendable` (the dominant case:
+    // every server-side `@Singleton` / `@Provides` binding is
+    // typically Sendable). When a binding *isn't* Sendable (e.g. a
+    // class with `weak var` that's neither `@MainActor` nor
+    // `@unchecked Sendable`), the struct is non-Sendable too, and
+    // the compiler surfaces that at the *use site* (where the user
+    // tries to cross an isolation boundary) rather than at the
+    // generated struct declaration. Right place for the trade-off:
+    // the user chose the binding's isolation story, Wire respects it.
+    lines.append("internal struct \(structName) {")
     for binding in storedBindings {
         let property = propertyName(for: binding)
         lines.append("    let \(property): \(binding.boundTypeReference)")
@@ -261,7 +271,12 @@ private func appendStruct(
     into lines: inout [String]
 ) {
     lines.append("")
-    lines.append("internal struct \(structName): Sendable {")
+    // No explicit `Sendable` — see the matching comment in
+    // `appendSeedScopeStruct` for the rationale. Auto-derivation
+    // handles the conformance when all bindings are Sendable; the
+    // user gets compile-time feedback at their use site if one
+    // isn't.
+    lines.append("internal struct \(structName) {")
 
     // Stored properties — one per binding, type-derived name, no
     // prefix. Users access these as `graph.logger`, `graph.userService`.
