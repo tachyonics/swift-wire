@@ -204,6 +204,16 @@ struct BootstrapTests {
         #expect(graph.noteBoard.current() == "wire said: hello from @Inject func")
     }
 
+    @Test func injectFuncOnActorConsumerRunsThroughActorIsolation() async throws {
+        // `TickCounter.bump(by:)` is an `@Inject func` on an
+        // `actor` host. Wire's codegen forces `await` at the call
+        // site (even though `bump(by:)` isn't itself `async`) — the
+        // await pays for the isolation crossing. After bootstrap,
+        // the actor's state reflects the injected increment.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(await graph.tickCounter.ticks == 7)
+    }
+
     // MARK: - `@Inject weak var` cycle-breaking
 
     @Test func weakInjectionBreaksSingletonCycle() async throws {
