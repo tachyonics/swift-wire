@@ -57,6 +57,102 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
+    // MARK: - `@Inject weak var` is excluded from synthesised init
+
+    func test_injectWeakVar_excludedFromSynthesisedInitParameters() {
+        // The `weak` modifier means the property is wired via the
+        // build plugin's post-init assignment block, not via the
+        // init's parameter list. The synthesised init takes no
+        // parameters; the weak property stays as Swift-native
+        // `weak var x: T?` storage that defaults to nil.
+        assertMacroExpansion(
+            """
+            @Singleton
+            final class View {
+                @Inject weak var coordinator: Coordinator?
+            }
+            """,
+            expandedSource: """
+                final class View {
+                    weak var coordinator: Coordinator?
+
+                    init() {
+                    }
+
+                    static let key = BindingKey<View>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    func test_injectWeakVar_coexistsWithStrongInjectInit() {
+        // The "init OR properties, never both" rule has one
+        // exception: weak `@Inject` properties may coexist with
+        // a user-written `@Inject init`. Swift won't let init
+        // parameters be `weak`, so the combination is the only
+        // way to express "custom init body + weak deps." The
+        // macro emits no init (the user's @Inject init is the
+        // source of truth) and the weak property stays as
+        // storage; codegen post-init-assigns it.
+        assertMacroExpansion(
+            """
+            @Singleton
+            final class View {
+                @Inject weak var coordinator: Coordinator?
+
+                let name: String
+
+                @Inject
+                init(name: String) {
+                    self.name = name
+                }
+            }
+            """,
+            expandedSource: """
+                final class View {
+                    weak var coordinator: Coordinator?
+
+                    let name: String
+                    init(name: String) {
+                        self.name = name
+                    }
+
+                    static let key = BindingKey<View>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    func test_injectWeakVarAlongsideStrongInjectVar_synthesisesInitForStrongOnly() {
+        // Mixed weak + non-weak `@Inject` properties: synthesised
+        // init parameters cover the non-weak ones only. Weak slots
+        // are post-init assigned by codegen.
+        assertMacroExpansion(
+            """
+            @Singleton
+            final class View {
+                @Inject var name: String
+                @Inject weak var coordinator: Coordinator?
+            }
+            """,
+            expandedSource: """
+                final class View {
+                    var name: String
+                    weak var coordinator: Coordinator?
+
+                    init(name: String) {
+                        self.name = name
+                    }
+
+                    static let key = BindingKey<View>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
     // MARK: - Multiple @Inject properties retain declaration order
 
     func test_singletonWithMultipleInjects_preservesDeclarationOrder() {

@@ -191,6 +191,44 @@ struct BootstrapTests {
         #expect(await graph.lazyResourceCallCount.value == 1)
     }
 
+    // MARK: - `@Inject func` member injection
+
+    @Test func injectFuncRunsAfterConstructionAndWiresState() async throws {
+        // `NoteBoard.receive(message:)` is an `@Inject func` — Wire
+        // resolves `NoteMessage` from the graph, calls the method
+        // after `NoteBoard` is constructed, and the method's body
+        // mutates the consumer's own state. Asserting the post-
+        // bootstrap state proves the method ran with the right
+        // resolved argument.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.noteBoard.current() == "wire said: hello from @Inject func")
+    }
+
+    // MARK: - `@Inject weak var` cycle-breaking
+
+    @Test func weakInjectionBreaksSingletonCycle() async throws {
+        // Coordinator ↔ View mutually reference each other. View
+        // holds Coordinator weakly via `@Inject weak var coordinator`,
+        // which excludes the edge from cycle detection. Bootstrap
+        // succeeds: View constructs without Coordinator, Coordinator
+        // takes View at init, then the generated bootstrap's post-
+        // init block runs `view.coordinator = coordinator`. Without
+        // this feature, the build would fail with a cycle error.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.coordinator.view === graph.view)
+        #expect(graph.view.describeCoordinator() == "coordinator owns this view: true")
+    }
+
+    @Test func weakInjectionEstablishesPostInitReferenceWithoutRetainCycle() async throws {
+        // Sanity check on the runtime semantics: the weak property
+        // is *the* coordinator (not a copy), and the relationship
+        // is observable through the consumer's own API. Pins the
+        // contract that codegen's post-init assignment produces a
+        // live weak reference, not just structural compilation.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.view.coordinator === graph.coordinator)
+    }
+
     // MARK: - `@Scoped(seed:)` end-to-end
 
     @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {

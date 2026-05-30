@@ -826,6 +826,8 @@ private func resolveDependencies(
     for identity in resolvedBindings.keys.sorted() {
         guard let binding = resolvedBindings[identity] else { continue }
         var resolved: [BindingIdentity] = []
+        // Init-time deps: form graph edges (drive topo sort and
+        // cycle detection). Missing ones produce errors.
         for dependency in binding.dependencies {
             let depIdentity = dependency.identity
             if resolvedBindings[depIdentity] != nil {
@@ -842,6 +844,32 @@ private func resolveDependencies(
                         )
                     )
                 )
+            }
+        }
+        // Member injection parameters (`@Inject weak var` sugar +
+        // `@Inject func`): post-init delivery, so excluded from
+        // graph edges. Cycle through these is legal (the canonical
+        // use case for cycle-breaking). Missing-binding detection
+        // still applies — an unbound member-injection target is
+        // the same diagnostic a missing init-time dep would
+        // produce. See Documentation/Notes/WeakInjectionSupport.md
+        // for the design depth.
+        for injection in binding.memberInjections {
+            for parameter in injection.parameters {
+                let depIdentity = parameter.identity
+                if resolvedBindings[depIdentity] == nil {
+                    missing.append(
+                        MissingBinding(
+                            consumer: binding,
+                            dependency: parameter,
+                            typealiasHint: typealiasHintFor(
+                                dependency: parameter,
+                                typealiasByName: typealiasByName,
+                                resolvedBindings: resolvedBindings
+                            )
+                        )
+                    )
+                }
             }
         }
         edges[identity] = resolved

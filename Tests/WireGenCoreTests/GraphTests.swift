@@ -30,6 +30,41 @@ struct GraphTests {
         )
     }
 
+    /// Build a singleton with one member injection (the `@Inject weak
+    /// var` sugar form, `.propertyAssignment` shape). Separate helper
+    /// because the post-init delivery is what the cycle-break and
+    /// missing-binding tests assert on; constructing the injection
+    /// inline would obscure the load-bearing structure.
+    private func singletonWithWeakDep(
+        _ name: String,
+        depName: String,
+        depType: String
+    ) -> DiscoveredBinding {
+        .scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: name,
+                typeKind: "class",
+                genericParameterNames: [],
+                dependencies: [],
+                location: mockLocation("\(name).swift"),
+                memberInjections: [
+                    MemberInjection(
+                        shape: .propertyAssignment(propertyName: depName),
+                        parameters: [
+                            DependencyParameter(
+                                name: nil,
+                                type: depType,
+                                kind: .injectMethodParameter,
+                                location: mockLocation("\(name).swift")
+                            )
+                        ],
+                        location: mockLocation("\(name).swift")
+                    )
+                ]
+            )
+        )
+    }
+
     /// Build a singleton with one keyed dependency. Keyed-test helper —
     /// separate from `singleton(_:dependencies:)` to avoid an overload-
     /// ambiguity trap (Swift can't disambiguate `dependencies: []`
@@ -213,6 +248,46 @@ struct GraphTests {
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.cycles.count == 1)
+    }
+
+    @Test func cycleThroughWeakInjectIsLegal() throws {
+        // A → B (strong), B → A (weak). The weak edge is excluded
+        // from cycle detection; only the A → B edge remains, and
+        // there's no cycle in that subgraph. Topo sort produces a
+        // valid order [B, A]. Codegen reinstates the weak edge as
+        // a post-init assignment.
+        let result = buildDependencyGraph(from: [
+            singleton("A", dependencies: [(name: "b", type: "B")]),
+            singletonWithWeakDep("B", depName: "a", depType: "A"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map { $0.boundType } == ["B", "A"])
+    }
+
+    @Test func cycleEntirelyThroughWeakEdgesIsLegal() throws {
+        // Both directions weak: no strong edges between A and B.
+        // Both are leaves from the strong-edge perspective; the
+        // mutual weak refs wire up post-init. Topo order is just
+        // a permutation of the two singletons.
+        let result = buildDependencyGraph(from: [
+            singletonWithWeakDep("A", depName: "b", depType: "B"),
+            singletonWithWeakDep("B", depName: "a", depType: "A"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(Set(order.map { $0.boundType }) == ["A", "B"])
+    }
+
+    @Test func missingBindingDetectionFiresForWeakDeps() throws {
+        // Weak edges skip cycle detection but still resolve. A weak
+        // dep on an unbound type is the same missing-binding error
+        // a strong dep would produce — the cycle-break affordance
+        // doesn't compromise the missing-binding guarantee.
+        let result = buildDependencyGraph(from: [
+            singletonWithWeakDep("A", depName: "b", depType: "B")
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        #expect(errors.missingBindings[0].dependency.type == "B")
     }
 
     // MARK: - Missing bindings

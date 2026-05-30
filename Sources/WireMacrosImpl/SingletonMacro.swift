@@ -191,6 +191,19 @@ public struct SingletonMacro: MemberMacro {
             }
 
             if hasInject {
+                // `weak` `@Inject` properties don't become init parameters
+                // — Swift won't let init parameters be `weak`, and the
+                // build plugin's post-construction assignment block does
+                // the wiring. The property storage stays as Swift-native
+                // `weak var x: T?`, defaulting to nil at init time.
+                // See Documentation/Notes/WeakInjectionSupport.md
+                // "Coexistence with @Inject init" for the rule:
+                // non-weak @Inject properties remain mutually exclusive
+                // with @Inject init; weak properties are the carve-out
+                // (because Swift's own rules force them to live as
+                // properties, not parameters).
+                let isWeak = varDecl.modifiers.contains { $0.name.text == "weak" }
+                if isWeak { continue }
                 // Each binding under an `@Inject var` becomes one
                 // injection point — `@Inject var a, b: Dep` is two points.
                 for binding in varDecl.bindings {
