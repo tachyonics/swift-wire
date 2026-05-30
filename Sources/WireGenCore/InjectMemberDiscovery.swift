@@ -26,6 +26,12 @@ struct InjectExtractionResult {
     /// form, `.methodCall` shape). Always collected regardless of
     /// which init-time path the type uses.
     var memberInjections: [MemberInjection] = []
+    /// Source-pattern diagnostics raised while walking the type's
+    /// members. Caller appends these to the file-level diagnostics
+    /// list. Error-severity entries (e.g. `@Inject mutating func`
+    /// on a struct) block the build at WireGen time before any
+    /// codegen runs.
+    var diagnostics: [Diagnostic] = []
 }
 
 /// Walk the type's member list once and collect every `@Inject`-
@@ -48,6 +54,7 @@ struct InjectExtractionResult {
 /// to localise the per-shape extraction logic.
 func extractInjectDependencies(
     from members: MemberBlockItemListSyntax,
+    hostTypeKind: String,
     sourcePath: String,
     converter: SourceLocationConverter
 ) -> InjectExtractionResult {
@@ -66,12 +73,12 @@ func extractInjectDependencies(
         if let funcDecl = member.decl.as(FunctionDeclSyntax.self),
             hasAttribute(funcDecl.attributes, named: "Inject")
         {
-            result.memberInjections.append(
-                methodCallInjection(
-                    from: funcDecl,
-                    sourcePath: sourcePath,
-                    converter: converter
-                )
+            applyInjectFunc(
+                funcDecl,
+                into: &result,
+                hostTypeKind: hostTypeKind,
+                sourcePath: sourcePath,
+                converter: converter
             )
             continue
         }
@@ -123,6 +130,51 @@ private func applyInjectInit(
     let effects = functionEffectFlags(initDecl.signature.effectSpecifiers)
     result.initIsAsync = effects.isAsync
     result.initIsThrowing = effects.isThrowing
+}
+
+/// Append a `.methodCall` member injection (and any diagnostic
+/// the declaration triggers) to the result. The diagnostic path
+/// handles `@Inject mutating func` on a struct host — that
+/// combination is structurally broken under Wire's codegen
+/// (struct value-copy semantics mean consumers that received the
+/// struct via init see the pre-mutation state, while only the
+/// `_WireGraph`-stored value reflects the post-init mutation), so
+/// we raise an error-severity diagnostic that fails the build at
+/// WireGen time before any bad code is emitted.
+private func applyInjectFunc(
+    _ funcDecl: FunctionDeclSyntax,
+    into result: inout InjectExtractionResult,
+    hostTypeKind: String,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) {
+    let isMutating = funcDecl.modifiers.contains { $0.name.text == "mutating" }
+    if isMutating && hostTypeKind == "struct" {
+        result.diagnostics.append(
+            Diagnostic(
+                location: makeSourceLocation(
+                    of: funcDecl.name,
+                    sourcePath: sourcePath,
+                    converter: converter
+                ),
+                message:
+                    "'@Inject mutating func' on a struct produces divergent state — consumers that received this binding via init see the pre-mutation value, only the graph-stored value reflects the mutation. Fix: (1) convert to a class so consumers share a reference, (2) drop 'mutating' and manage shared state through an internal reference (e.g. a Mutex<T> stored property), or (3) deliver this dep through @Inject init instead.",
+                severity: .error
+            )
+        )
+        // Skip emitting the injection at all — it would produce
+        // generated code that won't compile anyway, and adding it
+        // would clutter downstream analysis with a member
+        // injection the user has been told is invalid.
+        return
+    }
+    result.memberInjections.append(
+        methodCallInjection(
+            from: funcDecl,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+    )
 }
 
 /// Build a `.methodCall` member injection from an `@Inject func`

@@ -201,25 +201,52 @@ package struct DuplicateBinding: Sendable {
     }
 }
 
-/// One source-pattern warning surfaced by discovery or graph
-/// validation. Warnings are informational — they don't block codegen
-/// and don't cause WireGen to exit non-zero — but they render to
-/// stderr in the standard `file:line:col: warning: ...` format so
-/// build tools surface them inline.
+/// One source-pattern diagnostic surfaced by discovery or graph
+/// validation. Renders to stderr in the standard
+/// `file:line:col: <severity>: ...` format so build tools surface
+/// it inline.
+///
+/// Severity controls whether the build fails:
+/// - `.warning` — informational. Build proceeds normally. Used for
+///   patterns Wire can work around (`@Inject` on a non-scope type,
+///   `@Provides` in an unannotated extension, etc.).
+/// - `.error` — blocks emission. WireGen exits non-zero before
+///   writing the generated file. Used for source patterns whose
+///   generated code wouldn't compile or would silently produce
+///   wrong results (`@Inject mutating func` on a struct, etc.).
+///
+/// The type is named `Diagnostic` for historical reasons — most of
+/// the existing uses are warnings — but the severity field lets us
+/// promote individual diagnostics to error-level without splitting
+/// into a separate type. Use `.warning` (the default) for
+/// informational diagnostics and `.error` only when the build
+/// genuinely can't proceed.
 ///
 /// `notes` carry related-source pointers (e.g. "also bound here"
 /// secondary locations), rendered as `file:line:col: note: ...`
-/// lines immediately following the warning. Both follow Swift
+/// lines immediately following the diagnostic. Both follow Swift
 /// compiler convention.
-package struct Warning: Sendable {
+package struct Diagnostic: Sendable {
     package let location: SourceLocation
     package let message: String
     package let notes: [Note]
+    package let severity: Severity
 
-    package init(location: SourceLocation, message: String, notes: [Note] = []) {
+    package init(
+        location: SourceLocation,
+        message: String,
+        notes: [Note] = [],
+        severity: Severity = .warning
+    ) {
         self.location = location
         self.message = message
         self.notes = notes
+        self.severity = severity
+    }
+
+    package enum Severity: Sendable, Equatable {
+        case warning
+        case error
     }
 
     package struct Note: Sendable {

@@ -497,7 +497,7 @@ package struct SourceFileDiscovery: Sendable {
     /// ignored by the macro) or `@Container` combined with a scope
     /// annotation. Informational; WireGen renders them but does not
     /// fail the build on warnings alone.
-    package let warnings: [Warning]
+    package let warnings: [Diagnostic]
     /// `@Provides` sites found inside *unannotated* extensions
     /// (`extension Foo { @Provides ... }` where the extension itself
     /// is not `@Container`-annotated). Needs aggregation across all
@@ -525,7 +525,7 @@ package struct SourceFileDiscovery: Sendable {
     package init(
         allBindings: [Partition: [DiscoveredBinding]] = [:],
         imports: [String],
-        warnings: [Warning] = [],
+        warnings: [Diagnostic] = [],
         unannotatedExtensionProvides: [UnannotatedExtensionProvides] = [],
         typealiases: [DiscoveredTypealias] = [],
         declaredTypeNames: [String] = [],
@@ -607,7 +607,7 @@ package struct NonInjectExtensionInit: Sendable {
 
 /// One `@Provides` site found inside an unannotated extension.
 /// Carried through discovery as a candidate; the build plugin
-/// resolves it into a `Warning` after the module-wide
+/// resolves it into a `Diagnostic` after the module-wide
 /// `@Container`-name set is available.
 package struct UnannotatedExtensionProvides: Sendable {
     /// The extension's extended type name — what the warning checks

@@ -451,6 +451,83 @@ struct DiscoveryTests {
         )
     }
 
+    @Test func mutatingInjectFuncOnStructEmitsErrorDiagnostic() {
+        // `@Inject mutating func` on a struct is structurally broken
+        // under Wire's codegen — value-copy semantics mean consumers
+        // that received the struct via init see the pre-mutation
+        // state, while only the graph-stored value reflects the
+        // mutation. Discovery raises an error-severity diagnostic
+        // so WireGen fails the build before any bad code is
+        // emitted. The injection itself is dropped from the
+        // result to avoid cluttering downstream analysis.
+        let source = """
+            @Singleton
+            struct Config {
+                private(set) var data: SomeData?
+
+                @Inject
+                mutating func receive(data: SomeData) {
+                    self.data = data
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors[0].message.contains("'@Inject mutating func' on a struct"))
+        #expect(errors[0].message.contains("divergent state"))
+        // The injection isn't recorded — it would produce code that
+        // won't compile and the user has been told the pattern is
+        // invalid.
+        guard case .scopeBound(let scopeBound) = result.bindings.first else {
+            Issue.record("expected a scope-bound binding")
+            return
+        }
+        #expect(scopeBound.memberInjections.isEmpty)
+    }
+
+    @Test func mutatingInjectFuncOnClassDoesNotEmitDiagnostic() {
+        // The mutating-on-struct check is structural, not just
+        // about `mutating` — classes don't have the value-copy
+        // problem (mutation goes through a reference, all
+        // consumers see the same instance), so `mutating` on a
+        // class method isn't even valid Swift in the first place.
+        // The diagnostic doesn't fire for class hosts.
+        let source = """
+            @Singleton
+            final class Config {
+                @Inject
+                func receive(data: SomeData) {
+                    // body
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.isEmpty)
+    }
+
+    @Test func nonMutatingInjectFuncOnStructIsAllowed() {
+        // A non-mutating `@Inject func` on a struct is the
+        // legitimate pattern for "this struct manages its own
+        // shared state through an internal reference"
+        // (Mutex-wrapped storage, etc.). No diagnostic fires.
+        let source = """
+            @Singleton
+            struct Cache {
+                private let storage: Mutex<[String: Data]>
+
+                @Inject
+                func warmUp(seed: SeedData) {
+                    storage.withLock { $0 = seed.entries }
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Cache.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.isEmpty)
+    }
+
     // MARK: - Parameter name edge cases
 
     @Test func injectInitWithWildcardParameterLabel() {
@@ -1581,7 +1658,7 @@ struct DiscoveryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "LoggerExt.swift")
-        let warnings = crossModuleExtensionWarnings(
+        let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
             declaredTypeNames: Set(discovery.declaredTypeNames)
@@ -1603,7 +1680,7 @@ struct DiscoveryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "Local.swift")
-        let warnings = crossModuleExtensionWarnings(
+        let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
             declaredTypeNames: Set(discovery.declaredTypeNames)
@@ -1624,7 +1701,7 @@ struct DiscoveryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "AppConfig.swift")
-        let warnings = crossModuleExtensionWarnings(
+        let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: ["AppConfig"],
             declaredTypeNames: Set(discovery.declaredTypeNames)
@@ -1643,7 +1720,7 @@ struct DiscoveryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "Complex.swift")
-        let warnings = crossModuleExtensionWarnings(
+        let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
             declaredTypeNames: Set(discovery.declaredTypeNames)
@@ -1684,7 +1761,7 @@ struct DiscoveryTests {
             extendedType: "Foo",
             location: SourceLocation(file: "FooExt.swift", line: 2, column: 5)
         )
-        let warnings = extensionInitConflictWarnings(
+        let warnings = extensionInitConflictDiagnostics(
             candidates: [candidate],
             singletonTypeNames: ["Foo"]
         )
@@ -1701,7 +1778,7 @@ struct DiscoveryTests {
             extendedType: "Foo",
             location: SourceLocation(file: "FooExt.swift", line: 2, column: 5)
         )
-        let warnings = extensionInitConflictWarnings(
+        let warnings = extensionInitConflictDiagnostics(
             candidates: [candidate],
             singletonTypeNames: []
         )
@@ -1723,7 +1800,7 @@ struct DiscoveryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "ArrayExt.swift")
-        let warnings = crossModuleExtensionWarnings(
+        let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
             declaredTypeNames: Set(discovery.declaredTypeNames)

@@ -45,11 +45,13 @@ struct WireGen {
             containers: containerGraphs,
             seedScopes: seedScopeOrchestrations
         )
-        let crossFileWarnings = collectCrossFileWarnings(
+        let crossFileDiagnostics = collectCrossFileDiagnostics(
             in: aggregate,
             containerNames: Set(containerGraphs.map { $0.name })
         )
-        printWarnings(aggregate.warnings + crossFileWarnings)
+        let allDiagnostics = aggregate.warnings + crossFileDiagnostics
+        printDiagnostics(allDiagnostics)
+        failIfAnyDiagnosticIsError(allDiagnostics)
         failIfAnyGraphInvalid(
             default: defaultGraph,
             containers: containerGraphs,
@@ -98,7 +100,7 @@ struct WireGen {
         var perFile: [(path: String, items: [DiscoveredBinding])] = []
         var allBindings: [Partition: [DiscoveredBinding]] = [:]
         var imports: [String] = []
-        var warnings: [Warning] = []
+        var warnings: [Diagnostic] = []
         var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
         var typealiases: [DiscoveredTypealias] = []
         var declaredTypeNames: Set<String> = []
@@ -276,20 +278,20 @@ struct WireGen {
     /// unannotated `@Provides`-in-extension, cross-module-extension,
     /// and extension-init conflicts on `@Singleton`/`@Scoped` types.
     /// Per-file warnings come straight from `aggregate.warnings`.
-    private static func collectCrossFileWarnings(
+    private static func collectCrossFileDiagnostics(
         in aggregate: DiscoveryAggregate,
         containerNames: Set<String>
-    ) -> [Warning] {
-        unannotatedExtensionContainerWarnings(
+    ) -> [Diagnostic] {
+        unannotatedExtensionContainerDiagnostics(
             candidates: aggregate.unannotatedExtensionProvides,
             containerNames: containerNames
         )
-            + crossModuleExtensionWarnings(
+            + crossModuleExtensionDiagnostics(
                 candidates: aggregate.unannotatedExtensionProvides,
                 containerNames: containerNames,
                 declaredTypeNames: aggregate.declaredTypeNames
             )
-            + extensionInitConflictWarnings(
+            + extensionInitConflictDiagnostics(
                 candidates: aggregate.nonInjectExtensionInits,
                 singletonTypeNames: singletonTypeNames(in: aggregate)
             )
@@ -312,13 +314,13 @@ struct WireGen {
     }
 
     /// Emit warnings to stderr in the `file:line:col: warning:` form.
-    /// Warnings are informational — they don't fail the build — but
+    /// Diagnostics are informational — they don't fail the build — but
     /// they need to surface to the user. WireGen prints them before
     /// any validation-error block so a failing build's error message
     /// remains the last thing on stderr.
-    private static func printWarnings(_ warnings: [Warning]) {
+    private static func printDiagnostics(_ warnings: [Diagnostic]) {
         guard !warnings.isEmpty else { return }
-        FileHandle.standardError.write(Data(renderWarnings(warnings).utf8))
+        FileHandle.standardError.write(Data(renderDiagnostics(warnings).utf8))
         FileHandle.standardError.write(Data("\n".utf8))
     }
 
@@ -348,6 +350,19 @@ struct WireGen {
         guard !report.isEmpty else { return }
         print("")
         print(report)
+    }
+
+    /// `exit(1)` if any of the source-pattern diagnostics carry
+    /// `.error` severity. Called after `printDiagnostics` has
+    /// already written them to stderr, so the user has the
+    /// friendly message before the build fails. Used for patterns
+    /// whose generated code wouldn't compile or would silently
+    /// produce wrong results (`@Inject mutating func` on a struct,
+    /// etc.) — failing here means the bad code never gets emitted
+    /// at all.
+    private static func failIfAnyDiagnosticIsError(_ diagnostics: [Diagnostic]) {
+        guard diagnostics.contains(where: { $0.severity == .error }) else { return }
+        exit(1)
     }
 
     /// Write validation failures (one block per failing graph) to
