@@ -40,7 +40,7 @@ final class BindingDiscovery: SyntaxVisitor {
     /// Source-pattern warnings the visitor accumulates as it walks the
     /// tree (e.g. `@Container` combined with a scope annotation, or
     /// `@Inject` on an extension init that the macro can't see).
-    var warnings: [Warning] = []
+    var warnings: [Diagnostic] = []
     /// `@Provides` sites discovered inside unannotated extensions —
     /// the build plugin resolves these into warnings after the
     /// module-wide `@Container`-name set is known. See `scopes` for
@@ -138,7 +138,7 @@ final class BindingDiscovery: SyntaxVisitor {
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
         declaredTypeNames.append(node.name.text)
         warnings.append(
-            contentsOf: containerWithScopeWarnings(
+            contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 sourcePath: sourcePath,
@@ -146,7 +146,7 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         warnings.append(
-            contentsOf: strayInjectMemberWarnings(
+            contentsOf: strayInjectMemberDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 members: node.memberBlock.members,
@@ -171,7 +171,7 @@ final class BindingDiscovery: SyntaxVisitor {
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
         declaredTypeNames.append(node.name.text)
         warnings.append(
-            contentsOf: containerWithScopeWarnings(
+            contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 sourcePath: sourcePath,
@@ -179,7 +179,7 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         warnings.append(
-            contentsOf: strayInjectMemberWarnings(
+            contentsOf: strayInjectMemberDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 members: node.memberBlock.members,
@@ -204,7 +204,7 @@ final class BindingDiscovery: SyntaxVisitor {
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
         declaredTypeNames.append(node.name.text)
         warnings.append(
-            contentsOf: containerWithScopeWarnings(
+            contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 sourcePath: sourcePath,
@@ -212,7 +212,7 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         warnings.append(
-            contentsOf: strayInjectMemberWarnings(
+            contentsOf: strayInjectMemberDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 members: node.memberBlock.members,
@@ -242,7 +242,7 @@ final class BindingDiscovery: SyntaxVisitor {
         // primary declaration are routed to that container.
         declaredTypeNames.append(node.name.text)
         warnings.append(
-            contentsOf: containerWithScopeWarnings(
+            contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 sourcePath: sourcePath,
@@ -250,7 +250,7 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         warnings.append(
-            contentsOf: strayInjectMemberWarnings(
+            contentsOf: strayInjectMemberDiagnostics(
                 nameToken: node.name,
                 attributes: node.attributes,
                 members: node.memberBlock.members,
@@ -282,7 +282,7 @@ final class BindingDiscovery: SyntaxVisitor {
             node.extendedType.as(IdentifierTypeSyntax.self)?.name.text
             ?? node.extendedType.trimmedDescription
         warnings.append(
-            contentsOf: injectInitInExtensionWarnings(
+            contentsOf: injectInitInExtensionDiagnostics(
                 extension: node,
                 extendedName: extendedName,
                 sourcePath: sourcePath,
@@ -327,7 +327,7 @@ final class BindingDiscovery: SyntaxVisitor {
         }
         if scopes.isEmpty {
             warnings.append(
-                contentsOf: strayInjectAtModuleScopeWarnings(
+                contentsOf: strayInjectAtModuleScopeDiagnostics(
                     for: node,
                     sourcePath: sourcePath,
                     converter: converter
@@ -543,9 +543,11 @@ extension BindingDiscovery {
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
         let injectResult = extractInjectDependencies(
             from: members,
+            hostTypeKind: typeKind,
             sourcePath: sourcePath,
             converter: converter
         )
+        warnings.append(contentsOf: injectResult.diagnostics)
         // `scopes` already includes this type's own frame (it was
         // pushed by `enterTypeDecl`), so the joined names are the
         // full qualified path.
@@ -700,17 +702,17 @@ func makeSourceLocation(
 /// *default* graph — the two roles can't both happen on one type, and
 /// neither does what the user probably wants. Warn with a fix-it
 /// pointing at the split.
-private func containerWithScopeWarnings(
+private func containerWithScopeDiagnostics(
     nameToken: TokenSyntax,
     attributes: AttributeListSyntax,
     sourcePath: String,
     converter: SourceLocationConverter
-) -> [Warning] {
+) -> [Diagnostic] {
     guard hasAttribute(attributes, named: "Container") else { return [] }
     guard let scope = scopeMacroNames.first(where: { hasAttribute(attributes, named: $0) })
     else { return [] }
     return [
-        Warning(
+        Diagnostic(
             location: makeSourceLocation(
                 of: nameToken,
                 sourcePath: sourcePath,
@@ -746,25 +748,25 @@ private func unannotatedExtensionProvidesCandidates(
 /// no-op — there's no macro on the enclosing type to read it. Emit a
 /// warning per `@Inject`-marked init or stored property so the user
 /// understands they need a scope macro to get wiring.
-private func strayInjectMemberWarnings(
+private func strayInjectMemberDiagnostics(
     nameToken: TokenSyntax,
     attributes: AttributeListSyntax,
     members: MemberBlockItemListSyntax,
     sourcePath: String,
     converter: SourceLocationConverter
-) -> [Warning] {
+) -> [Diagnostic] {
     // If the type itself carries a scope macro, `@Inject` on its
     // members IS meaningful — the scope macro reads them. Skip.
     if scopeMacroNames.contains(where: { hasAttribute(attributes, named: $0) }) {
         return []
     }
-    var warnings: [Warning] = []
+    var warnings: [Diagnostic] = []
     for member in members {
         if let initDecl = member.decl.as(InitializerDeclSyntax.self),
             let injectAttr = attribute(in: initDecl.attributes, named: "Inject")
         {
             warnings.append(
-                Warning(
+                Diagnostic(
                     location: makeSourceLocation(
                         of: injectAttr,
                         sourcePath: sourcePath,
@@ -782,7 +784,7 @@ private func strayInjectMemberWarnings(
         for binding in varDecl.bindings {
             guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
             warnings.append(
-                Warning(
+                Diagnostic(
                     location: makeSourceLocation(
                         of: injectAttr,
                         sourcePath: sourcePath,
@@ -800,17 +802,17 @@ private func strayInjectMemberWarnings(
 /// `@Inject let foo = ...` at module scope is a silent no-op — there's
 /// no enclosing type for any macro to read it from. Most often the
 /// user meant `@Provides`.
-private func strayInjectAtModuleScopeWarnings(
+private func strayInjectAtModuleScopeDiagnostics(
     for node: VariableDeclSyntax,
     sourcePath: String,
     converter: SourceLocationConverter
-) -> [Warning] {
+) -> [Diagnostic] {
     guard let injectAttr = attribute(in: node.attributes, named: "Inject") else { return [] }
     guard let binding = node.bindings.first,
         let pattern = binding.pattern.as(IdentifierPatternSyntax.self)
     else { return [] }
     return [
-        Warning(
+        Diagnostic(
             location: makeSourceLocation(
                 of: injectAttr,
                 sourcePath: sourcePath,
@@ -826,20 +828,20 @@ private func strayInjectAtModuleScopeWarnings(
 /// `@Singleton` macro — peer macros only see the primary declaration's
 /// members. Warn so the user knows to move the init back to the
 /// primary type.
-private func injectInitInExtensionWarnings(
+private func injectInitInExtensionDiagnostics(
     extension extensionNode: ExtensionDeclSyntax,
     extendedName: String,
     sourcePath: String,
     converter: SourceLocationConverter
-) -> [Warning] {
-    var warnings: [Warning] = []
+) -> [Diagnostic] {
+    var warnings: [Diagnostic] = []
     for member in extensionNode.memberBlock.members {
         guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else { continue }
         guard let injectAttr = attribute(in: initDecl.attributes, named: "Inject") else {
             continue
         }
         warnings.append(
-            Warning(
+            Diagnostic(
                 location: makeSourceLocation(
                     of: injectAttr,
                     sourcePath: sourcePath,

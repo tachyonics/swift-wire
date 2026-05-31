@@ -377,12 +377,39 @@ struct DiagnosticGalleryTests {
 
     // MARK: - Generated-identifier collision
 
-    // MARK: - Warnings
+    // MARK: - Diagnostics
 
-    @Test func containerWithScopeRendersAsWarning() throws {
+    @Test func mutatingInjectFuncOnStructRendersAsErrorWithFixIts() throws {
+        // First user-facing error-severity diagnostic from Wire's
+        // discovery pipeline. The rendered prefix is `error:`
+        // (not `warning:`), distinguishing it from the
+        // informational diagnostics. WireGen exits non-zero when
+        // any error-severity diagnostic is present, so the user
+        // never sees the broken generated code that would have
+        // resulted.
+        let source = """
+            @Singleton
+            struct Config {
+                @Inject
+                mutating func receive(data: SomeData) {
+                    // body
+                }
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Config.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("Config.swift:4:19: error:"))
+        #expect(rendered.contains("'@Inject mutating func' on a struct"))
+        #expect(rendered.contains("divergent state"))
+        #expect(rendered.contains("convert to a class"))
+        #expect(rendered.contains("drop 'mutating'"))
+        #expect(rendered.contains("@Inject init"))
+    }
+
+    @Test func containerWithScopeRendersAsDiagnostic() throws {
         // The warning prefix is `file:line:col: warning:` per Swift
         // compiler convention. Distinct from errors — render path
-        // is its own function (`renderWarnings`), and WireGen will
+        // is its own function (`renderDiagnostics`), and WireGen will
         // not exit non-zero on warnings alone. Beyond the prefix the
         // test pins both halves of the message: the "why" clause
         // (two roles, separate graphs) and the fix-it (split into
@@ -394,7 +421,7 @@ struct DiagnosticGalleryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "Mixed.swift")
-        let rendered = renderWarnings(discovery.warnings)
+        let rendered = renderDiagnostics(discovery.warnings)
         #expect(
             rendered.contains(
                 "Mixed.swift:3:8: warning: 'Mixed' carries both @Container and @Singleton"
@@ -408,7 +435,7 @@ struct DiagnosticGalleryTests {
         )
     }
 
-    @Test func strayInjectOnNonScopeTypeMemberRendersAsWarning() throws {
+    @Test func strayInjectOnNonScopeTypeMemberRendersAsDiagnostic() throws {
         // The full rendered line includes prefix + message. Pin both
         // halves so the warning text doesn't drift silently.
         let source = """
@@ -417,18 +444,18 @@ struct DiagnosticGalleryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "Plain.swift")
-        let rendered = renderWarnings(discovery.warnings)
+        let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Plain.swift:2:5: warning:"))
         #expect(rendered.contains("@Inject on 'logger' has no effect"))
         #expect(rendered.contains("Add a scope macro to the type"))
     }
 
-    @Test func strayInjectAtModuleScopeRendersAsWarning() throws {
+    @Test func strayInjectAtModuleScopeRendersAsDiagnostic() throws {
         let source = """
             @Inject let logger: Logger = Logger()
             """
         let discovery = discover(in: source, sourcePath: "Logger.swift")
-        let rendered = renderWarnings(discovery.warnings)
+        let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Logger.swift:1:1: warning:"))
         #expect(
             rendered.contains(
@@ -438,7 +465,7 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("use @Provides for module-scope bindings"))
     }
 
-    @Test func injectInitInExtensionRendersAsWarning() throws {
+    @Test func injectInitInExtensionRendersAsDiagnostic() throws {
         let source = """
             @Singleton
             struct Foo {
@@ -451,7 +478,7 @@ struct DiagnosticGalleryTests {
             }
             """
         let discovery = discover(in: source, sourcePath: "Foo.swift")
-        let rendered = renderWarnings(discovery.warnings)
+        let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("warning: @Inject on an extension init has no effect"))
         #expect(rendered.contains("'Foo'"))
     }

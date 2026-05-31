@@ -28,18 +28,25 @@ package func renderSkipped(_ skipped: [DiscoveredBinding]) -> String {
     return lines.joined(separator: "\n")
 }
 
-/// Render a list of warnings in the Swift-compiler
-/// `file:line:col: warning: ...` form, one per line, with optional
-/// `note:` lines for related-source pointers. Returns an empty
-/// string for an empty input so callers can guard with
-/// `.isEmpty` before printing.
-package func renderWarnings(_ warnings: [Warning]) -> String {
+/// Render a list of diagnostics in the Swift-compiler
+/// `file:line:col: <severity>: ...` form, one per line, with
+/// optional `note:` lines for related-source pointers. The
+/// severity prefix is `"warning"` or `"error"` based on the
+/// diagnostic's `severity` field. Returns an empty string for an
+/// empty input so callers can guard with `.isEmpty` before
+/// printing.
+package func renderDiagnostics(_ diagnostics: [Diagnostic]) -> String {
     var lines: [String] = []
-    for warning in warnings {
+    for diagnostic in diagnostics {
+        let severityLabel: String
+        switch diagnostic.severity {
+        case .warning: severityLabel = "warning"
+        case .error: severityLabel = "error"
+        }
         lines.append(
-            "\(warning.location.formattedPrefix): warning: \(warning.message)"
+            "\(diagnostic.location.formattedPrefix): \(severityLabel): \(diagnostic.message)"
         )
-        for note in warning.notes {
+        for note in diagnostic.notes {
             lines.append(
                 "\(note.location.formattedPrefix): note: \(note.message)"
             )
