@@ -38,14 +38,18 @@ import Synchronization
 /// `Lazy<T>` is `Sendable` when `T: Sendable` (which Wire requires
 /// of all bindings). First-call coordination uses a tri-state
 /// `Mutex<State>` inside the internal `LazyBox`
-/// (`.unmarked → .pending(Task) → .resolved(Value)`): the first
-/// caller in the lock creates a `Task<T, Error>` and transitions
+/// (`.unmarked(factory) → .pending(Task) → .resolved(Value)`):
+/// the first caller in the lock moves the factory out of the
+/// `.unmarked` case into a new `Task<T, Error>` and transitions
 /// state to `.pending`; subsequent and concurrent first-callers
 /// see the same Task and await its value. The Task writes
 /// `.resolved(Value)` on success, so post-resolution gets read
 /// the value directly without a Task hop and the Task's closure
-/// capture is released. Exactly one factory invocation regardless
-/// of how many concurrent callers race for the first `get()`.
+/// capture (which held the factory and anything it captured) is
+/// released. The box ends up holding only the cached `Value`,
+/// not the closure-captured graph state the factory needed to
+/// construct it. Exactly one factory invocation regardless of how
+/// many concurrent callers race for the first `get()`.
 ///
 /// Failure caching: if the factory throws, the state stays at
 /// `.pending(task)`; subsequent `get()` calls await the same
@@ -106,16 +110,27 @@ public struct Lazy<Value: Sendable>: Sendable {
 ///
 /// The state machine mirrors `AtomicState<T>`'s tri-state lifecycle
 /// (unmarked → pending → resolved), adapted for Lazy's "create-or-
-/// await" coordination needs:
+/// await" coordination needs. The factory closure is the
+/// `.unmarked` case's associated value, so the box's storage holds
+/// each input reference at most once across the state's lifetime:
 ///
-/// - `.unmarked`: no caller has triggered the factory yet.
-/// - `.pending(Task)`: a caller has created a Task to run the
-///   factory; concurrent callers see the same Task and await its
-///   value. The Task itself writes back to `.resolved` on success.
-/// - `.resolved(Value)`: factory completed; subsequent get() calls
-///   read the value directly without a Task hop. The original
-///   Task reference (and its closure capture, which may hold
-///   significant state) is released as awaiters resume.
+/// - `.unmarked(factory)`: holds the factory closure. No caller has
+///   triggered it yet.
+/// - `.pending(Task)`: factory has been moved into the Task's
+///   closure capture; the State no longer references the factory
+///   directly. Concurrent callers see the same Task and await its
+///   value. The Task writes back `.resolved` on success.
+/// - `.resolved(Value)`: factory completed; the Task (and the
+///   factory it captured) is released. Subsequent get() calls read
+///   the value directly without a Task hop. The box holds only the
+///   value.
+///
+/// Net effect: the LazyBox holds the factory's references on
+/// exactly one path at a time — first via the `.unmarked` case,
+/// then through the Task's capture in `.pending`, then released
+/// entirely in `.resolved`. The successful-resolution path leaves
+/// the box holding only the cached `Value`, not the closure-
+/// captured graph state the factory needed to construct it.
 ///
 /// Failure caching: a failed Task stays in `.pending(task)`
 /// indefinitely — subsequent get() calls await the same Task and
@@ -127,7 +142,7 @@ public struct Lazy<Value: Sendable>: Sendable {
 /// the uncommon path.
 private final class LazyBox<Value: Sendable>: @unchecked Sendable {
     enum State {
-        case unmarked
+        case unmarked(@Sendable () async throws -> Value)
         case pending(Task<Value, Error>)
         case resolved(Value)
     }
@@ -142,31 +157,33 @@ private final class LazyBox<Value: Sendable>: @unchecked Sendable {
         case awaitTask(Task<Value, Error>)
     }
 
-    private let factory: @Sendable () async throws -> Value
-    private let mutex: Mutex<State> = Mutex(.unmarked)
+    private let mutex: Mutex<State>
 
     init(factory: @escaping @Sendable () async throws -> Value) {
-        self.factory = factory
+        self.mutex = Mutex(.unmarked(factory))
     }
 
     func get() async throws -> Value {
         // Single lock acquisition handles all three cases:
         // - `.resolved`: return value directly (no Task hop).
         // - `.pending`: await the existing Task.
-        // - `.unmarked`: create a new Task, transition to pending.
+        // - `.unmarked`: move the factory into a new Task, transition
+        //   the state to `.pending` (which now owns the Task; the
+        //   factory's lifetime follows the Task's closure capture
+        //   from this point).
         let outcome: Outcome = mutex.withLock { state in
             switch state {
             case .resolved(let value):
                 return .resolved(value)
             case .pending(let existing):
                 return .awaitTask(existing)
-            case .unmarked:
-                // First caller — create the Task that runs the
-                // factory and writes back the result. Concurrent
-                // and subsequent callers will see this Task via
-                // `.pending` until it completes; after the Task
-                // writes `.resolved`, the fast path takes over.
-                let factory = self.factory
+            case .unmarked(let factory):
+                // First caller — move the factory from the State's
+                // associated value into a new Task. Concurrent and
+                // subsequent callers see this Task via `.pending`
+                // until it completes; after the Task writes
+                // `.resolved`, the fast path takes over and the
+                // Task (and its captured factory) is released.
                 let new = Task<Value, Error> {
                     let value = try await factory()
                     // Transition pending → resolved. The Task

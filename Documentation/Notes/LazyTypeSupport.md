@@ -113,7 +113,7 @@ public struct Lazy<T: Sendable>: Sendable {
 
 private final class LazyBox<Value: Sendable>: @unchecked Sendable {
     enum State {
-        case unmarked
+        case unmarked(@Sendable () async throws -> Value)
         case pending(Task<Value, Error>)
         case resolved(Value)
     }
@@ -123,11 +123,10 @@ private final class LazyBox<Value: Sendable>: @unchecked Sendable {
         case awaitTask(Task<Value, Error>)
     }
 
-    private let factory: @Sendable () async throws -> Value
-    private let mutex: Mutex<State> = Mutex(.unmarked)
+    private let mutex: Mutex<State>
 
     init(factory: @escaping @Sendable () async throws -> Value) {
-        self.factory = factory
+        self.mutex = Mutex(.unmarked(factory))
     }
 
     func get() async throws -> Value {
@@ -137,8 +136,7 @@ private final class LazyBox<Value: Sendable>: @unchecked Sendable {
                 return .resolved(value)
             case .pending(let existing):
                 return .awaitTask(existing)
-            case .unmarked:
-                let factory = self.factory
+            case .unmarked(let factory):
                 let new = Task<Value, Error> {
                     let value = try await factory()
                     self.mutex.withLock { storedState in
@@ -158,10 +156,15 @@ private final class LazyBox<Value: Sendable>: @unchecked Sendable {
 }
 ```
 
-Tri-state lifecycle (`.unmarked → .pending(Task) → .resolved(Value)`)
+Tri-state lifecycle (`.unmarked(factory) → .pending(Task) → .resolved(Value)`)
 mirrors `AtomicState<T>`'s vocabulary, adapted for Lazy's
-create-or-await coordination. First caller under the lock creates
-the Task and transitions to `.pending`; subsequent and concurrent
+create-or-await coordination. The factory closure is the
+`.unmarked` case's associated value rather than a separate
+property — the box holds each input reference at most once across
+the state's lifetime (factory on the unmarked path, captured by
+the Task on the pending path, released entirely on the resolved
+path). First caller under the lock moves the factory into a new
+Task and transitions to `.pending`; subsequent and concurrent
 first-callers see the same Task and await its value. The Task
 writes `.resolved(Value)` on success, after which gets read the
 value directly through the lock — no Task hop on the hot path, and
