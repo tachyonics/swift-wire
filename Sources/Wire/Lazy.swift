@@ -38,14 +38,14 @@ import Synchronization
 /// `Lazy<T>` is `Sendable` when `T: Sendable` (which Wire requires
 /// of all bindings). First-call coordination uses a tri-state
 /// `Mutex<State>` inside the internal `LazyBox`
-/// (`.unmarked → .pending(Task) → .resolved(Value)`): the first
-/// caller in the lock creates a `Task<T, Error>` and transitions
-/// state to `.pending`; subsequent and concurrent first-callers
-/// see the same Task and await its value. The Task writes
-/// `.resolved(Value)` on success, so post-resolution gets read
-/// the value directly without a Task hop and the Task's closure
-/// capture is released. Exactly one factory invocation regardless
-/// of how many concurrent callers race for the first `get()`.
+/// (`.unmarked(factory) → .pending(Task) → .resolved(Value)`):
+/// the first caller in the lock creates a `Task<T, Error>` that
+/// runs the factory and transitions state to `.pending`;
+/// subsequent and concurrent first-callers see the same Task and
+/// await its value. The Task writes `.resolved(Value)` on success,
+/// so post-resolution gets read the value directly without a Task
+/// hop. Exactly one factory invocation regardless of how many
+/// concurrent callers race for the first `get()`.
 ///
 /// Failure caching: if the factory throws, the state stays at
 /// `.pending(task)`; subsequent `get()` calls await the same
@@ -106,28 +106,26 @@ public struct Lazy<Value: Sendable>: Sendable {
 ///
 /// The state machine mirrors `AtomicState<T>`'s tri-state lifecycle
 /// (unmarked → pending → resolved), adapted for Lazy's "create-or-
-/// await" coordination needs:
+/// await" coordination needs. Each case owns the data its state
+/// requires:
 ///
-/// - `.unmarked`: no caller has triggered the factory yet.
-/// - `.pending(Task)`: a caller has created a Task to run the
-///   factory; concurrent callers see the same Task and await its
-///   value. The Task itself writes back to `.resolved` on success.
-/// - `.resolved(Value)`: factory completed; subsequent get() calls
-///   read the value directly without a Task hop. The original
-///   Task reference (and its closure capture, which may hold
-///   significant state) is released as awaiters resume.
+/// - `.unmarked(factory)`: the factory closure, ready to run. No
+///   caller has triggered it yet.
+/// - `.pending(Task)`: the Task that's running the factory.
+///   Concurrent callers see the same Task and await its value;
+///   the Task writes back `.resolved` on success.
+/// - `.resolved(Value)`: the cached value. Subsequent get() calls
+///   read it directly without a Task hop.
 ///
 /// Failure caching: a failed Task stays in `.pending(task)`
 /// indefinitely — subsequent get() calls await the same Task and
 /// observe the cached error. Adding a `.failed` state would need
 /// `Sendable`-compatible error storage and complicates the state
 /// machine for the rare path; the pending-with-failed-Task
-/// approach is correct and simpler. Memory cost: the closure
-/// capture is retained on failure; acceptable since failure is
-/// the uncommon path.
+/// approach is correct and simpler.
 private final class LazyBox<Value: Sendable>: @unchecked Sendable {
     enum State {
-        case unmarked
+        case unmarked(@Sendable () async throws -> Value)
         case pending(Task<Value, Error>)
         case resolved(Value)
     }
@@ -142,36 +140,27 @@ private final class LazyBox<Value: Sendable>: @unchecked Sendable {
         case awaitTask(Task<Value, Error>)
     }
 
-    private let factory: @Sendable () async throws -> Value
-    private let mutex: Mutex<State> = Mutex(.unmarked)
+    private let mutex: Mutex<State>
 
     init(factory: @escaping @Sendable () async throws -> Value) {
-        self.factory = factory
+        self.mutex = Mutex(.unmarked(factory))
     }
 
     func get() async throws -> Value {
         // Single lock acquisition handles all three cases:
         // - `.resolved`: return value directly (no Task hop).
         // - `.pending`: await the existing Task.
-        // - `.unmarked`: create a new Task, transition to pending.
+        // - `.unmarked`: spawn a new Task running the factory,
+        //   transition to `.pending`.
         let outcome: Outcome = mutex.withLock { state in
             switch state {
             case .resolved(let value):
                 return .resolved(value)
             case .pending(let existing):
                 return .awaitTask(existing)
-            case .unmarked:
-                // First caller — create the Task that runs the
-                // factory and writes back the result. Concurrent
-                // and subsequent callers will see this Task via
-                // `.pending` until it completes; after the Task
-                // writes `.resolved`, the fast path takes over.
-                let factory = self.factory
+            case .unmarked(let factory):
                 let new = Task<Value, Error> {
                     let value = try await factory()
-                    // Transition pending → resolved. The Task
-                    // reference + closure capture become eligible
-                    // for release once outstanding awaiters resume.
                     self.mutex.withLock { storedState in
                         storedState = .resolved(value)
                     }

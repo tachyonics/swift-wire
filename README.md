@@ -201,11 +201,70 @@ Hierarchical seeded scopes (`@Scoped(seed:, within:)`) are a deferred decision: 
 
 The macro reads the property type as written. `var repository: Repository` keeps `TaskController` generic over `Repository`. `var repository: any TaskRepository` makes it an existential. The library is neutral — pick the one whose performance characteristics you want.
 
+`@Inject` also recognises two post-construct forms that *don't* feed the synthesised init — `@Inject weak var` for weak storage and `@Inject func` for method-delivered dependencies. Those are covered in [Post-construction injection](#post-construction-injection) below; the constructor flow above is the default for everything else.
+
+### Post-construction injection
+
+Not every dependency fits the constructor flow. Two cases come up enough that Wire ships first-class support: **cycle-breaking** (two types mutually reference each other) and **delivery to custom storage** (a Mutex-wrapped weak ref, an actor-isolated mutator, an instrumentation hook). Both use `@Inject` on an attachment site other than a normal property; both are delivered after the consumer's `init` has run.
+
+**`@Inject weak var x: T?`** is the compact spelling. Swift's `weak` modifier means the property is mutable storage that can't live in an init parameter, so Wire excludes it from the synthesised init and wires it post-construct instead. The graph treats the edge as cycle-breaking — topological sort doesn't see it as a constructor-time dependency.
+
+```swift
+@Singleton final class Coordinator {
+    @Inject init(view: View) { /* ... */ }
+}
+
+@Singleton final class View {
+    @Inject weak var coordinator: Coordinator?
+}
+```
+
+Topo sort: `View` first (no strong deps), `Coordinator` second (takes `View`). Generated bootstrap: `view.coordinator = coordinator` after both exist. The runtime relationship is what Swift's `weak` keyword already means — non-owning, zeroing on dealloc. Wire just respects the language semantics.
+
+**`@Inject func receive(_ x: T)`** is the general form. The user writes a method; the parameter list declares the deps; the build plugin calls the method with resolved arguments after construction. What the method *does* internally — Mutex-wrapped storage, actor messaging, instrumentation, anything — is the user's choice. Wire stays out of the storage decision.
+
+```swift
+@Singleton final class ConfigBoard: Sendable {
+    private let storage = Mutex<ConfigData?>(nil)
+
+    @Inject
+    func apply(config: ConfigData) {
+        storage.withLock { $0 = config }
+    }
+}
+```
+
+For consumers that need a custom `@Inject init` *and* post-construct deps, the two coexist: `@Inject weak var` and `@Inject func` are exempt from the "init OR properties, never both" rule because their delivery doesn't compete with the init's parameter list.
+
+**Actor consumers.** `@Inject func` on an `actor` is the canonical "checked-Sendable + post-init wiring" pattern — actors are inherently `Sendable`, so the consumer slots into a `Sendable` `_WireGraph` without `@unchecked` workarounds. The build plugin emits `await consumer.method(args)` at the call site (the `await` pays for the isolation crossing, whether or not the method is itself declared `async`). `@Inject weak var` on actors works the same way at the use site; under the hood the build plugin synthesises a setter extension method (`_wireSet<Property>`) because direct property assignment from outside actor isolation isn't legal Swift.
+
+Member-injection parameters still participate in graph validation: missing-binding diagnostics fire if a target isn't bound, and explicit-key disambiguation works the same way it does for constructor-injected deps. The only difference is cycle detection — member-injection edges are deferred, so a cycle that closes through one is legal (the canonical cycle-breaking case), while cycles entirely through constructor edges remain errors.
+
+`@Inject mutating func` on a struct is rejected with a build-time error pointing at the func declaration: struct value-copy semantics mean consumers that received the struct via init would see the pre-mutation state, while only the graph-stored value would reflect the mutation — a silent divergence Wire refuses to emit. Three fix-it suggestions point at the alternatives: convert to a class, drop `mutating` and manage shared state through an internal reference (Mutex-wrapped, etc.), or deliver the dep via `@Inject init` instead.
+
 ### Crossing scopes
 
 The common case for "a singleton needs request-scoped state" collapses if you scope the consumer to the seed instead. A `TaskController` that wants per-request logging is naturally `@Scoped(seed: HBRequestSeed.self)`, not a singleton with a deferred-resolution wrapper. Wire's adapter packages publish controller registration that constructs per-seed instances on demand — the controller goes in the request scope, the singleton stays in the process scope, and the boundary is never crossed at injection time.
 
-When a singleton genuinely needs to *defer* construction of something within its own scope (a circular initialisation dependency, lazy expensive setup), `Lazy<T>` is the primitive — same scope, deferred evaluation. A general `Provider<T>` for cross-scope on-demand resolution is deferred; if a real case surfaces that neither seeded scopes nor `Lazy<T>` handle, the design lands then.
+When a singleton genuinely needs to *defer* construction of something within its own scope (an expensive resource not always exercised, a first-use-init pattern), the user writes a `@Provides` that returns `Lazy<T>`. `Lazy<T>` is a regular public Swift type Wire ships; consumers `@Inject` it as `Lazy<T>` and call `.get()` to materialise. There's no framework-magic recognition — the binding's type *is* `Lazy<T>`, and the user controls the factory closure:
+
+```swift
+@Provides
+static func makePool(config: Config) -> Lazy<DatabasePool> {
+    Lazy { DatabasePool(config: config) }
+}
+
+@Singleton
+struct RequestHandler {
+    @Inject var pool: Lazy<DatabasePool>
+}
+```
+
+Bootstrap allocates the wrapper (cheap); the underlying `DatabasePool` materialises on first `pool.get()`, cached thereafter. For mutual-reference cycles where one side should genuinely not extend the other's lifetime, see the [post-construction injection](#post-construction-injection) section above — `@Inject weak var` is the cycle-break primitive, not `Lazy<T>` (whose edge participates in cycle detection like any other dep).
+
+`Lazy<T>` and `@Inject weak var` aren't mutually exclusive — `@Inject weak var pool: Lazy<DatabasePool>?` is a legal injection point. The graph identity is `Lazy<DatabasePool>` (same as for any other `@Inject weak var`), and the producer side stays a regular `@Provides -> Lazy<DatabasePool>`. The weak slot points at the wrapper (held strongly by the graph), not at the materialised inner value (held by the wrapper's factory closure once `.get()` runs and by anything that retains the result). The framework doesn't special-case the composition — `Lazy<T>` is just a type and `weak` is just a language modifier, so combining them is the same code path as either alone. Useful when a deferred binding's factory closure captures the consumer back and you want the consumer's view of it to be non-owning; less common than the basic shapes but available when needed.
+
+A general `Provider<T>` for cross-scope on-demand resolution is deferred; if a real case surfaces that neither seeded scopes, `Lazy<T>`, nor the post-construction injection forms handle, the design lands then.
 
 ### Adapter annotations (the extension mechanism)
 
