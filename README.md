@@ -561,12 +561,13 @@ Two contributors writing `atKey:` with the same key value is a compile error —
 
 #### Builder-shaped aggregations (`BuilderKey<B>`)
 
-When the natural aggregation isn't a list or a map but a typed *composition* — Hummingbird-style middleware chains where each addition is folded into the previous result via a result builder — declare a `BuilderKey<B>` whose type parameter is the builder:
+When the natural aggregation isn't a list or a map but a typed *composition* — type-preserving middleware chains (the pattern explored in the Swift HTTP server proposal), pipeline stages, or any case where each addition transforms the type signature of the result — declare a `BuilderKey<B>` whose type parameter is the builder:
 
 ```swift
 public struct BuilderKey<Builder>: Sendable where Builder: ~Copyable {
-    // Builder is typically a @resultBuilder type; its buildPartialBlock signatures
-    // determine both the constraints on contributors and the aggregated output type.
+    // Builder is a user-defined @resultBuilder type; its methods
+    // determine both the constraints on contributors and the
+    // aggregated output type.
 }
 
 extension Middleware {
@@ -586,9 +587,9 @@ struct ApplicationBuilder {
 }
 ```
 
-The build plugin orders contributors by `withOrder:`, then generates a fold over the builder's `buildPartialBlock` calls. The result is a fully specialized aggregate — `_Middleware2<LogRequests, Compression>` here — with no existential boxing forced by Wire. The consumer reads it via an opaque type (`some MiddlewareProtocol`) since the concrete aggregation depends on which contributors are activated.
+The build plugin orders contributors by `withOrder:`, then emits a fold function annotated with the builder's `@resultBuilder` attribute. The Swift compiler dispatches whichever builder methods the user defined (`buildBlock`, `buildPartialBlock`, `buildFinalResult`, etc.) — Wire stays out of the builder's internal protocol and emits no API-specific code. The result is a fully specialized aggregate — `_Middleware2<LogRequests, Compression>` here — with no existential boxing forced by Wire. The consumer reads it via an opaque type (`some MiddlewareProtocol`) since the concrete aggregation depends on which contributors are activated.
 
-The builder's own where-clauses become DI constraints. If `MiddlewareBuilder.buildPartialBlock` requires matching `Input`/`Output`/`Context` across the chain, contributing a middleware with mismatched generic parameters is a compile error from the *builder's* signature, not from Wire's logic. Wire doesn't reinvent the constraint system; it threads contributors through the builder the user already wrote.
+The builder's own where-clauses become DI constraints. If the user's builder requires matching `Input`/`Output`/`Context` across the chain, contributing a middleware with mismatched generic parameters is a compile error from the *builder's* signature, not from Wire's logic. Wire doesn't reinvent the constraint system; it threads contributors through the builder the user already wrote.
 
 #### One annotation, four key flavors
 
