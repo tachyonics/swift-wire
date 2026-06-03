@@ -149,18 +149,38 @@ See also: "Dynamic binding lookup by `Any.Type` (rejected)" and "Cross-scope rea
 
 **Validation gate:** the 4d integration test passes. `@Scoped(seed:)` types are constructed per `withScope` entry, sharing singletons but isolated between scope entries. A user-written `@Provides -> Lazy<T>` defers the underlying construction to first `.get()` and caches the result. A `@Singleton` storing a `@Scoped` value directly produces the documented compile error. (4e, if it lands in this iteration, has its own integration test for weak-injected cycle-breaking.)
 
-## Iteration 5 — multibindings
+## Iteration 5 — visibility-driven diagnostics + multibindings
 
-All four key flavours plus the unified `@Contributes(to:)` annotation. See `Documentation/Notes/BuilderKeyDesign.md` for the design depth on `BuilderKey<B>` — emission via result-builder attribute, return-type derivation from `buildBlock` / `buildFinalResult`, coupling with `OpaqueTypesSupport.md`, open ordering decision.
+Split into two sub-iterations. The diagnostic infrastructure (5α) lands first because it establishes a policy that multibindings (5β) inherits — building it the other way around would mean baking in multibinding-specific empty-handling shapes and then refactoring them when the generalization arrives. See `Documentation/Notes/VisibilityModel.md` for the design contract that pins what both sub-iterations build on.
+
+### Iteration 5α — visibility-driven dead-binding diagnostics
+
+Reads source-level access modifiers to drive diagnostic strictness: Wire warns about "declared but never consumed" patterns for non-public bindings (where Wire has full build-time visibility) and stays silent for public bindings (where downstream consumers may exist). The model also pins the contract for future container composition — access modifiers will become the composition-boundary markers, with no extra annotation surface.
+
+**Scope:**
+- Discovery extensions: capture access-level modifier on every binding declaration (`@Singleton`/`@Scoped` types, `@Provides` properties/functions, `BindingKey<T>` static declarations) and on host types for `@Inject` consumers.
+- Graph extensions: per-binding consumer count, computed as part of dependency resolution.
+- **Declaration-too-private error** (severity: `.error`): any source-level name Wire's generated bootstrap textually references — `@Singleton`/`@Scoped` types, `@Provides` declarations, `@Container` enums, `@Inject init`, `@Inject weak var` properties, `@Inject func` methods, `BindingKey<T>` static declarations — must be at least `internal`. `fileprivate` and `private` produce a build-blocking diagnostic at discovery time, anchored at the user's declaration rather than at the generated bootstrap. `@Inject weak var` and `@Inject func` get an additional `Diagnostic.Note` explaining why the asymmetric `@Inject var` / `@Inject let` (constructor-injected) doesn't have the same constraint — the macro generates the init within the host type's scope, so `@Inject private var` works fine while `@Inject private weak var` doesn't. Structural prerequisite for the dead-binding warning below (and for everything downstream).
+- **Dead-binding warning** (severity: `.warning`): for non-public bindings with zero consumers in the module. Public bindings stay silent. Threaded through iteration 4's `Diagnostic` infrastructure.
+- Silencer for the dead-binding warning: explicit per-declaration opt-in (`allowUnused:` / `permitMissing:` — naming finalised during implementation). The declaration-too-private error isn't silenceable — it's a structural compile-time issue.
+- Documentation: README iteration-5 prose mentioning the post-`package` visibility triad expectation and how Wire's policy fits.
+
+**Validation gate:** test fixture with mixed-visibility bindings demonstrating both diagnostics correctly distinguish. A `fileprivate @Singleton` produces the declaration-too-private error and the build fails. An `internal @Singleton` without consumers warns; a `public @Singleton` without consumers stays silent; the silencer parameter takes effect. Existing iteration 1-4 binding kinds covered (Singleton, Scoped, Provides, BindingKey).
+
+### Iteration 5β — multibindings
+
+All four key flavours plus the unified `@Contributes(to:)` annotation. Inherits 5α's diagnostic infrastructure for the dead-key case; adds an empty-contributor warning (consumer exists but no `@Contributes` annotations) as a multibinding-specific check under the same visibility-driven policy. See `Documentation/Notes/BuilderKeyDesign.md` for the design depth on `BuilderKey<B>` — emission via result-builder attribute, return-type derivation from `buildBlock` / `buildFinalResult`, coupling with `OpaqueTypesSupport.md`, ordering decision settled (compile error when `withOrder:` mixed with unranked contributors).
 
 **Scope:**
 - `@Contributes(to:)` macro
 - `CollectedKey<T>` with `withOrder:` on `@Contributes` for explicit ordering
 - `MappedKey<K, V>` with `atKey:` on `@Contributes` for key disambiguation
 - `BuilderKey<B>` with return-type derivation from the builder's `buildBlock` / `buildFinalResult` signature; `withOrder:` on `@Contributes` for ordering the fold-function parameters (often type-relevant for order-sensitive builders like middleware chains). The parameterized-opaque case is deferred to when `OpaqueTypesSupport.md` lands; see the design note for the split.
-- Build plugin parameter validity checks (`withOrder:` valid on `CollectedKey` and `BuilderKey` contributions only, `atKey:` required on `MappedKey` contributions only, no mixing)
+- Build plugin parameter validity checks (`withOrder:` valid on `CollectedKey` and `BuilderKey` contributions only, `atKey:` required on `MappedKey` contributions only, no mixing).
+- Empty-contributor warning piggy-backing on 5α's diagnostic infrastructure: non-public multibinding key with consumer but zero contributors → warn. Public keys stay silent. Silenceable via the same silencer mechanism 5α establishes.
+- Cross-container contribution rejected with a diagnostic (composition relaxation deferred).
 
-**Validation gate:** test app with three contributors to a `CollectedKey<any Service>` (with `withOrder:` covering ordered + unordered cases), two contributors to a `MappedKey<String, Strategy>` (including the duplicate-key compile error case), two to a `BuilderKey<MiddlewareBuilder>` exercising real result-builder constraints and `withOrder:`-driven contributor sequencing. Each consumer gets the right shape with the right ordering and the right type.
+**Validation gate:** test app with three contributors to a `CollectedKey<any Service>` (with `withOrder:` covering ordered + unordered cases), two contributors to a `MappedKey<String, Strategy>` (including the duplicate-key compile error case), two to a `BuilderKey<MiddlewareBuilder>` exercising real result-builder constraints and `withOrder:`-driven contributor sequencing. Each consumer gets the right shape with the right ordering and the right type. Plus an empty-multibinding fixture demonstrating the visibility-driven warning policy (`internal` empty key warns; `public` empty key stays silent).
 
 ## Iteration 6 — `Lifecycle` and `Resource<T>` (types only)
 
