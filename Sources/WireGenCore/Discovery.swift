@@ -248,6 +248,13 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// edges) and emitted as a separate block after the construction
     /// sequence in the generated bootstrap.
     package let memberInjections: [MemberInjection]
+    /// Source-level access modifier on the type declaration. Read by
+    /// iteration 5α's diagnostic pipeline — see
+    /// `Documentation/Notes/VisibilityModel.md`. `fileprivate` and
+    /// `private` produce a declaration-too-private error; non-public
+    /// (`package` / `internal`) drives the dead-binding warning;
+    /// `public` / `open` keep the warning silent.
+    package let accessLevel: AccessLevel
 
     package var sourcePath: String { location.file }
 
@@ -261,7 +268,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         scopeKey: ScopeKey? = nil,
         initIsAsync: Bool = false,
         initIsThrowing: Bool = false,
-        memberInjections: [MemberInjection] = []
+        memberInjections: [MemberInjection] = [],
+        accessLevel: AccessLevel = .internal
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -276,6 +284,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.initIsAsync = initIsAsync
         self.initIsThrowing = initIsThrowing
         self.memberInjections = memberInjections
+        self.accessLevel = accessLevel
     }
 }
 
@@ -313,19 +322,30 @@ package struct MemberInjection: Sendable {
     /// Position of the source-level declaration — the `weak var`
     /// property identifier, or the `func` name.
     package let location: SourceLocation
+    /// Source-level access modifier on the member declaration. Both
+    /// `@Inject weak var` properties and `@Inject func` methods are
+    /// referenced post-construct by Wire's generated bootstrap, so
+    /// their visibility constrains whether the generated code can
+    /// reach them. `fileprivate` and `private` produce a declaration-
+    /// too-private error (see
+    /// `Documentation/Notes/VisibilityModel.md` for the asymmetry
+    /// with constructor-injected `@Inject var/let`).
+    package let accessLevel: AccessLevel
 
     package init(
         shape: Shape,
         parameters: [DependencyParameter],
         isAsync: Bool = false,
         isThrowing: Bool = false,
-        location: SourceLocation
+        location: SourceLocation,
+        accessLevel: AccessLevel = .internal
     ) {
         self.shape = shape
         self.parameters = parameters
         self.isAsync = isAsync
         self.isThrowing = isThrowing
         self.location = location
+        self.accessLevel = accessLevel
     }
 
     package enum Shape: Sendable, Equatable {
@@ -383,6 +403,10 @@ package struct DiscoveredProvider: Sendable {
     /// makeFoo() throws -> Foo`, or a computed `@Provides var x: Foo
     /// { get throws }`. Drives `try ` prefixing at the call site.
     package let isThrowing: Bool
+    /// Source-level access modifier on the property or function. Read
+    /// by iteration 5α's diagnostic pipeline — see
+    /// `Documentation/Notes/VisibilityModel.md`.
+    package let accessLevel: AccessLevel
 
     package var sourcePath: String { location.file }
 
@@ -396,7 +420,8 @@ package struct DiscoveredProvider: Sendable {
         keyIdentifier: String? = nil,
         concreteGenericArguments: [String] = [],
         isAsync: Bool = false,
-        isThrowing: Bool = false
+        isThrowing: Bool = false,
+        accessLevel: AccessLevel = .internal
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -408,6 +433,7 @@ package struct DiscoveredProvider: Sendable {
         self.concreteGenericArguments = concreteGenericArguments
         self.isAsync = isAsync
         self.isThrowing = isThrowing
+        self.accessLevel = accessLevel
     }
 
     /// Whether the binding source is a property (read its value directly)
@@ -454,6 +480,68 @@ package struct DependencyParameter: Sendable {
         self.kind = kind
         self.location = location
         self.keyIdentifier = keyIdentifier
+    }
+}
+
+/// Swift access-level modifier on a binding declaration. Captured
+/// by discovery for two reasons (see
+/// `Documentation/Notes/VisibilityModel.md` for the design contract):
+///
+/// 1. **Declaration-too-private check.** Wire's generated bootstrap
+///    lives in a separate file from the user's source. Anything
+///    declared `fileprivate` or `private` is invisible to the
+///    generated code; the build would fail with a confusing
+///    "cannot find 'X' in scope" error in `_WireGraph.swift`. Wire
+///    catches this at discovery time, anchored at the user's
+///    declaration, before any code is emitted.
+///
+/// 2. **Dead-binding warning.** A `public` binding with no consumers
+///    in the visible build may still be consumed downstream;
+///    non-public bindings (`package`, `internal`) are fully visible
+///    to Wire's build-time view. The warning stays silent on `public`
+///    bindings and fires on non-public ones with zero consumers.
+///
+/// `internal` is the Swift default when no modifier is present.
+package enum AccessLevel: Sendable, Equatable {
+    case `open`
+    case `public`
+    case `package`
+    case `internal`
+    case `fileprivate`
+    case `private`
+
+    /// True iff Wire's generated bootstrap can textually reference a
+    /// declaration at this access level. `internal` and higher are
+    /// visible to the generated `_WireGraph.swift`; `fileprivate`
+    /// and `private` aren't.
+    package var isVisibleToGeneratedCode: Bool {
+        switch self {
+        case .open, .public, .package, .internal: return true
+        case .fileprivate, .private: return false
+        }
+    }
+
+    /// True iff this declaration is externally exposed — consumers
+    /// may exist downstream in modules Wire can't see. Drives the
+    /// dead-binding warning's "stay silent on public" rule.
+    package var isPubliclyExposed: Bool {
+        switch self {
+        case .open, .public: return true
+        case .package, .internal, .fileprivate, .private: return false
+        }
+    }
+
+    /// Human-readable name matching the Swift keyword, for use in
+    /// diagnostic messages.
+    package var keyword: String {
+        switch self {
+        case .open: return "open"
+        case .public: return "public"
+        case .package: return "package"
+        case .internal: return "internal"
+        case .fileprivate: return "fileprivate"
+        case .private: return "private"
+        }
     }
 }
 

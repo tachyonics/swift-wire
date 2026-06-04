@@ -160,6 +160,7 @@ final class BindingDiscovery: SyntaxVisitor {
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
+            modifiers: node.modifiers,
             members: node.memberBlock.members
         )
         return .visitChildren
@@ -193,6 +194,7 @@ final class BindingDiscovery: SyntaxVisitor {
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
+            modifiers: node.modifiers,
             members: node.memberBlock.members
         )
         return .visitChildren
@@ -226,6 +228,7 @@ final class BindingDiscovery: SyntaxVisitor {
             nameToken: node.name,
             generics: node.genericParameterClause,
             attributes: node.attributes,
+            modifiers: node.modifiers,
             members: node.memberBlock.members
         )
         return .visitChildren
@@ -447,7 +450,8 @@ final class BindingDiscovery: SyntaxVisitor {
                     location: providerLocation,
                     keyIdentifier: key,
                     isAsync: propertyEffects.isAsync,
-                    isThrowing: propertyEffects.isThrowing
+                    isThrowing: propertyEffects.isThrowing,
+                    accessLevel: accessLevel(from: node.modifiers)
                 )
             )
         )
@@ -508,7 +512,8 @@ final class BindingDiscovery: SyntaxVisitor {
                     location: providerLocation,
                     keyIdentifier: key,
                     isAsync: effects.isAsync,
-                    isThrowing: effects.isThrowing
+                    isThrowing: effects.isThrowing,
+                    accessLevel: accessLevel(from: node.modifiers)
                 )
             )
         )
@@ -528,6 +533,7 @@ extension BindingDiscovery {
         nameToken: TokenSyntax,
         generics: GenericParameterClauseSyntax?,
         attributes: AttributeListSyntax,
+        modifiers: DeclModifierListSyntax,
         members: MemberBlockItemListSyntax
     ) {
         let scopeKey: ScopeKey?
@@ -564,7 +570,8 @@ extension BindingDiscovery {
                     scopeKey: scopeKey,
                     initIsAsync: injectResult.initIsAsync,
                     initIsThrowing: injectResult.initIsThrowing,
-                    memberInjections: injectResult.memberInjections
+                    memberInjections: injectResult.memberInjections,
+                    accessLevel: accessLevel(from: modifiers)
                 )
             )
         )
@@ -694,6 +701,27 @@ func makeSourceLocation(
 ) -> SourceLocation {
     let position = node.startLocation(converter: converter)
     return SourceLocation(file: sourcePath, line: position.line, column: position.column)
+}
+
+/// Extract the source-level access level from a declaration's
+/// modifier list. Returns `.internal` (Swift's default) when no
+/// access modifier is present. `private(set)` and similar
+/// parenthesised forms are ignored — only the access keyword
+/// itself matters for whether Wire's generated bootstrap can reach
+/// the declaration.
+func accessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel {
+    for modifier in modifiers {
+        switch modifier.name.text {
+        case "open": return .open
+        case "public": return .public
+        case "package": return .package
+        case "internal": return .internal
+        case "fileprivate": return .fileprivate
+        case "private": return .private
+        default: continue
+        }
+    }
+    return .internal
 }
 
 /// `@Container` plus a scope macro on the same type is almost always a
