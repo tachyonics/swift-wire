@@ -528,6 +528,140 @@ struct DiscoveryTests {
         #expect(errors.isEmpty)
     }
 
+    // MARK: - Access level capture
+
+    @Test func singletonWithoutAccessModifierDefaultsToInternal() {
+        let source = """
+            @Singleton
+            struct A {
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.first?.accessLevel == .internal)
+    }
+
+    @Test func publicSingletonCapturedAsPublic() {
+        let source = """
+            @Singleton
+            public struct A {
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.first?.accessLevel == .public)
+    }
+
+    @Test func privateSingletonCapturedAsPrivate() {
+        let source = """
+            @Singleton
+            private struct A {
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.first?.accessLevel == .private)
+    }
+
+    @Test func fileprivateSingletonCapturedAsFileprivate() {
+        let source = """
+            @Singleton
+            fileprivate struct A {
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.first?.accessLevel == .fileprivate)
+    }
+
+    @Test func packageSingletonCapturedAsPackage() {
+        let source = """
+            @Singleton
+            package struct A {
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "A.swift")
+        #expect(result.first?.accessLevel == .package)
+    }
+
+    @Test func providesLetAccessLevelCaptured() {
+        let source = """
+            @Provides public let foo: Foo = Foo()
+            """
+        let result = discoverProviders(in: source, sourcePath: "Foo.swift")
+        #expect(result.first?.accessLevel == .public)
+    }
+
+    @Test func providesFuncAccessLevelCaptured() {
+        let source = """
+            @Provides package func makeFoo() -> Foo { Foo() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Foo.swift")
+        #expect(result.first?.accessLevel == .package)
+    }
+
+    @Test func injectWeakVarAccessLevelCaptured() {
+        // The weak property's own access modifier is captured on the
+        // member injection. Iteration 5α uses this to drive the
+        // declaration-too-private check: @Inject private weak var
+        // would fail because Wire's bootstrap writes to the property
+        // post-construct from a separate file.
+        let source = """
+            @Singleton
+            class View {
+                @Inject public weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.first?.memberInjections.first?.accessLevel == .public)
+    }
+
+    @Test func injectFuncAccessLevelCaptured() {
+        let source = """
+            @Singleton
+            class View {
+                @Inject package func receive(x: T) {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.first?.memberInjections.first?.accessLevel == .package)
+    }
+
+    @Test func privateSetOnProvidesVarReturnsBareReadAccess() {
+        // `public private(set) var foo` has public read access; the
+        // `private(set)` restricts only the setter, which Wire never
+        // touches on a `@Provides` (the bootstrap reads the property).
+        // So the captured access level matches the bare modifier.
+        let source = """
+            @Provides public private(set) var foo: Foo = Foo()
+            """
+        let result = discoverProviders(in: source, sourcePath: "Foo.swift")
+        #expect(result.first?.accessLevel == .public)
+    }
+
+    @Test func privateSetWithoutBareModifierFallsBackToInternalRead() {
+        // `private(set) var foo` with no other access modifier has
+        // read access at Swift's default — `.internal`. The
+        // `private(set)` restricts only the setter and doesn't
+        // contribute to the property's read visibility.
+        let source = """
+            @Provides private(set) var foo: Foo = Foo()
+            """
+        let result = discoverProviders(in: source, sourcePath: "Foo.swift")
+        #expect(result.first?.accessLevel == .internal)
+    }
+
+    @Test func accessLevelHelperVisibilityChecks() {
+        // The two convenience predicates that drive 5α's diagnostics:
+        // isVisibleToGeneratedCode (`internal+`) and isPubliclyExposed
+        // (`public`/`open`).
+        #expect(AccessLevel.public.isVisibleToGeneratedCode == true)
+        #expect(AccessLevel.package.isVisibleToGeneratedCode == true)
+        #expect(AccessLevel.internal.isVisibleToGeneratedCode == true)
+        #expect(AccessLevel.fileprivate.isVisibleToGeneratedCode == false)
+        #expect(AccessLevel.private.isVisibleToGeneratedCode == false)
+        #expect(AccessLevel.open.isPubliclyExposed == true)
+        #expect(AccessLevel.public.isPubliclyExposed == true)
+        #expect(AccessLevel.package.isPubliclyExposed == false)
+        #expect(AccessLevel.internal.isPubliclyExposed == false)
+    }
+
     // MARK: - Parameter name edge cases
 
     @Test func injectInitWithWildcardParameterLabel() {

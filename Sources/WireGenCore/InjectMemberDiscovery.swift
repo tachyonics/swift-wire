@@ -213,7 +213,8 @@ private func methodCallInjection(
             of: funcDecl.name,
             sourcePath: sourcePath,
             converter: converter
-        )
+        ),
+        accessLevel: accessLevel(from: funcDecl.modifiers)
     )
 }
 
@@ -246,7 +247,8 @@ private func applyInjectVar(
                     propertyName: pattern.identifier.text,
                     typeAnnotation: typeAnnotation.type,
                     propertyKey: propertyKey,
-                    location: location
+                    location: location,
+                    accessLevel: accessLevel(from: varDecl.modifiers)
                 )
             )
         } else {
@@ -272,7 +274,8 @@ private func propertyAssignmentInjection(
     propertyName: String,
     typeAnnotation: TypeSyntax,
     propertyKey: String?,
-    location: SourceLocation
+    location: SourceLocation,
+    accessLevel: AccessLevel
 ) -> MemberInjection {
     let resolutionType: String
     if let optType = typeAnnotation.as(OptionalTypeSyntax.self) {
@@ -290,6 +293,7 @@ private func propertyAssignmentInjection(
     return MemberInjection(
         shape: .propertyAssignment(propertyName: propertyName),
         parameters: [parameter],
-        location: location
+        location: location,
+        accessLevel: accessLevel
     )
 }
