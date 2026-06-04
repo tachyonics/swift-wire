@@ -708,12 +708,10 @@ func makeSourceLocation(
 /// bare access modifier is present.
 ///
 /// Setter-restriction modifiers (`private(set)`, `fileprivate(set)`,
-/// etc.) are intentionally skipped — they restrict only the
-/// property's setter without changing its external read access,
-/// which is what Wire's generated bootstrap needs to reference for
-/// `@Provides` reads and the like. The setter restriction matters
-/// separately for declarations that Wire writes to post-construct
-/// (`@Inject weak var`); that's a distinct check.
+/// etc.) are intentionally skipped here — they restrict only the
+/// property's setter without changing its external read access.
+/// See `setterAccessLevel(from:)` for the matching extraction of
+/// the setter restriction.
 func accessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel {
     for modifier in modifiers {
         // Skip `private(set)` and similar — the `(set)` detail means
@@ -731,6 +729,38 @@ func accessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel {
         }
     }
     return .internal
+}
+
+/// Extract the explicit setter-restriction access level from a
+/// declaration's modifier list. Returns `nil` when no setter-
+/// restricting modifier (`private(set)`, `fileprivate(set)`,
+/// `internal(set)`, `package(set)`) is present — meaning the
+/// setter inherits the property's read access.
+///
+/// Member injection's `propertyAssignment` shape (the
+/// `@Inject weak var` sugar form) emits a post-construct write to
+/// the property from Wire's generated bootstrap; a `private(set)`
+/// or `fileprivate(set)` restriction blocks that write even when
+/// the property's read access is otherwise reachable. The captured
+/// setter level lets the diagnostic emit a tailored error
+/// distinguishing setter-restriction failures from outright too-
+/// private declarations.
+func setterAccessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel? {
+    for modifier in modifiers {
+        guard let detail = modifier.detail,
+            detail.detail.text == "set"
+        else { continue }
+        switch modifier.name.text {
+        case "open": return .open
+        case "public": return .public
+        case "package": return .package
+        case "internal": return .internal
+        case "fileprivate": return .fileprivate
+        case "private": return .private
+        default: continue
+        }
+    }
+    return nil
 }
 
 /// `@Container` plus a scope macro on the same type is almost always a

@@ -647,6 +647,90 @@ struct DiscoveryTests {
         #expect(result.first?.accessLevel == .internal)
     }
 
+    @Test func injectWeakVarWithoutSetterRestrictionHasNilSetterAccessLevel() {
+        // Default case: no `(set)` modifier means the setter
+        // inherits the property's read access. The captured
+        // `setterAccessLevel` is `nil` to distinguish "explicitly
+        // restricted" from "inherits from read access."
+        let source = """
+            @Singleton
+            class View {
+                @Inject internal weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        let injection = try! #require(result.first?.memberInjections.first)
+        #expect(injection.setterAccessLevel == nil)
+        #expect(injection.effectiveWriteAccessLevel == .internal)
+    }
+
+    @Test func injectWeakVarWithPrivateSetCapturesSetterRestriction() {
+        // `private(set)` restricts the setter independently of the
+        // property's read access. Wire's bootstrap writes to the
+        // property post-construct; the captured setter level lets
+        // the diagnostic recognise the case and emit a tailored
+        // error.
+        let source = """
+            @Singleton
+            class View {
+                @Inject internal private(set) weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        let injection = try! #require(result.first?.memberInjections.first)
+        #expect(injection.accessLevel == .internal)
+        #expect(injection.setterAccessLevel == .private)
+        #expect(injection.effectiveWriteAccessLevel == .private)
+    }
+
+    @Test func injectWeakVarWithFileprivateSetCapturesSetterRestriction() {
+        let source = """
+            @Singleton
+            class View {
+                @Inject public fileprivate(set) weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        let injection = try! #require(result.first?.memberInjections.first)
+        #expect(injection.accessLevel == .public)
+        #expect(injection.setterAccessLevel == .fileprivate)
+        #expect(injection.effectiveWriteAccessLevel == .fileprivate)
+    }
+
+    @Test func injectWeakVarWithInternalSetCapturesSetterRestriction() {
+        // `internal(set)` is a less restrictive case — the setter
+        // is still reachable from Wire's generated bootstrap.
+        // Captured for completeness; the diagnostic step will treat
+        // it the same as no restriction at all.
+        let source = """
+            @Singleton
+            class View {
+                @Inject public internal(set) weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        let injection = try! #require(result.first?.memberInjections.first)
+        #expect(injection.accessLevel == .public)
+        #expect(injection.setterAccessLevel == .internal)
+        #expect(injection.effectiveWriteAccessLevel == .internal)
+    }
+
+    @Test func injectFuncDoesNotCaptureSetterAccessLevel() {
+        // Functions don't have separate getter/setter access — the
+        // captured `setterAccessLevel` is `nil` on `.methodCall`
+        // injections regardless of what's in the source.
+        let source = """
+            @Singleton
+            class View {
+                @Inject public func receive(x: T) {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        let injection = try! #require(result.first?.memberInjections.first)
+        #expect(injection.setterAccessLevel == nil)
+        #expect(injection.effectiveWriteAccessLevel == .public)
+    }
+
     @Test func accessLevelHelperVisibilityChecks() {
         // The two convenience predicates that drive 5α's diagnostics:
         // isVisibleToGeneratedCode (`internal+`) and isPubliclyExposed

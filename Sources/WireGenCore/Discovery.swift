@@ -329,6 +329,16 @@ package struct MemberInjection: Sendable {
     /// `Documentation/Notes/VisibilityModel.md` for the asymmetry
     /// with constructor-injected `@Inject var/let`.
     package let accessLevel: AccessLevel
+    /// Setter-restriction modifier on the source declaration, when
+    /// present (`private(set)`, `fileprivate(set)`, etc.). `nil`
+    /// when the source has no setter restriction. Relevant only for
+    /// `.propertyAssignment` shape: the bootstrap writes to a weak
+    /// property post-construct, so a setter restriction tighter
+    /// than `internal` blocks that write even when the property's
+    /// read access is otherwise reachable. `.methodCall` shape
+    /// always carries `nil` here (functions don't have separate
+    /// setter access).
+    package let setterAccessLevel: AccessLevel?
 
     package init(
         shape: Shape,
@@ -336,7 +346,8 @@ package struct MemberInjection: Sendable {
         isAsync: Bool = false,
         isThrowing: Bool = false,
         location: SourceLocation,
-        accessLevel: AccessLevel = .internal
+        accessLevel: AccessLevel = .internal,
+        setterAccessLevel: AccessLevel? = nil
     ) {
         self.shape = shape
         self.parameters = parameters
@@ -344,6 +355,18 @@ package struct MemberInjection: Sendable {
         self.isThrowing = isThrowing
         self.location = location
         self.accessLevel = accessLevel
+        self.setterAccessLevel = setterAccessLevel
+    }
+
+    /// The effective access level Wire's generated bootstrap needs
+    /// to be able to write at for `.propertyAssignment` shape.
+    /// Combines the property's read access with the setter
+    /// restriction: a `private(set)` modifier on an otherwise
+    /// `internal` property leaves the effective write access at
+    /// `private`. Falls back to `accessLevel` when no setter
+    /// restriction is present.
+    package var effectiveWriteAccessLevel: AccessLevel {
+        setterAccessLevel ?? accessLevel
     }
 
     package enum Shape: Sendable, Equatable {
