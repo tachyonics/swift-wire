@@ -623,6 +623,30 @@ struct DiscoveryTests {
         #expect(result.first?.memberInjections.first?.accessLevel == .package)
     }
 
+    @Test func privateSetOnProvidesVarReturnsBareReadAccess() {
+        // `public private(set) var foo` has public read access; the
+        // `private(set)` restricts only the setter, which Wire never
+        // touches on a `@Provides` (the bootstrap reads the property).
+        // So the captured access level matches the bare modifier.
+        let source = """
+            @Provides public private(set) var foo: Foo = Foo()
+            """
+        let result = discoverProviders(in: source, sourcePath: "Foo.swift")
+        #expect(result.first?.accessLevel == .public)
+    }
+
+    @Test func privateSetWithoutBareModifierFallsBackToInternalRead() {
+        // `private(set) var foo` with no other access modifier has
+        // read access at Swift's default — `.internal`. The
+        // `private(set)` restricts only the setter and doesn't
+        // contribute to the property's read visibility.
+        let source = """
+            @Provides private(set) var foo: Foo = Foo()
+            """
+        let result = discoverProviders(in: source, sourcePath: "Foo.swift")
+        #expect(result.first?.accessLevel == .internal)
+    }
+
     @Test func accessLevelHelperVisibilityChecks() {
         // The two convenience predicates that drive 5α's diagnostics:
         // isVisibleToGeneratedCode (`internal+`) and isPubliclyExposed

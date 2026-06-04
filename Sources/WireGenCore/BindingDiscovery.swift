@@ -703,14 +703,23 @@ func makeSourceLocation(
     return SourceLocation(file: sourcePath, line: position.line, column: position.column)
 }
 
-/// Extract the source-level access level from a declaration's
+/// Extract the source-level read access from a declaration's
 /// modifier list. Returns `.internal` (Swift's default) when no
-/// access modifier is present. `private(set)` and similar
-/// parenthesised forms are ignored — only the access keyword
-/// itself matters for whether Wire's generated bootstrap can reach
-/// the declaration.
+/// bare access modifier is present.
+///
+/// Setter-restriction modifiers (`private(set)`, `fileprivate(set)`,
+/// etc.) are intentionally skipped — they restrict only the
+/// property's setter without changing its external read access,
+/// which is what Wire's generated bootstrap needs to reference for
+/// `@Provides` reads and the like. The setter restriction matters
+/// separately for declarations that Wire writes to post-construct
+/// (`@Inject weak var`); that's a distinct check.
 func accessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel {
     for modifier in modifiers {
+        // Skip `private(set)` and similar — the `(set)` detail means
+        // the modifier governs the setter, not the property's read
+        // access. The bare modifier (if any) governs reads.
+        if modifier.detail != nil { continue }
         switch modifier.name.text {
         case "open": return .open
         case "public": return .public

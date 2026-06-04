@@ -248,12 +248,10 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// edges) and emitted as a separate block after the construction
     /// sequence in the generated bootstrap.
     package let memberInjections: [MemberInjection]
-    /// Source-level access modifier on the type declaration. Read by
-    /// iteration 5α's diagnostic pipeline — see
-    /// `Documentation/Notes/VisibilityModel.md`. `fileprivate` and
-    /// `private` produce a declaration-too-private error; non-public
-    /// (`package` / `internal`) drives the dead-binding warning;
-    /// `public` / `open` keep the warning silent.
+    /// Source-level access modifier on the type declaration. Drives
+    /// the declaration-too-private error (fires for `fileprivate` /
+    /// `private`) and the dead-binding warning's permissive-on-
+    /// public rule. See `Documentation/Notes/VisibilityModel.md`.
     package let accessLevel: AccessLevel
 
     package var sourcePath: String { location.file }
@@ -327,9 +325,9 @@ package struct MemberInjection: Sendable {
     /// referenced post-construct by Wire's generated bootstrap, so
     /// their visibility constrains whether the generated code can
     /// reach them. `fileprivate` and `private` produce a declaration-
-    /// too-private error (see
+    /// too-private error. See
     /// `Documentation/Notes/VisibilityModel.md` for the asymmetry
-    /// with constructor-injected `@Inject var/let`).
+    /// with constructor-injected `@Inject var/let`.
     package let accessLevel: AccessLevel
 
     package init(
@@ -403,8 +401,9 @@ package struct DiscoveredProvider: Sendable {
     /// makeFoo() throws -> Foo`, or a computed `@Provides var x: Foo
     /// { get throws }`. Drives `try ` prefixing at the call site.
     package let isThrowing: Bool
-    /// Source-level access modifier on the property or function. Read
-    /// by iteration 5α's diagnostic pipeline — see
+    /// Source-level access modifier on the property or function.
+    /// Drives the declaration-too-private error and the
+    /// dead-binding warning. See
     /// `Documentation/Notes/VisibilityModel.md`.
     package let accessLevel: AccessLevel
 
@@ -484,22 +483,14 @@ package struct DependencyParameter: Sendable {
 }
 
 /// Swift access-level modifier on a binding declaration. Captured
-/// by discovery for two reasons (see
-/// `Documentation/Notes/VisibilityModel.md` for the design contract):
-///
-/// 1. **Declaration-too-private check.** Wire's generated bootstrap
-///    lives in a separate file from the user's source. Anything
-///    declared `fileprivate` or `private` is invisible to the
-///    generated code; the build would fail with a confusing
-///    "cannot find 'X' in scope" error in `_WireGraph.swift`. Wire
-///    catches this at discovery time, anchored at the user's
-///    declaration, before any code is emitted.
-///
-/// 2. **Dead-binding warning.** A `public` binding with no consumers
-///    in the visible build may still be consumed downstream;
-///    non-public bindings (`package`, `internal`) are fully visible
-///    to Wire's build-time view. The warning stays silent on `public`
-///    bindings and fires on non-public ones with zero consumers.
+/// by discovery to drive two diagnostics — the declaration-too-
+/// private error (any binding less visible than `internal` is
+/// invisible to Wire's generated code, which lives in a separate
+/// file) and the dead-binding warning (non-public bindings with
+/// no consumers in the visible build are flagged; public bindings
+/// stay silent because consumers may exist downstream). See
+/// `Documentation/Notes/VisibilityModel.md` for the design
+/// contract.
 ///
 /// `internal` is the Swift default when no modifier is present.
 package enum AccessLevel: Sendable, Equatable {
