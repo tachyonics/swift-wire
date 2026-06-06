@@ -483,6 +483,84 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("'Foo'"))
     }
 
+    @Test func privateSingletonRendersAsErrorWithFixIts() throws {
+        // Declaration-too-private error on a scope-bound type. Pin the
+        // rendered prefix and both halves of the message: the
+        // "why" clause (separate file) and the fix-it suggestion.
+        let source = """
+            @Singleton
+            private struct Hidden {
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Hidden.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("Hidden.swift:2:16: error:"))
+        #expect(rendered.contains("@Singleton type 'Hidden' is 'private'"))
+        #expect(rendered.contains("Wire's generated bootstrap lives in a separate file"))
+        #expect(rendered.contains("Change to 'internal', 'package', or 'public'"))
+    }
+
+    @Test func privateProvidesLetRendersAsError() throws {
+        let source = """
+            @Provides private let logger: Logger = Logger()
+            """
+        let discovery = discover(in: source, sourcePath: "Logger.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("Logger.swift:1:23: error:"))
+        #expect(rendered.contains("@Provides declaration 'logger' is 'private'"))
+    }
+
+    @Test func privateInjectWeakVarRendersWithAsymmetryNote() throws {
+        // The asymmetry note is the load-bearing piece — without it
+        // the user wonders why their constructor-injected
+        // `@Inject private var` worked but `@Inject private weak var`
+        // didn't. The note explains the macro-scope vs separate-file
+        // distinction.
+        let source = """
+            @Singleton
+            class View {
+                @Inject private weak var coordinator: Coordinator?
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "View.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("View.swift:3:30: error:"))
+        #expect(rendered.contains("@Inject weak var 'coordinator' is 'private'"))
+        #expect(rendered.contains("View.swift:3:30: note:"))
+        #expect(rendered.contains("can be 'private' because the macro generates the init"))
+        #expect(rendered.contains("post-construct delivery patterns"))
+    }
+
+    @Test func privateInjectFuncRendersWithAsymmetryNote() throws {
+        let source = """
+            @Singleton
+            class View {
+                @Inject private func receive(data: Data) {}
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "View.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("View.swift:3:26: error:"))
+        #expect(rendered.contains("@Inject func 'receive' is 'private'"))
+        #expect(rendered.contains("note:"))
+        #expect(rendered.contains("post-construct delivery patterns"))
+    }
+
+    @Test func privateSetOnInjectWeakVarRendersWithDropSetterNote() throws {
+        let source = """
+            @Singleton
+            class View {
+                @Inject public private(set) weak var coordinator: Coordinator?
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "View.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("View.swift:3:42: error:"))
+        #expect(rendered.contains("@Inject weak var 'coordinator' setter is 'private(set)'"))
+        #expect(rendered.contains("note:"))
+        #expect(rendered.contains("Drop the setter restriction"))
+    }
+
     @Test func identifierCollisionNamesTheConflictingAccessor() throws {
         // `Logger` and `Logger?` have distinct (type, key) identities
         // but their generated accessor names both sanitise to `logger`

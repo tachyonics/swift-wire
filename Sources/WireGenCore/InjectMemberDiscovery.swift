@@ -105,6 +105,11 @@ func extractInjectDependencies(
 /// effect specifiers. No-op for unmarked inits. Writes through to
 /// `result.dependencies` (overwriting any property deps accumulated
 /// so far) since the marked init wins the priority rule.
+///
+/// Also emits a declaration-too-private error when the init is at
+/// `fileprivate` or `private` visibility — Wire's generated
+/// bootstrap calls the init from a separate file, so the call
+/// site can't reach it.
 private func applyInjectInit(
     _ initDecl: InitializerDeclSyntax,
     into result: inout InjectExtractionResult,
@@ -130,6 +135,21 @@ private func applyInjectInit(
     let effects = functionEffectFlags(initDecl.signature.effectSpecifiers)
     result.initIsAsync = effects.isAsync
     result.initIsThrowing = effects.isThrowing
+    let initAccess = accessLevel(from: initDecl.modifiers)
+    if !initAccess.isVisibleToGeneratedCode {
+        result.diagnostics.append(
+            Diagnostic(
+                location: makeSourceLocation(
+                    of: initDecl.initKeyword,
+                    sourcePath: sourcePath,
+                    converter: converter
+                ),
+                message:
+                    "@Inject init is '\(initAccess.keyword)' but must be at least 'internal' — Wire's generated bootstrap calls this initialiser from a separate file. Change to 'internal', 'package', or 'public'.",
+                severity: .error
+            )
+        )
+    }
 }
 
 /// Append a `.methodCall` member injection (and any diagnostic
@@ -149,14 +169,15 @@ private func applyInjectFunc(
     converter: SourceLocationConverter
 ) {
     let isMutating = funcDecl.modifiers.contains { $0.name.text == "mutating" }
+    let funcLocation = makeSourceLocation(
+        of: funcDecl.name,
+        sourcePath: sourcePath,
+        converter: converter
+    )
     if isMutating && hostTypeKind == "struct" {
         result.diagnostics.append(
             Diagnostic(
-                location: makeSourceLocation(
-                    of: funcDecl.name,
-                    sourcePath: sourcePath,
-                    converter: converter
-                ),
+                location: funcLocation,
                 message:
                     "'@Inject mutating func' on a struct produces divergent state — consumers that received this binding via init see the pre-mutation value, only the graph-stored value reflects the mutation. Fix: (1) convert to a class so consumers share a reference, (2) drop 'mutating' and manage shared state through an internal reference (e.g. a Mutex<T> stored property), or (3) deliver this dep through @Inject init instead.",
                 severity: .error
@@ -168,12 +189,37 @@ private func applyInjectFunc(
         // injection the user has been told is invalid.
         return
     }
+    let funcAccess = accessLevel(from: funcDecl.modifiers)
+    if !funcAccess.isVisibleToGeneratedCode {
+        result.diagnostics.append(
+            Diagnostic(
+                location: funcLocation,
+                message:
+                    "@Inject func '\(funcDecl.name.text)' is '\(funcAccess.keyword)' but must be at least 'internal' — Wire's generated bootstrap calls this method post-construct and lives in a separate file. Change to 'internal', 'package', or 'public'.",
+                notes: [postConstructAsymmetryNote(at: funcLocation)],
+                severity: .error
+            )
+        )
+    }
     result.memberInjections.append(
         methodCallInjection(
             from: funcDecl,
             sourcePath: sourcePath,
             converter: converter
         )
+    )
+}
+
+/// Note explaining why `@Inject weak var` and `@Inject func`
+/// declarations must be at least `internal` while constructor-
+/// injected `@Inject var` / `@Inject let` can be `private`. The
+/// asymmetry is easy to miss; the note pre-empts the inevitable
+/// "but my @Inject private var works fine!" reaction.
+private func postConstructAsymmetryNote(at location: SourceLocation) -> Diagnostic.Note {
+    Diagnostic.Note(
+        location: location,
+        message:
+            "'@Inject var' / '@Inject let' (non-weak) can be 'private' because the macro generates the init within the host type's scope; only post-construct delivery patterns (weak, @Inject func) need broader visibility because the bootstrap references them from a separate file."
     )
 }
 
@@ -242,14 +288,44 @@ private func applyInjectVar(
             converter: converter
         )
         if isWeak {
+            let weakAccess = accessLevel(from: varDecl.modifiers)
+            let weakSetter = setterAccessLevel(from: varDecl.modifiers)
+            if !weakAccess.isVisibleToGeneratedCode {
+                result.diagnostics.append(
+                    Diagnostic(
+                        location: location,
+                        message:
+                            "@Inject weak var '\(pattern.identifier.text)' is '\(weakAccess.keyword)' but must be at least 'internal' — Wire's generated bootstrap assigns to this property post-construct and lives in a separate file. Change to 'internal', 'package', or 'public'.",
+                        notes: [postConstructAsymmetryNote(at: location)],
+                        severity: .error
+                    )
+                )
+            }
+            if let setter = weakSetter, !setter.isVisibleToGeneratedCode {
+                result.diagnostics.append(
+                    Diagnostic(
+                        location: location,
+                        message:
+                            "@Inject weak var '\(pattern.identifier.text)' setter is '\(setter.keyword)(set)' but must be at least 'internal' — Wire's generated bootstrap assigns to this property post-construct and lives in a separate file. The setter restriction blocks Wire's write even though the property's read access is otherwise reachable.",
+                        notes: [
+                            Diagnostic.Note(
+                                location: location,
+                                message:
+                                    "Drop the setter restriction to inherit the property's read access, or use 'internal(set)' / higher if a narrower setter is required."
+                            )
+                        ],
+                        severity: .error
+                    )
+                )
+            }
             result.memberInjections.append(
                 propertyAssignmentInjection(
                     propertyName: pattern.identifier.text,
                     typeAnnotation: typeAnnotation.type,
                     propertyKey: propertyKey,
                     location: location,
-                    accessLevel: accessLevel(from: varDecl.modifiers),
-                    setterAccessLevel: setterAccessLevel(from: varDecl.modifiers)
+                    accessLevel: weakAccess,
+                    setterAccessLevel: weakSetter
                 )
             )
         } else {
