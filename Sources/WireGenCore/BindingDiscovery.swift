@@ -403,7 +403,74 @@ final class BindingDiscovery: SyntaxVisitor {
         return modifiers.contains { $0.name.tokenKind == .keyword(.static) }
     }
 
-    private func extractProvidesProperty(_ node: VariableDeclSyntax) {
+}
+
+extension BindingDiscovery {
+    /// Process a primary type declaration for `@Singleton` or
+    /// `@Scoped(seed:)` annotations. The two are alternatives — a
+    /// type can't sensibly carry both (Swift catches it as a
+    /// redeclaration on the synthesised members), so the dispatch
+    /// picks at most one. Returns early when neither annotation is
+    /// present.
+    fileprivate func processScopeBoundType(
+        typeKind: String,
+        nameToken: TokenSyntax,
+        generics: GenericParameterClauseSyntax?,
+        attributes: AttributeListSyntax,
+        modifiers: DeclModifierListSyntax,
+        members: MemberBlockItemListSyntax
+    ) {
+        let scopeKey: ScopeKey?
+        if hasAttribute(attributes, named: "Singleton") {
+            scopeKey = nil
+        } else if let scopedAttribute = attribute(in: attributes, named: "Scoped"),
+            let seed = seedTypeExpression(from: scopedAttribute)
+        {
+            scopeKey = ScopeKey(seed: seed)
+        } else {
+            return
+        }
+        let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
+        let injectResult = extractInjectDependencies(
+            from: members,
+            hostTypeKind: typeKind,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+        warnings.append(contentsOf: injectResult.diagnostics)
+        let hostAccess = accessLevel(from: modifiers)
+        if let diagnostic = declarationTooPrivateDiagnostic(
+            surfaceLabel: scopeKey == nil ? "@Singleton type" : "@Scoped type",
+            name: nameToken.text,
+            access: hostAccess,
+            location: location(of: nameToken)
+        ) {
+            warnings.append(diagnostic)
+        }
+        // `scopes` already includes this type's own frame (it was
+        // pushed by `enterTypeDecl`), so the joined names are the
+        // full qualified path.
+        let qualified = scopes.map(\.typeName).joined(separator: ".")
+        record(
+            .scopeBound(
+                DiscoveredScopeBoundType(
+                    typeName: nameToken.text,
+                    qualifiedTypeName: qualified,
+                    typeKind: typeKind,
+                    genericParameterNames: genericParameterNames,
+                    dependencies: injectResult.dependencies,
+                    location: location(of: nameToken),
+                    scopeKey: scopeKey,
+                    initIsAsync: injectResult.initIsAsync,
+                    initIsThrowing: injectResult.initIsThrowing,
+                    memberInjections: injectResult.memberInjections,
+                    accessLevel: accessLevel(from: modifiers)
+                )
+            )
+        )
+    }
+
+    fileprivate func extractProvidesProperty(_ node: VariableDeclSyntax) {
         // Multi-binding declarations (`let a = 1, b = 2`) are skipped:
         // they're a rare style and supporting them complicates the
         // `accessPath` story for no real-world gain.
@@ -439,6 +506,15 @@ final class BindingDiscovery: SyntaxVisitor {
         // `@Provides let` bindings can't, so the flags stay `false`
         // for those.
         let propertyEffects = computedPropertyEffectFlags(binding)
+        let providerAccess = accessLevel(from: node.modifiers)
+        if let diagnostic = declarationTooPrivateDiagnostic(
+            surfaceLabel: "@Provides declaration",
+            name: propertyName,
+            access: providerAccess,
+            location: providerLocation
+        ) {
+            warnings.append(diagnostic)
+        }
         record(
             .provider(
                 DiscoveredProvider(
@@ -451,7 +527,7 @@ final class BindingDiscovery: SyntaxVisitor {
                     keyIdentifier: key,
                     isAsync: propertyEffects.isAsync,
                     isThrowing: propertyEffects.isThrowing,
-                    accessLevel: accessLevel(from: node.modifiers)
+                    accessLevel: providerAccess
                 )
             )
         )
@@ -464,7 +540,7 @@ final class BindingDiscovery: SyntaxVisitor {
         )
     }
 
-    private func extractProvidesFunction(_ node: FunctionDeclSyntax) {
+    fileprivate func extractProvidesFunction(_ node: FunctionDeclSyntax) {
         guard let returnClause = node.signature.returnClause else {
             // Void-returning `@Provides func` produces nothing
             // injectable. Silently skip.
@@ -501,6 +577,15 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         let effects = functionEffectFlags(node.signature.effectSpecifiers)
+        let providerAccess = accessLevel(from: node.modifiers)
+        if let diagnostic = declarationTooPrivateDiagnostic(
+            surfaceLabel: "@Provides function",
+            name: functionName,
+            access: providerAccess,
+            location: providerLocation
+        ) {
+            warnings.append(diagnostic)
+        }
         record(
             .provider(
                 DiscoveredProvider(
@@ -513,65 +598,7 @@ final class BindingDiscovery: SyntaxVisitor {
                     keyIdentifier: key,
                     isAsync: effects.isAsync,
                     isThrowing: effects.isThrowing,
-                    accessLevel: accessLevel(from: node.modifiers)
-                )
-            )
-        )
-    }
-
-}
-
-extension BindingDiscovery {
-    /// Process a primary type declaration for `@Singleton` or
-    /// `@Scoped(seed:)` annotations. The two are alternatives — a
-    /// type can't sensibly carry both (Swift catches it as a
-    /// redeclaration on the synthesised members), so the dispatch
-    /// picks at most one. Returns early when neither annotation is
-    /// present.
-    fileprivate func processScopeBoundType(
-        typeKind: String,
-        nameToken: TokenSyntax,
-        generics: GenericParameterClauseSyntax?,
-        attributes: AttributeListSyntax,
-        modifiers: DeclModifierListSyntax,
-        members: MemberBlockItemListSyntax
-    ) {
-        let scopeKey: ScopeKey?
-        if hasAttribute(attributes, named: "Singleton") {
-            scopeKey = nil
-        } else if let scopedAttribute = attribute(in: attributes, named: "Scoped"),
-            let seed = seedTypeExpression(from: scopedAttribute)
-        {
-            scopeKey = ScopeKey(seed: seed)
-        } else {
-            return
-        }
-        let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
-        let injectResult = extractInjectDependencies(
-            from: members,
-            hostTypeKind: typeKind,
-            sourcePath: sourcePath,
-            converter: converter
-        )
-        warnings.append(contentsOf: injectResult.diagnostics)
-        // `scopes` already includes this type's own frame (it was
-        // pushed by `enterTypeDecl`), so the joined names are the
-        // full qualified path.
-        let qualified = scopes.map(\.typeName).joined(separator: ".")
-        record(
-            .scopeBound(
-                DiscoveredScopeBoundType(
-                    typeName: nameToken.text,
-                    qualifiedTypeName: qualified,
-                    typeKind: typeKind,
-                    genericParameterNames: genericParameterNames,
-                    dependencies: injectResult.dependencies,
-                    location: location(of: nameToken),
-                    scopeKey: scopeKey,
-                    initIsAsync: injectResult.initIsAsync,
-                    initIsThrowing: injectResult.initIsThrowing,
-                    memberInjections: injectResult.memberInjections,
-                    accessLevel: accessLevel(from: modifiers)
+                    accessLevel: providerAccess
                 )
             )
         )

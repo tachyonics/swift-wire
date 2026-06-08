@@ -746,6 +746,166 @@ struct DiscoveryTests {
         #expect(AccessLevel.internal.isPubliclyExposed == false)
     }
 
+    // MARK: - Declaration-too-private diagnostics
+
+    @Test func privateSingletonEmitsDeclarationTooPrivateError() {
+        let source = """
+            @Singleton
+            private struct Hidden {
+            }
+            """
+        let result = discover(in: source, sourcePath: "Hidden.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Singleton type 'Hidden'") == true)
+        #expect(errors.first?.message.contains("'private'") == true)
+        #expect(errors.first?.message.contains("must be at least 'internal'") == true)
+    }
+
+    @Test func fileprivateSingletonEmitsDeclarationTooPrivateError() {
+        let source = """
+            @Singleton
+            fileprivate struct Hidden {
+            }
+            """
+        let result = discover(in: source, sourcePath: "Hidden.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("'fileprivate'") == true)
+    }
+
+    @Test func privateScopedEmitsDeclarationTooPrivateError() {
+        let source = """
+            @Scoped(seed: SessionSeed.self)
+            private struct Hidden {
+            }
+            """
+        let result = discover(in: source, sourcePath: "Hidden.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Scoped type 'Hidden'") == true)
+    }
+
+    @Test func internalSingletonDoesNotEmitDeclarationTooPrivateError() {
+        // Boundary check: the default access (`internal`) is visible
+        // to the generated bootstrap file, so no error fires.
+        let source = """
+            @Singleton
+            struct Visible {
+            }
+            """
+        let result = discover(in: source, sourcePath: "Visible.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.isEmpty)
+    }
+
+    @Test func privateProvidesLetEmitsDeclarationTooPrivateError() {
+        let source = """
+            @Provides private let logger: Logger = Logger()
+            """
+        let result = discover(in: source, sourcePath: "Logger.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Provides declaration 'logger'") == true)
+        #expect(errors.first?.message.contains("'private'") == true)
+    }
+
+    @Test func fileprivateProvidesFuncEmitsDeclarationTooPrivateError() {
+        let source = """
+            @Provides fileprivate func makeLogger() -> Logger { Logger() }
+            """
+        let result = discover(in: source, sourcePath: "Logger.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Provides function 'makeLogger'") == true)
+        #expect(errors.first?.message.contains("'fileprivate'") == true)
+    }
+
+    @Test func privateInjectInitEmitsDeclarationTooPrivateError() {
+        let source = """
+            @Singleton
+            struct Service {
+                @Inject private init(logger: Logger) {}
+            }
+            """
+        let result = discover(in: source, sourcePath: "Service.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Inject init") == true)
+        #expect(errors.first?.message.contains("'private'") == true)
+    }
+
+    @Test func privateInjectWeakVarEmitsErrorWithAsymmetryNote() {
+        let source = """
+            @Singleton
+            class View {
+                @Inject private weak var coordinator: Coordinator?
+            }
+            """
+        let result = discover(in: source, sourcePath: "View.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Inject weak var 'coordinator'") == true)
+        #expect(errors.first?.notes.count == 1)
+        #expect(errors.first?.notes.first?.message.contains("can be 'private'") == true)
+        #expect(errors.first?.notes.first?.message.contains("post-construct delivery") == true)
+    }
+
+    @Test func privateSetOnPublicInjectWeakVarEmitsSetterRestrictionError() {
+        let source = """
+            @Singleton
+            class View {
+                @Inject public private(set) weak var coordinator: Coordinator?
+            }
+            """
+        let result = discover(in: source, sourcePath: "View.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("setter is 'private(set)'") == true)
+        #expect(errors.first?.notes.first?.message.contains("Drop the setter restriction") == true)
+    }
+
+    @Test func privateInjectFuncEmitsErrorWithAsymmetryNote() {
+        let source = """
+            @Singleton
+            class View {
+                @Inject private func receive(data: Data) {}
+            }
+            """
+        let result = discover(in: source, sourcePath: "View.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Inject func 'receive'") == true)
+        #expect(errors.first?.notes.count == 1)
+        #expect(errors.first?.notes.first?.message.contains("can be 'private'") == true)
+    }
+
+    @Test func declarationTooPrivateInjectWeakVarStillCapturesInjection() {
+        // Error severity already fails the build before codegen, so
+        // the injection is still emitted into the discovery result —
+        // consistency with how `@Singleton` / `@Provides` errors don't
+        // skip their bindings either.
+        let source = """
+            @Singleton
+            class View {
+                @Inject private weak var coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.first?.memberInjections.count == 1)
+    }
+
+    @Test func declarationTooPrivateInjectFuncStillCapturesInjection() {
+        let source = """
+            @Singleton
+            class View {
+                @Inject private func receive(data: Data) {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.first?.memberInjections.count == 1)
+    }
+
     // MARK: - Parameter name edge cases
 
     @Test func injectInitWithWildcardParameterLabel() {
