@@ -1,5 +1,3 @@
-import SwiftSyntax
-
 /// Shared emission for visibility-driven diagnostics raised at discovery
 /// time. The model these diagnostics enforce — which binding surfaces
 /// must be reachable from Wire's generated bootstrap, and why — is
