@@ -23,6 +23,30 @@ import SwiftSyntax
 /// happens in the build plugin's discovery (which simply doesn't see
 /// them) and in the consumer's compiler errors if they `@Inject` a
 /// dependency no binding satisfies.
+
+/// One enclosing-type frame on `BindingDiscovery.scopes`.
+private struct VisitorScope {
+    /// Type name of this enclosing declaration. Joined with `.` to
+    /// produce qualified type names and `@Provides` access paths.
+    let typeName: String
+    /// Container the current declaration belongs to (`nil` = default
+    /// graph). Set to `typeName` when this scope is `@Container`-
+    /// annotated; otherwise inherits from the parent frame so nested
+    /// non-container types keep contributing to whatever container
+    /// their outer scope established.
+    let containerName: String?
+    /// Source-level access of this enclosing declaration, folded into
+    /// the effective access of every binding nested inside (so a
+    /// `@Provides` in a `private enum` is flagged unreachable even when
+    /// its own modifier is `internal`). See `effectiveAccess`.
+    let access: AccessLevel
+    /// Extended-type name when this scope is an *unannotated*
+    /// extension, used to record candidate `@Provides` declarations for
+    /// the extension-of-foreign-type warnings. `nil` for primary type
+    /// declarations and `@Container`-annotated extensions.
+    let unannotatedExtensionTarget: String?
+}
+
 final class BindingDiscovery: SyntaxVisitor {
     /// Every discovered binding partitioned by `(container, scope)`.
     /// `record(_:)` derives the partition from the current visitor
@@ -67,30 +91,9 @@ final class BindingDiscovery: SyntaxVisitor {
     /// One frame per enclosing type the visitor has entered, in
     /// outermost-to-innermost order. `scopes.last` is the immediate
     /// enclosing declaration; an empty stack means module scope.
-    /// Bundling the three pieces into one frame keeps push/pop atomic
-    /// — there's no way to forget to update one dimension on the way
-    /// out.
+    /// Bundling each frame's dimensions into one value keeps push/pop
+    /// atomic — there's no way to forget to update one on the way out.
     private var scopes: [VisitorScope] = []
-
-    private struct VisitorScope {
-        /// Type name of this enclosing declaration. Joined with `.`
-        /// to produce qualified type names and `@Provides` access
-        /// paths.
-        let typeName: String
-        /// Container the current declaration belongs to (`nil` =
-        /// default graph). Set to `typeName` when this scope is
-        /// `@Container`-annotated; otherwise inherits from the
-        /// parent frame so nested non-container types keep
-        /// contributing to whatever container their outer scope
-        /// established.
-        let containerName: String?
-        /// Extended-type name when this scope is an *unannotated*
-        /// extension, used to record candidate `@Provides`
-        /// declarations for the extension-of-foreign-type warnings.
-        /// `nil` for primary type declarations and `@Container`-
-        /// annotated extensions.
-        let unannotatedExtensionTarget: String?
-    }
 
     init(sourcePath: String, converter: SourceLocationConverter) {
         self.sourcePath = sourcePath
@@ -154,7 +157,7 @@ final class BindingDiscovery: SyntaxVisitor {
                 converter: converter
             )
         )
-        enterTypeDecl(name: node.name.text, attributes: node.attributes)
+        enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
         processScopeBoundType(
             typeKind: "struct",
             nameToken: node.name,
@@ -188,7 +191,7 @@ final class BindingDiscovery: SyntaxVisitor {
                 converter: converter
             )
         )
-        enterTypeDecl(name: node.name.text, attributes: node.attributes)
+        enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
         processScopeBoundType(
             typeKind: "class",
             nameToken: node.name,
@@ -222,7 +225,7 @@ final class BindingDiscovery: SyntaxVisitor {
                 converter: converter
             )
         )
-        enterTypeDecl(name: node.name.text, attributes: node.attributes)
+        enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
         processScopeBoundType(
             typeKind: "actor",
             nameToken: node.name,
@@ -261,7 +264,7 @@ final class BindingDiscovery: SyntaxVisitor {
                 converter: converter
             )
         )
-        enterTypeDecl(name: node.name.text, attributes: node.attributes)
+        enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
         return .visitChildren
     }
     override func visitPost(_ node: EnumDeclSyntax) {
@@ -312,6 +315,7 @@ final class BindingDiscovery: SyntaxVisitor {
         enterTypeDecl(
             name: extendedName,
             attributes: node.attributes,
+            modifiers: node.modifiers,
             unannotatedExtensionTarget: isAnnotatedAsContainer ? nil : extendedName
         )
         return .visitChildren
@@ -378,6 +382,7 @@ final class BindingDiscovery: SyntaxVisitor {
     private func enterTypeDecl(
         name: String,
         attributes: AttributeListSyntax,
+        modifiers: DeclModifierListSyntax,
         unannotatedExtensionTarget: String? = nil
     ) {
         let isContainer = hasAttribute(attributes, named: "Container")
@@ -385,6 +390,7 @@ final class BindingDiscovery: SyntaxVisitor {
             VisitorScope(
                 typeName: name,
                 containerName: isContainer ? name : scopes.last?.containerName,
+                access: accessLevel(from: modifiers),
                 unannotatedExtensionTarget: unannotatedExtensionTarget
             )
         )
@@ -438,11 +444,13 @@ extension BindingDiscovery {
             converter: converter
         )
         warnings.append(contentsOf: injectResult.diagnostics)
-        let hostAccess = accessLevel(from: modifiers)
+        // `dropLast` drops this type's own frame (pushed by
+        // `enterTypeDecl`) — only *enclosing* scopes cap its access.
         if let diagnostic = declarationTooPrivateDiagnostic(
             surfaceLabel: scopeKey == nil ? "@Singleton type" : "@Scoped type",
             name: nameToken.text,
-            access: hostAccess,
+            ownAccess: accessLevel(from: modifiers),
+            enclosing: scopes.dropLast().map { ($0.typeName, $0.access) },
             location: location(of: nameToken)
         ) {
             warnings.append(diagnostic)
@@ -510,7 +518,8 @@ extension BindingDiscovery {
         if let diagnostic = declarationTooPrivateDiagnostic(
             surfaceLabel: "@Provides declaration",
             name: propertyName,
-            access: providerAccess,
+            ownAccess: providerAccess,
+            enclosing: scopes.map { ($0.typeName, $0.access) },
             location: providerLocation
         ) {
             warnings.append(diagnostic)
@@ -581,7 +590,8 @@ extension BindingDiscovery {
         if let diagnostic = declarationTooPrivateDiagnostic(
             surfaceLabel: "@Provides function",
             name: functionName,
-            access: providerAccess,
+            ownAccess: providerAccess,
+            enclosing: scopes.map { ($0.typeName, $0.access) },
             location: providerLocation
         ) {
             warnings.append(diagnostic)

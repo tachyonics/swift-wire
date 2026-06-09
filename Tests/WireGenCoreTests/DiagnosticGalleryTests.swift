@@ -510,6 +510,23 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("@Provides declaration 'logger' is 'private'"))
     }
 
+    @Test func providesInPrivateEnclosingEnumRendersAsError() throws {
+        // Enclosing-scope variant: the `@Provides` carries no modifier,
+        // so the message must explain the effective-access reasoning and
+        // point the fix at the enum rather than the binding.
+        let source = """
+            private enum Config {
+                @Provides static let baseURL: URL = URL(string: "...")!
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "Config.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("Config.swift:2:26: error:"))
+        #expect(rendered.contains("@Provides declaration 'baseURL' is effectively 'private'"))
+        #expect(rendered.contains("enclosing scope 'Config' is 'private'"))
+        #expect(rendered.contains("Raise 'Config' to 'internal', 'package', or 'public'"))
+    }
+
     @Test func privateInjectWeakVarRendersWithAsymmetryNote() throws {
         // The asymmetry note is the load-bearing piece — without it
         // the user wonders why their constructor-injected
