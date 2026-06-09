@@ -906,6 +906,121 @@ struct DiscoveryTests {
         #expect(result.first?.memberInjections.count == 1)
     }
 
+    // MARK: - Declaration-too-private via enclosing scope
+
+    @Test func providesInPrivateEnclosingEnumEmitsDeclarationTooPrivateError() {
+        // The canonical caseless-enum-as-namespace pattern, but the
+        // enclosing enum is `private`. The `@Provides` itself carries no
+        // modifier (so reads as `internal` in isolation), yet Swift caps
+        // its effective access at `private` — unreachable from Wire's
+        // bootstrap. The diagnostic must name the enum, not the binding.
+        let source = """
+            private enum Config {
+                @Provides static let baseURL: URL = URL(string: "...")!
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Provides declaration 'baseURL'") == true)
+        #expect(errors.first?.message.contains("effectively 'private'") == true)
+        #expect(errors.first?.message.contains("enclosing scope 'Config' is 'private'") == true)
+        #expect(errors.first?.message.contains("Raise 'Config'") == true)
+    }
+
+    @Test func providesFuncInFileprivateEnclosingEnumEmitsDeclarationTooPrivateError() {
+        let source = """
+            fileprivate enum Config {
+                @Provides static func makeLogger() -> Logger { Logger() }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Provides function 'makeLogger'") == true)
+        #expect(errors.first?.message.contains("effectively 'fileprivate'") == true)
+        #expect(errors.first?.message.contains("enclosing scope 'Config' is 'fileprivate'") == true)
+    }
+
+    @Test func singletonNestedInPrivateTypeEmitsDeclarationTooPrivateError() {
+        // The nested type's own modifier is `internal`, but the
+        // `private` outer struct caps it. The `@Singleton` surface
+        // catches the enclosing restriction the same way `@Provides`
+        // does.
+        let source = """
+            private struct Outer {
+                @Singleton
+                struct Inner {
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Outer.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Singleton type 'Inner'") == true)
+        #expect(errors.first?.message.contains("enclosing scope 'Outer' is 'private'") == true)
+    }
+
+    @Test func providesInInternalEnclosingEnumDoesNotEmitError() {
+        // Boundary: an `internal` (default) enclosing enum is visible to
+        // the generated bootstrap, so a non-annotated `@Provides` inside
+        // it stays reachable — no error.
+        let source = """
+            enum Config {
+                @Provides static let baseURL: URL = URL(string: "...")!
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.isEmpty)
+    }
+
+    @Test func providesInPublicEnclosingEnumDoesNotEmitError() {
+        let source = """
+            public enum Config {
+                @Provides static let baseURL: URL = URL(string: "...")!
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.isEmpty)
+    }
+
+    @Test func providesInNestedEnumsBlamesMostRestrictiveEnclosingScope() {
+        // The binding sits inside a `public` inner enum nested in a
+        // `private` outer enum. The effective access is `private`, and
+        // the diagnostic must point at the outer enum — the actual
+        // limiter — not the innocuous `public` inner one.
+        let source = """
+            private enum Outer {
+                public enum Inner {
+                    @Provides static let baseURL: URL = URL(string: "...")!
+                }
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("enclosing scope 'Outer' is 'private'") == true)
+    }
+
+    @Test func ownPrivateModifierWinsOverEnclosingScopeInDiagnostic() {
+        // When the binding's own modifier is already too private, that's
+        // the primary fix — the message uses the own-modifier wording
+        // ("is 'private' but must be") rather than redirecting blame to
+        // the enclosing scope.
+        let source = """
+            private enum Config {
+                @Provides private static let baseURL: URL = URL(string: "...")!
+            }
+            """
+        let result = discover(in: source, sourcePath: "Config.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Provides declaration 'baseURL' is 'private'") == true)
+        #expect(errors.first?.message.contains("effectively") == false)
+    }
+
     // MARK: - Parameter name edge cases
 
     @Test func injectInitWithWildcardParameterLabel() {

@@ -557,6 +557,30 @@ package enum AccessLevel: Sendable, Equatable {
         case .private: return "private"
         }
     }
+
+    /// Ordering from least restrictive (`open` = 0) to most restrictive
+    /// (`private` = 5). Used to combine a declaration's own access with
+    /// the access of every enclosing scope: Swift caps a member's
+    /// *effective* access at the most restrictive level in that chain.
+    package var restrictionRank: Int {
+        switch self {
+        case .open: return 0
+        case .public: return 1
+        case .package: return 2
+        case .internal: return 3
+        case .fileprivate: return 4
+        case .private: return 5
+        }
+    }
+
+    /// The more restrictive of `self` and `other` — i.e. the effective
+    /// access of a declaration written at `self` but nested inside a
+    /// scope whose access is `other`. A `@Provides` written `internal`
+    /// inside a `private enum` is effectively `private`, and so
+    /// invisible to Wire's generated bootstrap.
+    package func mostRestrictive(with other: AccessLevel) -> AccessLevel {
+        restrictionRank >= other.restrictionRank ? self : other
+    }
 }
 
 package enum DependencyKind: Sendable, Equatable {
