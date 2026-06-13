@@ -347,10 +347,11 @@ struct DiscoveryTests {
 
     @Test func weakInjectVarBecomesPropertyAssignmentMemberInjection() {
         // `@Inject weak var x: T?` is sugar for a member injection
-        // with `.propertyAssignment` shape. The Optional `?` is
-        // stripped from the parameter's resolution type so the dep
-        // matches the producer's `T` binding (Swift requires weak
-        // storage to be Optional, but the graph identity is on `T`).
+        // with `.propertyAssignment` shape. Discovery keeps the full
+        // declared type (`Coordinator?`) — type identity stays honest;
+        // the graph resolver promotes it against the `Coordinator`
+        // producer (asymmetric optional promotion). See
+        // OptionalMatchingAndCycles.md.
         let source = """
             @Singleton
             final class View {
@@ -364,10 +365,35 @@ struct DiscoveryTests {
         let injection = result[0].memberInjections[0]
         #expect(injection.shape == .propertyAssignment(propertyName: "coordinator"))
         #expect(injection.parameters.count == 1)
-        #expect(injection.parameters[0].type == "Coordinator")
+        #expect(injection.parameters[0].type == "Coordinator?")
         #expect(injection.parameters[0].kind == .injectMethodParameter)
         #expect(injection.isAsync == false)
         #expect(injection.isThrowing == false)
+    }
+
+    @Test func weakInjectVarWithIUOBecomesPropertyAssignmentMemberInjection() {
+        // The IUO spelling `weak var x: T!` is recognized the same as
+        // `T?` — weak detection keys on the `weak` modifier, not the
+        // optional sugar. Discovery captures the full declared type
+        // (`Coordinator!`, an `ImplicitlyUnwrappedOptionalTypeSyntax`
+        // node); the graph resolver normalizes the IUO and promotes it
+        // against the `Coordinator` producer. See
+        // OptionalMatchingAndCycles.md.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak var coordinator: Coordinator!
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.isEmpty)
+        #expect(result[0].memberInjections.count == 1)
+        let injection = result[0].memberInjections[0]
+        #expect(injection.shape == .propertyAssignment(propertyName: "coordinator"))
+        #expect(injection.parameters.count == 1)
+        #expect(injection.parameters[0].type == "Coordinator!")
+        #expect(injection.parameters[0].kind == .injectMethodParameter)
     }
 
     @Test func injectFuncBecomesMethodCallMemberInjection() {
