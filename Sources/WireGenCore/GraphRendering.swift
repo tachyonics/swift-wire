@@ -143,6 +143,19 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
                 "\(missing.dependency.location.formattedPrefix): note: \(hint.fixItSuggestion)"
             )
         }
+        if let hint = missing.optionalMismatchHint {
+            let base = optionalityStripped(missing.dependency.type).base
+            switch hint {
+            case .optionalProducerCannotSatisfyNonOptional:
+                lines.append(
+                    "\(missing.dependency.location.formattedPrefix): note: a '\(base)?' producer exists but can't satisfy non-optional '\(base)' (a '\(base)?' may be nil) — change the consumer to '\(base)?', or have the producer return '\(base)'"
+                )
+            case .optionalNeedsExplicitProducer:
+                lines.append(
+                    "\(missing.dependency.location.formattedPrefix): note: Wire never injects nil for an absent binding; an optional dependency still needs an explicit producer (return '\(base)', or '\(base)?' if it may be nil)"
+                )
+            }
+        }
     }
 
     // Identifier collisions: primary error at the first colliding

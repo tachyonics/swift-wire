@@ -96,6 +96,48 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("typealiases aren't unwrapped"))
     }
 
+    @Test func missingBindingForNonOptionalWithOptionalProducerRendersAsymmetryNote() throws {
+        // `App` injects a non-optional `Logger`, but the only producer
+        // returns `Logger?`. The asymmetry leaves it unmatched (a
+        // `Logger?` may be nil); the note explains why and points at the
+        // two clean fixes — without suggesting a second producer, which
+        // would collide with the existing one.
+        let source = """
+            @Provides let logger: Logger? = nil
+
+            @Singleton
+            struct App {
+                @Inject var logger: Logger
+            }
+            """
+        let (_, rendered) = validate(source: source, sourcePath: "App.swift")
+        #expect(rendered.contains("error: no binding produces 'Logger'"))
+        #expect(
+            rendered.contains(
+                "note: a 'Logger?' producer exists but can't satisfy non-optional 'Logger'"
+            )
+        )
+        #expect(
+            rendered.contains("change the consumer to 'Logger?', or have the producer return 'Logger'")
+        )
+    }
+
+    @Test func missingOptionalBindingRendersNeedsExplicitProducerNote() throws {
+        // `App` injects `Logger?` but nothing produces it. Wire never
+        // injects nil for an absent binding, so this is a missing binding;
+        // the note reminds the user an optional dep still needs a producer.
+        let source = """
+            @Singleton
+            struct App {
+                @Inject var logger: Logger?
+            }
+            """
+        let (_, rendered) = validate(source: source, sourcePath: "App.swift")
+        #expect(rendered.contains("error: no binding produces 'Logger?'"))
+        #expect(rendered.contains("note: Wire never injects nil for an absent binding"))
+        #expect(rendered.contains("an optional dependency still needs an explicit producer"))
+    }
+
     // MARK: - Dependency cycles
 
     @Test func twoNodeCycleRendersWithArrowsAtFirstNode() throws {

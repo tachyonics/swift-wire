@@ -356,6 +356,24 @@ struct GraphTests {
         let missing = try #require(errors.missingBindings.first)
         #expect(missing.dependency.type == "Logger")
         #expect(missing.consumer.boundType == "App")
+        // The diagnostic must point at the optional producer, not just
+        // report a generic missing binding.
+        #expect(missing.optionalMismatchHint == .optionalProducerCannotSatisfyNonOptional)
+    }
+
+    @Test func optionalDepWithNoProducerStillNeedsExplicitProducer() throws {
+        // A `Logger?` consumer with NO producer is a missing binding, not
+        // a silent nil — Wire never injects nil for an absent binding.
+        // The hint reminds the user an optional dep still needs a
+        // producer. See OptionalMatchingAndCycles.md.
+        let result = buildDependencyGraph(from: [
+            singleton("App", dependencies: [(name: "logger", type: "Logger?")])
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        let missing = try #require(errors.missingBindings.first)
+        #expect(missing.dependency.type == "Logger?")
+        #expect(missing.optionalMismatchHint == .optionalNeedsExplicitProducer)
     }
 
     @Test func optionalDepMatchesExplicitOptionalProducerExactly() throws {

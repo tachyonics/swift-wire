@@ -89,17 +89,24 @@ package struct MissingBinding: Sendable {
     /// directly. Renders as `note:` lines beneath the primary
     /// missing-binding error, including a fix-it suggestion.
     package let crossScopeHint: CrossScopeHint?
+    /// Optional hint surfaced when the dependency went unmatched because
+    /// of an *optionality* mismatch — a non-optional dependency with only
+    /// an optional producer (the asymmetry), or a missing optional that
+    /// still needs an explicit producer. Renders as a `note:` line.
+    package let optionalMismatchHint: OptionalMismatchHint?
 
     package init(
         consumer: DiscoveredBinding,
         dependency: DependencyParameter,
         typealiasHint: TypealiasHint? = nil,
-        crossScopeHint: CrossScopeHint? = nil
+        crossScopeHint: CrossScopeHint? = nil,
+        optionalMismatchHint: OptionalMismatchHint? = nil
     ) {
         self.consumer = consumer
         self.dependency = dependency
         self.typealiasHint = typealiasHint
         self.crossScopeHint = crossScopeHint
+        self.optionalMismatchHint = optionalMismatchHint
     }
 }
 
@@ -800,7 +807,7 @@ private func resolveDependencies(
                 // promotion (a `T?` dep resolves to the `T` producer);
                 // the edge must point at the actual producer node.
                 resolved.append(producerIdentity)
-            case .missing:
+            case .missing(let optionalHint):
                 missing.append(
                     MissingBinding(
                         consumer: binding,
@@ -809,7 +816,8 @@ private func resolveDependencies(
                             dependency: dependency,
                             typealiasByName: typealiasByName,
                             resolvedBindings: resolvedBindings
-                        )
+                        ),
+                        optionalMismatchHint: optionalHint
                     )
                 )
             }
@@ -824,7 +832,10 @@ private func resolveDependencies(
         // for the design depth.
         for injection in binding.memberInjections {
             for parameter in injection.parameters {
-                if case .missing = matchProducer(for: parameter.identity, in: resolvedBindings) {
+                if case .missing(let optionalHint) = matchProducer(
+                    for: parameter.identity,
+                    in: resolvedBindings
+                ) {
                     missing.append(
                         MissingBinding(
                             consumer: binding,
@@ -833,7 +844,8 @@ private func resolveDependencies(
                                 dependency: parameter,
                                 typealiasByName: typealiasByName,
                                 resolvedBindings: resolvedBindings
-                            )
+                            ),
+                            optionalMismatchHint: optionalHint
                         )
                     )
                 }
