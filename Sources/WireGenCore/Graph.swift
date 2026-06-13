@@ -274,10 +274,6 @@ package struct IdentifierCollision: Sendable {
 
 // MARK: - Graph construction
 //
-// The binding-identity and optional-matching layer (`BindingIdentity`,
-// `canonicalTypeName`, `optionalityStripped`, `matchProducer`) lives in
-// `BindingIdentity.swift`.
-
 /// Drive the specialisation phase: walk each binding's deps, attempt
 /// to specialise a generic binding for any unresolved concrete
 /// instantiation, and add the resulting specialised binding to
