@@ -4,6 +4,12 @@
 > Captures the shape so the work is ready to start when the
 > iteration begins. Not yet implemented.
 
+> **See also:** [`OptionalMatchingAndCycles.md`](OptionalMatchingAndCycles.md)
+> pins the cross-cutting model this note feeds into — the
+> `weak var` / `weak let` / `Lazy` cycle-breaking taxonomy and the
+> optional promotion rule that supersedes the discovery-time `?`-strip
+> described here.
+
 ## Motivation
 
 Cycle-breaking in DI graphs. The canonical case: two
