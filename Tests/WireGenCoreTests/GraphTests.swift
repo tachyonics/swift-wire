@@ -307,13 +307,16 @@ struct GraphTests {
 
     @Test func weakOptionalDepPromotesToNonOptionalProducer() throws {
         // `@Inject weak var x: Coordinator?` resolves against a
-        // `Coordinator` producer via promotion — no missing binding.
+        // `Coordinator` producer via promotion. `#require`-ing the order
+        // proves resolution succeeded (a missing binding would fail the
+        // build); the weak dep is a member injection so it forms no edge,
+        // hence the set rather than an ordered assertion.
         let result = buildDependencyGraph(from: [
             singletonWithWeakDep("View", depName: "coordinator", depType: "Coordinator?"),
             singleton("Coordinator"),
         ])
-        #expect(result.outcome.validationErrors == nil)
-        #expect(result.outcome.topologicalOrder != nil)
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(Set(order.map(\.boundType)) == ["View", "Coordinator"])
     }
 
     @Test func weakIUODepPromotesToNonOptionalProducer() throws {
@@ -324,46 +327,47 @@ struct GraphTests {
             singletonWithWeakDep("View", depName: "coordinator", depType: "Coordinator!"),
             singleton("Coordinator"),
         ])
-        #expect(result.outcome.validationErrors == nil)
-        #expect(result.outcome.topologicalOrder != nil)
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(Set(order.map(\.boundType)) == ["View", "Coordinator"])
     }
 
     @Test func initTimeOptionalDepPromotesAndFormsEdge() throws {
         // An init-time `T?` dep (the shape `@Inject weak let` produces)
-        // promotes against the `T` producer AND forms a real graph edge:
-        // the producer sorts before its consumer.
+        // promotes against the `T` producer AND forms a real graph edge,
+        // so the producer is constructed before its consumer.
         let result = buildDependencyGraph(from: [
             singleton("View", dependencies: [(name: "coordinator", type: "Coordinator?")]),
             singleton("Coordinator"),
         ])
         let order = try #require(result.outcome.topologicalOrder)
-        let names = order.map(\.boundType)
-        let coordinator = try #require(names.firstIndex(of: "Coordinator"))
-        let view = try #require(names.firstIndex(of: "View"))
-        #expect(coordinator < view)
+        #expect(order.map(\.boundType) == ["Coordinator", "View"])
     }
 
     @Test func nonOptionalDepIsNotSatisfiedByOptionalProducer() throws {
         // The asymmetry: a non-optional `Logger` consumer is NOT
         // satisfied by a `Logger?` producer — you cannot silently
-        // force-unwrap. Reported as a missing binding.
+        // force-unwrap. Reported as a missing binding for `Logger`.
         let result = buildDependencyGraph(from: [
             singleton("App", dependencies: [(name: "logger", type: "Logger")]),
             providerProperty("Config.logger", boundType: "Logger?"),
         ])
         let errors = try #require(result.outcome.validationErrors)
-        #expect(errors.missingBindings.contains { $0.dependency.type == "Logger" })
+        #expect(errors.missingBindings.count == 1)
+        let missing = try #require(errors.missingBindings.first)
+        #expect(missing.dependency.type == "Logger")
+        #expect(missing.consumer.boundType == "App")
     }
 
     @Test func optionalDepMatchesExplicitOptionalProducerExactly() throws {
         // An explicit `@Provides -> Logger?` producer satisfies a
-        // `Logger?` consumer by exact match (no promotion needed).
+        // `Logger?` consumer by exact match (no promotion needed); the
+        // producer is constructed before its consumer.
         let result = buildDependencyGraph(from: [
             singleton("App", dependencies: [(name: "logger", type: "Logger?")]),
             providerProperty("Config.logger", boundType: "Logger?"),
         ])
-        #expect(result.outcome.validationErrors == nil)
-        #expect(result.outcome.topologicalOrder != nil)
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(order.map(\.boundType) == ["Logger?", "App"])
     }
 
     @Test func optionalAndNonOptionalProducersCollideOnGeneratedName() throws {
@@ -377,7 +381,10 @@ struct GraphTests {
             providerProperty("Config.maybeLogger", boundType: "Logger?"),
         ])
         let errors = try #require(result.outcome.validationErrors)
-        #expect(!errors.identifierCollisions.isEmpty)
+        #expect(errors.identifierCollisions.count == 1)
+        let collision = try #require(errors.identifierCollisions.first)
+        #expect(collision.identifier == "logger")
+        #expect(collision.bindings.count == 2)
     }
 
     // MARK: - Missing bindings
