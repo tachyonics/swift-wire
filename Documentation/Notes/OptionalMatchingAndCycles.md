@@ -182,19 +182,28 @@ against a `T` producer."
 
 ### Two cycles, two mechanisms
 
-A reference cycle in a DI graph is really *two* cycles, and a usable
-break has to sever both:
+A reference cycle in a DI graph is really *two* cycles. The second is
+**Swift-specific**, and conflating them is the trap most of the
+cross-language prior art falls into:
 
 1. **The construction-order cycle** — "can the graph even be built?" A
    needs B at init, B needs A at init: neither can go first. Severed by
    **post-construct delivery** (a *timing* property): construct one end
-   without the back-edge, deliver the back-edge after.
+   without the back-edge, deliver the back-edge after. This cycle is
+   **universal** — every DI framework, in every language, faces it.
 2. **The reference-counting cycle** — "does it leak?" A retains B, B
    retains A: under ARC neither ever reaches refcount zero. Severed by a
-   **weak / unowned** back-edge (a *retain* property).
+   **weak / unowned** back-edge (a *retain* property). This cycle is
+   specific to **refcounted memory** (ARC, Objective-C, C++
+   `shared_ptr`). **GC languages do not have it** — a garbage collector
+   reclaims a strong reference cycle, so Java/Kotlin DI (Dagger, Guice)
+   only ever faces cycle #1.
 
-These axes are orthogonal, and **a real cycle-breaker needs both**.
-That single fact determines the whole taxonomy.
+The axes are orthogonal, and **in Swift a usable cycle-breaker must
+sever both**. That single fact — together with the fact that cycle #2 is
+ours to worry about and Dagger's is not — determines the whole taxonomy,
+and is exactly why Dagger's strong lazy/provider indirection (perfectly
+safe under GC) does not port to ARC.
 
 ### The taxonomy
 
