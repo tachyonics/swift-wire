@@ -378,8 +378,7 @@ struct DiscoveryTests {
         // (`Coordinator!`, an `ImplicitlyUnwrappedOptionalTypeSyntax`
         // node); the graph resolver normalizes the IUO and promotes it
         // against the `Coordinator` producer. See
-        // OptionalMatchingAndCycles.md. (The old discovery `?`-strip only
-        // handled `OptionalTypeSyntax`, so this form used to be missed.)
+        // OptionalMatchingAndCycles.md.
         let source = """
             @Singleton
             final class View {
