@@ -100,8 +100,25 @@ enum DependencyMatch {
     /// differs from the dependency's own identity: a `T?` dependency
     /// resolves to the `T` producer.
     case resolved(BindingIdentity)
-    /// No producer satisfies the dependency.
-    case missing
+    /// No producer satisfies the dependency. The associated hint, when
+    /// present, explains an *optionality* mismatch so the missing-binding
+    /// diagnostic can guide the fix.
+    case missing(OptionalMismatchHint?)
+}
+
+/// An optionality-specific reason a dependency went unmatched, surfaced
+/// as a `note:` beneath the missing-binding error. See
+/// `OptionalMatchingAndCycles.md`.
+package enum OptionalMismatchHint: Sendable, Equatable {
+    /// A non-optional dependency where a producer of its *optional* form
+    /// exists — the asymmetry (`T?` can't satisfy `T`). The fix is to
+    /// change the consumer to `T?` or have the producer return `T`; the
+    /// renderer derives the type from the dependency.
+    case optionalProducerCannotSatisfyNonOptional
+    /// An optional dependency with no producer at all — a reminder that
+    /// Wire never injects nil for an absent binding, so even an optional
+    /// dependency needs an explicit producer.
+    case optionalNeedsExplicitProducer
 }
 
 func matchProducer(
@@ -114,6 +131,14 @@ func matchProducer(
     if dependency.isOptional {
         let promoted = BindingIdentity(base: dependency.base, isOptional: false, key: dependency.key)
         if producers[promoted] != nil { return .resolved(promoted) }
+        // Optional dep, nothing matched: neither `T?` nor `T` is bound.
+        return .missing(.optionalNeedsExplicitProducer)
     }
-    return .missing
+    // Non-optional dep: if only the optional form is bound, that's the
+    // asymmetry — flag it so the diagnostic can say why and how to fix.
+    let optionalProducer = BindingIdentity(base: dependency.base, isOptional: true, key: dependency.key)
+    if producers[optionalProducer] != nil {
+        return .missing(.optionalProducerCannotSatisfyNonOptional)
+    }
+    return .missing(nil)
 }
