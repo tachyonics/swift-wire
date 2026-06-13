@@ -371,6 +371,32 @@ struct DiscoveryTests {
         #expect(injection.isThrowing == false)
     }
 
+    @Test func weakInjectVarWithIUOBecomesPropertyAssignmentMemberInjection() {
+        // The IUO spelling `weak var x: T!` is recognized the same as
+        // `T?` — weak detection keys on the `weak` modifier, not the
+        // optional sugar. Discovery captures the full declared type
+        // (`Coordinator!`, an `ImplicitlyUnwrappedOptionalTypeSyntax`
+        // node); the graph resolver normalizes the IUO and promotes it
+        // against the `Coordinator` producer. See
+        // OptionalMatchingAndCycles.md. (The old discovery `?`-strip only
+        // handled `OptionalTypeSyntax`, so this form used to be missed.)
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak var coordinator: Coordinator!
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.isEmpty)
+        #expect(result[0].memberInjections.count == 1)
+        let injection = result[0].memberInjections[0]
+        #expect(injection.shape == .propertyAssignment(propertyName: "coordinator"))
+        #expect(injection.parameters.count == 1)
+        #expect(injection.parameters[0].type == "Coordinator!")
+        #expect(injection.parameters[0].kind == .injectMethodParameter)
+    }
+
     @Test func injectFuncBecomesMethodCallMemberInjection() {
         // The general form: `@Inject func setX(_ x: T)` captures the
         // method's parameter list as the injection's parameters and
