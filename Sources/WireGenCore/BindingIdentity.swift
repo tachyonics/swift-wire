@@ -1,8 +1,6 @@
 /// The binding-identity and optional-matching layer: how a dependency's
 /// type is canonicalised into a graph slot, and how a dependency is
-/// matched to a producer under asymmetric optional promotion. Extracted
-/// from `Graph.swift` so the resolver's matching rule lives in one place.
-/// The model is pinned in `OptionalMatchingAndCycles.md`.
+/// matched to a producer under asymmetric optional promotion.
 
 /// Strip whitespace from a type expression so cosmetic variations
 /// resolve to the same graph slot. `Router<X, Y>` and `Router<X,Y>`
