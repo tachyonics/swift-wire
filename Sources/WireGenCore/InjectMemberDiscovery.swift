@@ -343,10 +343,11 @@ private func applyInjectVar(
 }
 
 /// Build a `.propertyAssignment` member injection from an `@Inject
-/// weak var x: T?` binding. Strips the Optional `?` (when present)
-/// so the parameter resolves against the producer's `T` binding,
-/// not against `T?`. The storage shape on the consumer's class
-/// stays `T?` — that's Swift's requirement for weak.
+/// weak var x: T?` (or `T!`) binding. The parameter keeps the full
+/// declared optional type; the graph resolver promotes it against the
+/// producer's `T` binding (asymmetric optional promotion — see
+/// `OptionalMatchingAndCycles.md`). The storage shape on the consumer's
+/// class stays `T?` — Swift's requirement for weak.
 private func propertyAssignmentInjection(
     propertyName: String,
     typeAnnotation: TypeSyntax,
@@ -355,15 +356,9 @@ private func propertyAssignmentInjection(
     accessLevel: AccessLevel,
     setterAccessLevel: AccessLevel?
 ) -> MemberInjection {
-    let resolutionType: String
-    if let optType = typeAnnotation.as(OptionalTypeSyntax.self) {
-        resolutionType = optType.wrappedType.trimmedDescription
-    } else {
-        resolutionType = typeAnnotation.trimmedDescription
-    }
     let parameter = DependencyParameter(
         name: nil,
-        type: resolutionType,
+        type: typeAnnotation.trimmedDescription,
         kind: .injectMethodParameter,
         location: location,
         keyIdentifier: propertyKey

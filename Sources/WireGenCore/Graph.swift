@@ -273,61 +273,10 @@ package struct IdentifierCollision: Sendable {
 }
 
 // MARK: - Graph construction
-
-/// Compound identity for a binding — `(boundType, keyIdentifier?)`.
-/// Two bindings with the same `type` but different `key`s coexist; same
-/// `type` and same `key` are duplicates. Unkeyed deps (`key == nil`)
-/// match only unkeyed bindings; keyed deps match only same-key bindings
-/// — keys partition the binding space (Dagger semantics).
-private struct BindingIdentity: Hashable, Comparable {
-    let type: String
-    let key: String?
-
-    static func < (lhs: Self, rhs: Self) -> Bool {
-        if lhs.type != rhs.type { return lhs.type < rhs.type }
-        // Unkeyed sorts before any keyed identity; among keyed, sort
-        // by key text. `nil` and `""` would otherwise compare as
-        // equivalent under a `?? ""` coalesce while being distinct
-        // under the auto-synthesised `Hashable`, leading to undefined
-        // sort order between them if both ever appeared in the same
-        // collection.
-        switch (lhs.key, rhs.key) {
-        case (nil, nil): return false
-        case (nil, _?): return true
-        case (_?, nil): return false
-        case let (lhsKey?, rhsKey?): return lhsKey < rhsKey
-        }
-    }
-}
-
-extension DiscoveredBinding {
-    fileprivate var identity: BindingIdentity {
-        BindingIdentity(type: canonicalTypeName(boundType), key: keyIdentifier)
-    }
-}
-
-extension DependencyParameter {
-    fileprivate var identity: BindingIdentity {
-        BindingIdentity(type: canonicalTypeName(type), key: keyIdentifier)
-    }
-}
-
-/// Strip whitespace from a type expression so cosmetic variations
-/// resolve to the same graph slot. `Router<X, Y>` and `Router<X,Y>`
-/// both canonicalise to `Router<X,Y>`; `Dictionary<String, [Int]>` and
-/// `Dictionary<String,[Int]>` both canonicalise to
-/// `Dictionary<String,[Int]>`. The M0 spike 3 finding: SwiftSyntax's
-/// `trimmedDescription` preserves internal whitespace verbatim, so two
-/// users writing the same type with different formatting would
-/// previously fail to resolve against each other.
-///
-/// Codegen continues to use the binding's original `boundType` text
-/// (whatever the user wrote) — only the *identity* used for graph
-/// lookup is canonicalised. The generated file keeps idiomatic
-/// formatting; only the resolution layer normalises.
-package func canonicalTypeName(_ raw: String) -> String {
-    raw.filter { !$0.isWhitespace }
-}
+//
+// The binding-identity and optional-matching layer (`BindingIdentity`,
+// `canonicalTypeName`, `optionalityStripped`, `matchProducer`) lives in
+// `BindingIdentity.swift`.
 
 /// Drive the specialisation phase: walk each binding's deps, attempt
 /// to specialise a generic binding for any unresolved concrete
@@ -412,7 +361,7 @@ private func specialiseGenericBindings(
             {
                 ambiguities.append(
                     DuplicateBinding(
-                        boundType: dep.identity.type,
+                        boundType: dep.identity.displayType,
                         keyIdentifier: dep.identity.key,
                         bindings: [concrete] + genericCandidates
                     )
@@ -430,7 +379,7 @@ private func specialiseGenericBindings(
             if !ambiguitiesReported.contains(dep.identity) {
                 ambiguities.append(
                     DuplicateBinding(
-                        boundType: dep.identity.type,
+                        boundType: dep.identity.displayType,
                         keyIdentifier: dep.identity.key,
                         bindings: genericCandidates
                     )
@@ -783,7 +732,7 @@ private func splitUniqueFromDuplicates(
         } else {
             duplicates.append(
                 DuplicateBinding(
-                    boundType: identity.type,
+                    boundType: identity.displayType,
                     keyIdentifier: identity.key,
                     bindings: group
                 )
@@ -849,10 +798,13 @@ private func resolveDependencies(
         // Init-time deps: form graph edges (drive topo sort and
         // cycle detection). Missing ones produce errors.
         for dependency in binding.dependencies {
-            let depIdentity = dependency.identity
-            if resolvedBindings[depIdentity] != nil {
-                resolved.append(depIdentity)
-            } else {
+            switch matchProducer(for: dependency.identity, in: resolvedBindings) {
+            case .resolved(let producerIdentity):
+                // May differ from the dependency's own identity under
+                // promotion (a `T?` dep resolves to the `T` producer);
+                // the edge must point at the actual producer node.
+                resolved.append(producerIdentity)
+            case .missing:
                 missing.append(
                     MissingBinding(
                         consumer: binding,
@@ -876,8 +828,7 @@ private func resolveDependencies(
         // for the design depth.
         for injection in binding.memberInjections {
             for parameter in injection.parameters {
-                let depIdentity = parameter.identity
-                if resolvedBindings[depIdentity] == nil {
+                if case .missing = matchProducer(for: parameter.identity, in: resolvedBindings) {
                     missing.append(
                         MissingBinding(
                             consumer: binding,
@@ -906,8 +857,10 @@ private func typealiasHintFor(
     resolvedBindings: [BindingIdentity: DiscoveredBinding]
 ) -> TypealiasHint? {
     guard let typealiasDecl = typealiasByName[dependency.type] else { return nil }
+    let underlyingSplit = optionalityStripped(canonicalTypeName(typealiasDecl.underlyingType))
     let underlyingIdentity = BindingIdentity(
-        type: canonicalTypeName(typealiasDecl.underlyingType),
+        base: underlyingSplit.base,
+        isOptional: underlyingSplit.isOptional,
         key: dependency.keyIdentifier
     )
     guard resolvedBindings[underlyingIdentity] != nil else { return nil }
