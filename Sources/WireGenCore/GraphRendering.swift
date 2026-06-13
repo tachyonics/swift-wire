@@ -64,120 +64,116 @@ package func renderDiagnostics(_ diagnostics: [Diagnostic]) -> String {
 /// validator produced them.
 package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> String {
     var lines: [String] = []
-
-    // Duplicate bindings: one error at the first binding's location,
-    // notes at the remaining bindings. When the duplicates are all
-    // unkeyed, append a fix-it note pointing at the key-disambiguation
-    // pattern. Keyed duplicates already named their key, so the user
-    // knows which slot is overloaded — no need to suggest keying.
     for duplicate in errors.duplicateBindings {
-        guard let primary = duplicate.bindings.first else { continue }
-        let typeSlot = describeTypeSlot(
-            boundType: duplicate.boundType,
-            key: duplicate.keyIdentifier
-        )
-        lines.append(
-            "\(primary.location.formattedPrefix): error: type \(typeSlot) has multiple bindings; the dependency graph is ambiguous"
-        )
-        for binding in duplicate.bindings.dropFirst() {
-            lines.append(
-                "\(binding.location.formattedPrefix): note: also bound here"
-            )
-        }
-        if duplicate.keyIdentifier == nil {
-            lines.append(
-                "\(primary.location.formattedPrefix): note: to disambiguate, declare named keys (e.g. `static let primary = BindingKey<\(duplicate.boundType)>()`) and tag each binding/consumer with `@Provides(\(duplicate.boundType).primary)` / `@Inject(\(duplicate.boundType).primary)`"
-            )
-        }
+        lines.append(contentsOf: duplicateBindingLines(duplicate))
     }
-
-    // Cycles: anchor at the first node in the cycle path. The arrow-
-    // separated render reads as "A → B → A" so the user can see the
-    // edges at a glance.
     for cycle in errors.cycles {
-        guard let anchor = cycle.first else { continue }
-        let path = cycle.map { displayName($0) }.joined(separator: " → ")
-        lines.append(
-            "\(anchor.location.formattedPrefix): error: dependency cycle: \(path)"
-        )
+        lines.append(contentsOf: cycleLines(cycle))
     }
-
-    // Missing bindings: anchor at the dependency site (the `@Inject`
-    // property/parameter or the `@Provides func` parameter that asked
-    // for the type), so the diagnostic lands where the user asked for
-    // the missing thing. The consumer's identity is implied by the
-    // position — we follow Swift compiler convention and keep the
-    // message self-contained rather than restating "(required by 'X')".
     for missing in errors.missingBindings {
-        let slot = describeTypeSlot(
-            boundType: missing.dependency.type,
-            key: missing.dependency.keyIdentifier
-        )
-        lines.append(
-            "\(missing.dependency.location.formattedPrefix): error: no binding produces \(slot)"
-        )
-        if let hint = missing.typealiasHint {
-            lines.append(
-                "\(hint.typealiasLocation.formattedPrefix): note: '\(hint.typealiasName)' is a typealias of '\(hint.underlyingType)' which is bound; typealiases aren't unwrapped at resolution, so inject '\(hint.underlyingType)' directly or add a separate binding for '\(hint.typealiasName)'"
-            )
-        }
-        if let hint = missing.crossScopeHint, !hint.matches.isEmpty {
-            // Primary note: where the binding lives, contrasted with
-            // the consumer's scope. Follows Swift compiler convention
-            // for `note:` lines.
-            let primary = hint.matches[0]
-            lines.append(
-                "\(primary.location.formattedPrefix): note: '\(missing.dependency.type)' is bound in \(primary.scopeDescription) scope, not \(hint.consumerScopeDescription)"
-            )
-            // Additional notes for any other partitions that hold
-            // the same binding — the user sees every place the type
-            // lives, not just the first sorted match.
-            for additional in hint.matches.dropFirst() {
-                lines.append(
-                    "\(additional.location.formattedPrefix): note: '\(missing.dependency.type)' is also bound in \(additional.scopeDescription) scope"
-                )
-            }
-            // Fix-it: tailored when single match, multiplicity-aware
-            // when multiple.
-            lines.append(
-                "\(missing.dependency.location.formattedPrefix): note: \(hint.fixItSuggestion)"
-            )
-        }
-        if let hint = missing.optionalMismatchHint {
-            let base = optionalityStripped(missing.dependency.type).base
-            switch hint {
-            case .optionalProducerCannotSatisfyNonOptional:
-                lines.append(
-                    "\(missing.dependency.location.formattedPrefix): note: a '\(base)?' producer exists but can't satisfy non-optional '\(base)' (a '\(base)?' may be nil) — change the consumer to '\(base)?', or have the producer return '\(base)'"
-                )
-            case .optionalNeedsExplicitProducer:
-                lines.append(
-                    "\(missing.dependency.location.formattedPrefix): note: Wire never injects nil for an absent binding; an optional dependency still needs an explicit producer (return '\(base)', or '\(base)?' if it may be nil)"
-                )
-            }
-        }
+        lines.append(contentsOf: missingBindingLines(missing))
     }
-
-    // Identifier collisions: primary error at the first colliding
-    // binding, notes at the others. The colliding bindings have
-    // distinct `(type, key)` identities — what they share is the
-    // generated accessor name — so the message names the identifier
-    // rather than the type. Fix-it suggestion points at renaming
-    // (the keys-disambiguation fix-it doesn't apply: keys are part
-    // of the identifier and have already been factored in).
     for collision in errors.identifierCollisions {
-        guard let primary = collision.bindings.first else { continue }
+        lines.append(contentsOf: collisionLines(collision))
+    }
+    return lines.joined(separator: "\n")
+}
+
+/// Render one duplicate-binding error: the primary error, "also bound
+/// here" notes at the remaining bindings, and — when the duplicates are
+/// all unkeyed — a fix-it pointing at the key-disambiguation pattern.
+/// (Keyed duplicates already named their slot, so no keying suggestion.)
+private func duplicateBindingLines(_ duplicate: DuplicateBinding) -> [String] {
+    guard let primary = duplicate.bindings.first else { return [] }
+    let typeSlot = describeTypeSlot(boundType: duplicate.boundType, key: duplicate.keyIdentifier)
+    var lines = [
+        "\(primary.location.formattedPrefix): error: type \(typeSlot) has multiple bindings; the dependency graph is ambiguous"
+    ]
+    for binding in duplicate.bindings.dropFirst() {
+        lines.append("\(binding.location.formattedPrefix): note: also bound here")
+    }
+    if duplicate.keyIdentifier == nil {
         lines.append(
-            "\(primary.location.formattedPrefix): error: generated accessor name '\(collision.identifier)' collides across multiple bindings"
+            "\(primary.location.formattedPrefix): note: to disambiguate, declare named keys (e.g. `static let primary = BindingKey<\(duplicate.boundType)>()`) and tag each binding/consumer with `@Provides(\(duplicate.boundType).primary)` / `@Inject(\(duplicate.boundType).primary)`"
         )
-        for binding in collision.bindings.dropFirst() {
+    }
+    return lines
+}
+
+/// Render one dependency cycle, anchored at the first node, as an
+/// arrow-separated path ("A → B → A").
+private func cycleLines(_ cycle: [DiscoveredBinding]) -> [String] {
+    guard let anchor = cycle.first else { return [] }
+    let path = cycle.map { displayName($0) }.joined(separator: " → ")
+    return ["\(anchor.location.formattedPrefix): error: dependency cycle: \(path)"]
+}
+
+/// Render one generated-accessor-name collision: primary error at the
+/// first binding, "also generates 'X'" notes at the rest. The colliding
+/// bindings have distinct `(type, key)` identities — they share only the
+/// generated accessor name — so the message names the identifier.
+private func collisionLines(_ collision: IdentifierCollision) -> [String] {
+    guard let primary = collision.bindings.first else { return [] }
+    var lines = [
+        "\(primary.location.formattedPrefix): error: generated accessor name '\(collision.identifier)' collides across multiple bindings"
+    ]
+    for binding in collision.bindings.dropFirst() {
+        lines.append("\(binding.location.formattedPrefix): note: also generates '\(collision.identifier)'")
+    }
+    return lines
+}
+
+/// Render one missing binding: the primary `error:` line anchored at the
+/// dependency site, plus any `note:` hints (typealias, cross-scope, or
+/// optional mismatch). Anchoring at the dependency site lands the user
+/// on the line that asked for the missing thing; the consumer's identity
+/// is implied by position (Swift compiler convention).
+private func missingBindingLines(_ missing: MissingBinding) -> [String] {
+    var lines: [String] = []
+    let slot = describeTypeSlot(
+        boundType: missing.dependency.type,
+        key: missing.dependency.keyIdentifier
+    )
+    lines.append(
+        "\(missing.dependency.location.formattedPrefix): error: no binding produces \(slot)"
+    )
+    if let hint = missing.typealiasHint {
+        lines.append(
+            "\(hint.typealiasLocation.formattedPrefix): note: '\(hint.typealiasName)' is a typealias of '\(hint.underlyingType)' which is bound; typealiases aren't unwrapped at resolution, so inject '\(hint.underlyingType)' directly or add a separate binding for '\(hint.typealiasName)'"
+        )
+    }
+    if let hint = missing.crossScopeHint, !hint.matches.isEmpty {
+        // Primary note: where the binding lives, contrasted with the
+        // consumer's scope. Follows Swift compiler convention.
+        let primary = hint.matches[0]
+        lines.append(
+            "\(primary.location.formattedPrefix): note: '\(missing.dependency.type)' is bound in \(primary.scopeDescription) scope, not \(hint.consumerScopeDescription)"
+        )
+        // Additional notes for any other partitions that hold the same
+        // binding — the user sees every place the type lives.
+        for additional in hint.matches.dropFirst() {
             lines.append(
-                "\(binding.location.formattedPrefix): note: also generates '\(collision.identifier)'"
+                "\(additional.location.formattedPrefix): note: '\(missing.dependency.type)' is also bound in \(additional.scopeDescription) scope"
+            )
+        }
+        lines.append(
+            "\(missing.dependency.location.formattedPrefix): note: \(hint.fixItSuggestion)"
+        )
+    }
+    if let hint = missing.optionalMismatchHint {
+        let base = optionalityStripped(missing.dependency.type).base
+        switch hint {
+        case .optionalProducerCannotSatisfyNonOptional:
+            lines.append(
+                "\(missing.dependency.location.formattedPrefix): note: a '\(base)?' producer exists but can't satisfy non-optional '\(base)' (a '\(base)?' may be nil) — change the consumer to '\(base)?', or have the producer return '\(base)'"
+            )
+        case .optionalNeedsExplicitProducer:
+            lines.append(
+                "\(missing.dependency.location.formattedPrefix): note: Wire never injects nil for an absent binding; an optional dependency still needs an explicit producer (return '\(base)', or '\(base)?' if it may be nil)"
             )
         }
     }
-
-    return lines.joined(separator: "\n")
+    return lines
 }
 
 /// The short identifier to show for a binding in human-facing output:
