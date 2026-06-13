@@ -7,6 +7,11 @@
 > the reasoning is preserved below under "Why not wrapper-marker
 > recognition".
 
+> **See also:** [`OptionalMatchingAndCycles.md`](OptionalMatchingAndCycles.md)
+> places `Lazy<T>` in the cycle-breaking taxonomy — it is deferral
+> only, *not* a cycle-breaker, alongside `weak var` (the breaker) and
+> `weak let` (lifetime-only, also not a breaker).
+
 ## Framing: just a Swift type Wire happens to ship
 
 `Lazy<T>` is a `public struct` in Wire core. The framework defines
