@@ -472,6 +472,53 @@ struct DiscoveryTests {
         #expect(result.warnings.isEmpty)
     }
 
+    // MARK: - SE-0491 module selectors
+
+    @Test func moduleSelectorTypeCapturedVerbatim() {
+        // A module-selector-qualified bound type (`ModuleA::Service`) is
+        // captured verbatim — Wire matches by string identity and re-emits
+        // the original text into codegen, so the `::` round-trips. See
+        // MultiModuleComposition.md.
+        let source = """
+            @Provides func makeService() -> ModuleA::Service { fatalError() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Service.swift")
+        #expect(result.count == 1)
+        #expect(result[0].boundType == "ModuleA::Service")
+    }
+
+    @Test func moduleQualifiedWireMacrosRecognized() {
+        // SE-0491 lets users qualify Wire's macros with its module to
+        // disambiguate a macro-name clash (`@Wire::Singleton`,
+        // `@Wire::Inject`, …). Discovery recognises the qualified forms the
+        // same as the bare ones — for every Wire macro, via the shared
+        // attribute matcher. See MultiModuleComposition.md.
+        let source = """
+            @Wire::Singleton
+            final class View {
+                @Wire::Inject var logger: Logger
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].typeName == "View")
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].type == "Logger")
+    }
+
+    @Test func otherModuleQualifiedMacroNotRecognizedAsWire() {
+        // Only *Wire's own* selector is stripped — `@OtherDI::Singleton` is
+        // a different module's macro and must NOT be treated as Wire's
+        // `@Singleton`.
+        let source = """
+            @OtherDI::Singleton
+            final class View {
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.isEmpty)
+    }
+
     @Test func injectFuncBecomesMethodCallMemberInjection() {
         // The general form: `@Inject func setX(_ x: T)` captures the
         // method's parameter list as the injection's parameters and

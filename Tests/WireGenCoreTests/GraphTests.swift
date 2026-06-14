@@ -390,6 +390,29 @@ struct GraphTests {
         #expect(missing.optionalMismatchHint == .optionalNeedsExplicitProducer)
     }
 
+    // MARK: - SE-0491 module selectors
+
+    @Test func moduleQualifiedTypeMatchesConsistentlyAndIsDistinctFromBare() throws {
+        // `ModuleA::Service` is a first-class graph identity: a consumer
+        // that spells it the same resolves; a bare `Service` consumer does
+        // NOT — module selectors disambiguate, they don't normalize. See
+        // MultiModuleComposition.md.
+        let qualified = buildDependencyGraph(from: [
+            providerFunction("makeService", boundType: "ModuleA::Service"),
+            singleton("Qualified", dependencies: [(name: "service", type: "ModuleA::Service")]),
+        ])
+        let order = try #require(qualified.outcome.topologicalOrder)
+        #expect(order.map(\.boundType) == ["ModuleA::Service", "Qualified"])
+
+        let bare = buildDependencyGraph(from: [
+            providerFunction("makeService", boundType: "ModuleA::Service"),
+            singleton("Bare", dependencies: [(name: "service", type: "Service")]),
+        ])
+        let errors = try #require(bare.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+        #expect(errors.missingBindings.first?.dependency.type == "Service")
+    }
+
     @Test func optionalDepMatchesExplicitOptionalProducerExactly() throws {
         // An explicit `@Provides -> Logger?` producer satisfies a
         // `Logger?` consumer by exact match (no promotion needed); the

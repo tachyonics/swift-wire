@@ -114,6 +114,33 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
+    func test_moduleQualifiedInjectMember_recognisedBySingletonMacro() {
+        // SE-0491: a member qualified with Wire's module (`@Wire::Inject`)
+        // is recognised as an injection point by SingletonMacro's attribute
+        // matcher, so the synthesised init takes it — the same as bare
+        // `@Inject`. See Documentation/Notes/MultiModuleComposition.md.
+        assertMacroExpansion(
+            """
+            @Singleton
+            final class View {
+                @Wire::Inject var logger: Logger
+            }
+            """,
+            expandedSource: """
+                final class View {
+                    var logger: Logger
+
+                    init(logger: Logger) {
+                        self.logger = logger
+                    }
+
+                    static let key = BindingKey<View>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
     func test_injectWeakVar_coexistsWithStrongInjectInit() {
         // The "init OR properties, never both" rule has one
         // exception: weak `@Inject` properties may coexist with

@@ -64,7 +64,8 @@ jobs:
       fail-fast: false
       matrix:
         swift-version: ["6.3.1"]
-        swift-syntax-major: ["601", "602", "603"]
+        # Single supported major today (floor + ceiling = 603..<604).
+        swift-syntax-major: ["603"]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -80,7 +81,7 @@ jobs:
         # needs to follow.
         run: |
           next=$((${{ matrix.swift-syntax-major }} + 1))
-          sed -i 's|"601.0.0"..<"604.0.0"|"${{ matrix.swift-syntax-major }}.0.0"..<"'${next}'.0.0"|' Package.swift
+          sed -i 's|"603.0.0"..<"604.0.0"|"${{ matrix.swift-syntax-major }}.0.0"..<"'${next}'.0.0"|' Package.swift
           grep swift-syntax Package.swift
       - name: Resolve dependencies
         run: swift package update

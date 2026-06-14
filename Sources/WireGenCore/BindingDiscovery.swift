@@ -625,29 +625,6 @@ extension BindingDiscovery {
 /// another — almost always a user error.
 let scopeMacroNames = ["Singleton", "Scoped"]
 
-/// Find the first attribute in the list matching `name`, or `nil`.
-/// Used to reach the attribute's argument list when extracting a
-/// key identifier from `@Inject(...)` / `@Provides(...)`.
-func attribute(
-    in attributes: AttributeListSyntax,
-    named name: String
-) -> AttributeSyntax? {
-    for element in attributes {
-        guard let attribute = element.as(AttributeSyntax.self) else { continue }
-        if attribute.attributeName.trimmedDescription == name {
-            return attribute
-        }
-    }
-    return nil
-}
-
-func hasAttribute(
-    _ attributes: AttributeListSyntax,
-    named name: String
-) -> Bool {
-    attribute(in: attributes, named: name) != nil
-}
-
 /// Extract the canonical key identifier from an attribute's argument
 /// list. Returns `nil` for the unkeyed form (no parentheses or empty
 /// argument list). For the keyed form `@Inject(<expr>)` returns the
