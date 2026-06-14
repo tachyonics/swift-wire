@@ -590,6 +590,23 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("post-construct delivery patterns"))
     }
 
+    @Test func weakInjectLetRendersDoesNotBreakCyclesWarning() throws {
+        // `weak let` is valid but easy to mistake for a cycle-breaker.
+        // It renders as a `warning:` (not an error) explaining it's
+        // constructor-injected and pointing at `weak var` for cycles.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak let coordinator: Coordinator?
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "View.swift")
+        let rendered = renderDiagnostics(discovery.warnings)
+        #expect(rendered.contains("warning: @Inject weak let 'coordinator'"))
+        #expect(rendered.contains("does not break reference cycles — it participates in cycle detection"))
+        #expect(rendered.contains("Use 'weak var' to break a reference cycle"))
+    }
+
     @Test func privateInjectFuncRendersWithAsymmetryNote() throws {
         let source = """
             @Singleton

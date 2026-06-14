@@ -396,6 +396,44 @@ struct DiscoveryTests {
         #expect(injection.parameters[0].kind == .injectMethodParameter)
     }
 
+    @Test func weakInjectLetBecomesInitDependencyNotMemberInjection() {
+        // `@Inject weak let x: T?` is delivered at construction (the one
+        // write a `let` allows), so it's an ordinary init-time dependency
+        // — NOT a post-construct member injection like `weak var`. The
+        // declared optional type is kept and promotes against the `T`
+        // producer at resolution. See OptionalMatchingAndCycles.md.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak let coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].memberInjections.isEmpty)
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].type == "Coordinator?")
+        #expect(result[0].dependencies[0].kind == .injectProperty)
+    }
+
+    @Test func weakInjectLetEmitsDoesNotBreakCyclesWarning() {
+        // The warning is the load-bearing piece: a `weak let` looks like a
+        // cycle-breaker but isn't (it's constructor-injected). It's a
+        // warning, not an error — the form is valid.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak let coordinator: Coordinator?
+            }
+            """
+        let result = discover(in: source, sourcePath: "View.swift")
+        #expect(result.warnings.filter { $0.severity == .error }.isEmpty)
+        let warnings = result.warnings.filter { $0.severity == .warning }
+        #expect(warnings.contains { $0.message.contains("@Inject weak let 'coordinator'") })
+        #expect(warnings.contains { $0.message.contains("does not break reference cycles") })
+        #expect(warnings.contains { $0.message.contains("Use 'weak var' to break") })
+    }
+
     @Test func injectFuncBecomesMethodCallMemberInjection() {
         // The general form: `@Inject func setX(_ x: T)` captures the
         // method's parameter list as the injection's parameters and
