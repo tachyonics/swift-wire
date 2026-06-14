@@ -64,9 +64,7 @@ jobs:
       fail-fast: false
       matrix:
         swift-version: ["6.3.1"]
-        # Single supported major today (floor + ceiling = 603..<604). Kept
-        # as a matrix so adding "604" when Swift 6.4 ships is a one-line
-        # change (also bump the ceiling in Package.swift).
+        # Single supported major today (floor + ceiling = 603..<604).
         swift-syntax-major: ["603"]
     runs-on: ubuntu-24.04
     steps:
