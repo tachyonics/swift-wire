@@ -416,7 +416,7 @@ struct DiscoveryTests {
         #expect(result[0].dependencies[0].kind == .injectProperty)
         // Flagged so the cyclic-dependency error can point at it if it
         // closes a cycle.
-        #expect(result[0].dependencies[0].isWeakLet == true)
+        #expect(result[0].dependencies[0].nonOwningInitForm == .weakLet)
     }
 
     @Test func weakInjectLetEmitsNoBlanketDiagnostic() {
@@ -452,7 +452,7 @@ struct DiscoveryTests {
         #expect(result[0].dependencies.count == 1)
         #expect(result[0].dependencies[0].type == "Coordinator!")
         #expect(result[0].dependencies[0].kind == .injectProperty)
-        #expect(result[0].dependencies[0].isWeakLet == true)
+        #expect(result[0].dependencies[0].nonOwningInitForm == .weakLet)
     }
 
     @Test func privateWeakInjectLetEmitsNoTooPrivateError() {
@@ -470,6 +470,28 @@ struct DiscoveryTests {
             """
         let result = discover(in: source, sourcePath: "View.swift")
         #expect(result.warnings.isEmpty)
+    }
+
+    @Test func unownedInjectBecomesInitDependencyFlaggedNonOwning() {
+        // `@Inject unowned let/var x: B` is constructor-injected like a
+        // non-weak property (non-optional storage can't be deferred
+        // post-construct), but is flagged non-owning so a cyclic-dependency
+        // error can point at it. `unowned` is NOT a cycle-breaker. See
+        // OptionalMatchingAndCycles.md.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject unowned let coordinator: Coordinator
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].memberInjections.isEmpty)
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].type == "Coordinator")
+        #expect(result[0].dependencies[0].nonOwningInitForm == .unowned)
+        // No blanket diagnostic for an acyclic unowned reference.
+        #expect(discover(in: source, sourcePath: "View.swift").warnings.isEmpty)
     }
 
     // MARK: - SE-0491 module selectors

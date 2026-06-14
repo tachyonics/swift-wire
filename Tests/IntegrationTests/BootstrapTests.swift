@@ -284,6 +284,17 @@ struct BootstrapTests {
         #expect(graph.dashboard.describeTelemetry() == "telemetry id: telemetry")
     }
 
+    @Test func unownedInjectionDeliversNonOwningReferenceAtInit() async throws {
+        // `Monitor` holds `Sensor` via `@Inject unowned let` — non-owning,
+        // non-optional, constructor-injected. That this builds proves the
+        // generated `init(sensor: Sensor) { self.sensor = sensor }`
+        // compiles against `unowned let` storage; the graph retains the
+        // `@Singleton Sensor` strongly, so the unowned hold stays valid.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.monitor.sensor === graph.sensor)
+        #expect(graph.monitor.describeSensor() == "sensor id: sensor")
+    }
+
     // MARK: - `@Scoped(seed:)` end-to-end
 
     @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {

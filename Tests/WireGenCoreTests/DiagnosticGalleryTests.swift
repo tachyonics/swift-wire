@@ -637,6 +637,29 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("note: 'a' is an '@Inject weak let' that closes this cycle"))
     }
 
+    @Test func unownedClosingCycleRendersBreakWithWeakVarNote() throws {
+        // `unowned` is constructor-injected (it can't be deferred), so a
+        // cycle through it is a real cycle it cannot break. The cycle error
+        // notes it, pointing at `weak var` as the fix — same as `weak let`,
+        // with the form named in the note.
+        let source = """
+            @Singleton
+            final class A {
+                @Inject unowned let b: B
+            }
+
+            @Singleton
+            final class B {
+                @Inject var a: A
+            }
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "AB.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.cycles.count == 1)
+        #expect(rendered.contains("note: 'b' is an '@Inject unowned' that closes this cycle"))
+        #expect(rendered.contains("change it to 'weak var' to break the cycle"))
+    }
+
     @Test func privateInjectFuncRendersWithAsymmetryNote() throws {
         let source = """
             @Singleton
