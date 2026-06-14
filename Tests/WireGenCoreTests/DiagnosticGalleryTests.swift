@@ -615,6 +615,28 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("change it to 'weak var' to break the cycle"))
     }
 
+    @Test func cycleThroughTwoWeakLetEdgesNotesBoth() throws {
+        // Both back-edges are `weak let`, so each is an init-time edge
+        // that closes the cycle — converting *either* to `weak var`
+        // breaks it. The cycle error notes both, one per edge.
+        let source = """
+            @Singleton
+            final class A {
+                @Inject weak let b: B?
+            }
+
+            @Singleton
+            final class B {
+                @Inject weak let a: A?
+            }
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "AB.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.cycles.count == 1)
+        #expect(rendered.contains("note: 'b' is an '@Inject weak let' that closes this cycle"))
+        #expect(rendered.contains("note: 'a' is an '@Inject weak let' that closes this cycle"))
+    }
+
     @Test func privateInjectFuncRendersWithAsymmetryNote() throws {
         let source = """
             @Singleton
