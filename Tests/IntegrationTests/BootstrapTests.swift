@@ -265,7 +265,7 @@ struct BootstrapTests {
         let graph = try await _WireGraph.bootstrap()
         let toolbeltWorkshop = await graph.toolbelt.workshop
         #expect(toolbeltWorkshop === graph.workshop)
-        let workshopToolbelt = await graph.workshop.toolbelt
+        let workshopToolbelt = graph.workshop.toolbelt
         #expect(workshopToolbelt === graph.toolbelt)
     }
 
