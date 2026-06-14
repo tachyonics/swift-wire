@@ -108,21 +108,23 @@ private func cycleLines(_ cycle: [DiscoveredBinding]) -> [String] {
     guard let anchor = cycle.first else { return [] }
     let path = cycle.map { displayName($0) }.joined(separator: " → ")
     var lines = ["\(anchor.location.formattedPrefix): error: dependency cycle: \(path)"]
-    lines.append(contentsOf: weakLetBreakNotes(in: cycle))
+    lines.append(contentsOf: nonOwningEdgeBreakNotes(in: cycle))
     return lines
 }
 
-/// For each consecutive edge `X → Y` in the cycle path, a `weak let` on
-/// `X` that resolves to `Y` is an init-time edge `weak var` would break
-/// (post-construct delivery). Point the user at each one.
-private func weakLetBreakNotes(in cycle: [DiscoveredBinding]) -> [String] {
+/// For each consecutive edge `X → Y` in the cycle path, a *non-owning*
+/// init-time edge on `X` that resolves to `Y` (`@Inject weak let` /
+/// `unowned`) is one `weak var` would break (post-construct delivery).
+/// Point the user at each one.
+private func nonOwningEdgeBreakNotes(in cycle: [DiscoveredBinding]) -> [String] {
     var notes: [String] = []
     for (consumer, producer) in zip(cycle, cycle.dropFirst()) {
         let producerSet = [producer.identity: producer]
-        for dep in consumer.dependencies where dep.isWeakLet {
+        for dep in consumer.dependencies {
+            guard let form = dep.nonOwningInitForm else { continue }
             guard case .resolved = matchProducer(for: dep.identity, in: producerSet) else { continue }
             notes.append(
-                "\(dep.location.formattedPrefix): note: '\(dep.name ?? dep.type)' is an '@Inject weak let' that closes this cycle; change it to 'weak var' to break the cycle (the bootstrap then delivers it post-construct, off the init-time edge)"
+                "\(dep.location.formattedPrefix): note: '\(dep.name ?? dep.type)' is an '@Inject \(form.description)' that closes this cycle; change it to 'weak var' to break the cycle (the bootstrap then delivers it post-construct, off the init-time edge)"
             )
         }
     }

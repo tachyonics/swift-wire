@@ -213,6 +213,7 @@ safe under GC) does not port to ARC.
 |---|---|---|---|
 | `@Inject weak var b: B?` / `b: B!` | ✅ post-construct | ✅ weak | **yes — the breaker** |
 | `@Inject weak let b: B?` | ❌ init edge | ✅ weak | no — cycle-checked |
+| `@Inject unowned (let/var) b: B` | ❌ init edge | ✅ unowned | no — cycle-checked |
 | strong post-construct (`@Inject func` into strong storage) | ✅ post-construct | ❌ strong | no — *builds, then leaks* |
 | `Lazy<B>` (produced) | ❌ init edge | n/a | no — cycle-checked |
 
@@ -233,9 +234,9 @@ The distinctions:
   just implicit-unwraps on access and **traps if touched after the
   target deallocates**. It is the user's contract ("alive when I touch
   it"). Wire handles it via the same weak path once the matcher
-  normalizes `T!` (see Part 1, *Normalization*). (`unowned` is the other
-  non-owning, non-optional spelling; Wire does not recognize the
-  `unowned` modifier today — possible future, out of scope.)
+  normalizes `T!` (see Part 1, *Normalization*). (For a non-optional
+  non-owning reference that is *constructor-injected* rather than a
+  post-construct breaker, see `unowned` below — a different shape.)
 
 - **`weak let` (SE-0481) — non-owning lifetime *only*, NOT a breaker.**
   It severs the retain cycle (weak) but **not** the construction cycle:
@@ -260,9 +261,23 @@ The distinctions:
 
   So the dangerous case gets precise, actionable guidance exactly when
   the build fails, and the benign case is silent. The dependency is
-  flagged (`DependencyParameter.isWeakLet`) so cycle reporting can spot
-  the edge; the note is emitted only for the edge actually in the cycle,
-  not for a `weak let` that merely points at a cycle member.
+  flagged (`DependencyParameter.nonOwningInitForm`) so cycle reporting can
+  spot the edge; the note is emitted only for the edge actually in the
+  cycle, not for a `weak let` that merely points at a cycle member.
+
+- **`unowned` — non-owning, non-optional, also NOT a breaker.** The
+  non-optional sibling of `weak let`: `@Inject unowned let/var b: B` is a
+  non-owning reference (severs the retain cycle) but **must** be delivered
+  at *init* — non-optional storage can't be left empty and filled
+  post-construct, so unlike `weak var` it cannot be deferred. So it's a
+  constructor-injected init-time edge that **participates in cycle
+  detection**, sharing the `weak let` cycle-note machinery (the note names
+  the form). Use it for a non-owning reference to a target the container
+  keeps alive, when you want bare non-optional access and accept a
+  trap-on-stale-access contract (vs `weak let`'s graceful `nil`). It needs
+  no special handling beyond the cycle flag — `unowned` isn't `weak`, so
+  it already flows through discovery and the macro as an ordinary
+  constructor-injected dependency.
 
 - **Strong post-construct (the `Ref`-box idea) — NOT a breaker.** A
   strong reference delivered post-construct severs the *construction*
@@ -329,13 +344,14 @@ once in `weak var`.
 3. **`weak var x: T!`** — falls out of (1) for free once the matcher
    normalizes the IUO node; document it as the non-optional-access
    spelling of weak injection (with the trap-on-stale-access caveat).
+4. **`unowned` injection** — constructor-injected, non-owning,
+   non-optional reference (the non-optional sibling of `weak let`, *not* a
+   breaker — non-optional storage can't be deferred). Already flows
+   through discovery + the macro as an ordinary dependency; only adds the
+   cyclic-dependency `note:`, shared with `weak let` via
+   `DependencyParameter.nonOwningInitForm`.
 
 ### Deferred (prove the need first)
-
-- **`unowned` member injection** — a non-owning, non-optional back-edge
-  without `weak`'s Optional storage. Would need recognition of the
-  `unowned` modifier (Wire keys on `weak` today). Possible future
-  ergonomic option for the non-optional break; out of scope now.
 - **Construction-time / lazy-as-cycle-breaker.** Offers no leak-safety
   advantage under ARC (see Part 2) and needs `weak`/`unowned` anyway, so
   there is no compelling version of it. Deferred indefinitely.

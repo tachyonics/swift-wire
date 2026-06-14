@@ -286,6 +286,7 @@ private func applyInjectVar(
     let propertyKey = keyIdentifier(from: injectAttribute)
     let isWeak = varDecl.modifiers.contains { $0.name.text == "weak" }
     let isLet = varDecl.bindingSpecifier.tokenKind == .keyword(.let)
+    let isUnowned = varDecl.modifiers.contains { $0.name.text == "unowned" }
     for binding in varDecl.bindings {
         guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
         guard let typeAnnotation = binding.typeAnnotation else { continue }
@@ -304,14 +305,18 @@ private func applyInjectVar(
                 into: &result
             )
         } else {
-            // Non-weak property OR `weak let` — both are init-time,
-            // constructor-injected dependencies. `weak let` is flagged
-            // (`isWeakLet`) so that IF it closes a cycle, the
-            // cyclic-dependency error can point at it (converting to
-            // `weak var` breaks the cycle post-construct). No blanket
-            // warning: an acyclic `weak let` is a legitimate non-owning,
-            // immutable reference (SE-0481). See
+            // Owning property, `weak let`, or `unowned …` — all init-time,
+            // constructor-injected dependencies. The two non-owning forms
+            // are flagged so that IF one closes a cycle the cyclic-
+            // dependency error can point at it (converting to `weak var`
+            // breaks the cycle post-construct). No blanket warning: an
+            // acyclic `weak let` / `unowned` is a legitimate non-owning
+            // reference (`weak let` is SE-0481; `unowned` is non-optional,
+            // for a target known to outlive the host). `unowned` can't be
+            // a breaker — non-optional storage must be initialised at init,
+            // so it can't be deferred post-construct. See
             // OptionalMatchingAndCycles.md.
+            let nonOwningForm: NonOwningInitForm? = isWeak ? .weakLet : (isUnowned ? .unowned : nil)
             propertyDependencies.append(
                 DependencyParameter(
                     name: pattern.identifier.text,
@@ -319,7 +324,7 @@ private func applyInjectVar(
                     kind: .injectProperty,
                     location: location,
                     keyIdentifier: propertyKey,
-                    isWeakLet: isWeak
+                    nonOwningInitForm: nonOwningForm
                 )
             )
         }

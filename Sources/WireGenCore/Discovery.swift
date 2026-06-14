@@ -489,12 +489,14 @@ package struct DependencyParameter: Sendable {
     /// match only same-key bindings (Dagger-style — keys partition the
     /// binding space).
     package let keyIdentifier: String?
-    /// True when this init-time dependency came from an `@Inject weak
-    /// let`. Diagnostic-only metadata: a `weak let` edge that closes a
-    /// cycle can be broken by converting it to `weak var` (post-construct
-    /// delivery), so the cyclic-dependency error points at it. Doesn't
-    /// affect resolution or codegen. See `OptionalMatchingAndCycles.md`.
-    package let isWeakLet: Bool
+    /// The *non-owning* form this init-time dependency was written as
+    /// (`@Inject weak let` or `@Inject unowned …`), or `nil` for an
+    /// ordinary owning dependency. Diagnostic-only metadata: a non-owning
+    /// init edge that closes a cycle can be broken by converting it to
+    /// `weak var` (post-construct delivery), so the cyclic-dependency error
+    /// points at it. Doesn't affect resolution or codegen. See
+    /// `OptionalMatchingAndCycles.md`.
+    package let nonOwningInitForm: NonOwningInitForm?
 
     package init(
         name: String?,
@@ -502,14 +504,31 @@ package struct DependencyParameter: Sendable {
         kind: DependencyKind,
         location: SourceLocation,
         keyIdentifier: String? = nil,
-        isWeakLet: Bool = false
+        nonOwningInitForm: NonOwningInitForm? = nil
     ) {
         self.name = name
         self.type = type
         self.kind = kind
         self.location = location
         self.keyIdentifier = keyIdentifier
-        self.isWeakLet = isWeakLet
+        self.nonOwningInitForm = nonOwningInitForm
+    }
+}
+
+/// How a non-owning, *constructor-injected* dependency was spelled. Both
+/// forms are delivered at init (not post-construct), so they participate
+/// in cycle detection — they are NOT cycle-breakers. `weak let` nils on
+/// the target's deallocation; `unowned` is non-optional and traps. The
+/// `description` is what the cyclic-dependency note calls the edge.
+package enum NonOwningInitForm: Sendable, Equatable {
+    case weakLet
+    case unowned
+
+    package var description: String {
+        switch self {
+        case .weakLet: return "weak let"
+        case .unowned: return "unowned"
+        }
     }
 }
 
