@@ -191,19 +191,26 @@ public struct SingletonMacro: MemberMacro {
             }
 
             if hasInject {
-                // `weak` `@Inject` properties don't become init parameters
-                // — Swift won't let init parameters be `weak`, and the
-                // build plugin's post-construction assignment block does
-                // the wiring. The property storage stays as Swift-native
-                // `weak var x: T?`, defaulting to nil at init time.
-                // See Documentation/Notes/WeakInjectionSupport.md
-                // "Coexistence with @Inject init" for the rule:
-                // non-weak @Inject properties remain mutually exclusive
-                // with @Inject init; weak properties are the carve-out
-                // (because Swift's own rules force them to live as
-                // properties, not parameters).
+                // `weak var` `@Inject` properties don't become init
+                // parameters — Swift won't let init parameters be `weak`,
+                // and the build plugin's post-construction assignment block
+                // does the wiring (storage stays `weak var x: T?`,
+                // defaulting to nil at init). A `weak let`, by contrast,
+                // CAN be initialised in the synthesised init (the single
+                // write a `let` allows), so it flows through as an ordinary
+                // init parameter — constructor-injected, and so a cycle
+                // *participant*, not a cycle-breaker. See
+                // Documentation/Notes/OptionalMatchingAndCycles.md and
+                // WeakInjectionSupport.md.
+                //
+                // Mutual exclusivity with @Inject init: non-weak *and*
+                // weak-let properties are injection points (they become
+                // init params), so both conflict with an @Inject init via
+                // the `injectionPoints` check below. Only `weak var` is the
+                // carve-out.
                 let isWeak = varDecl.modifiers.contains { $0.name.text == "weak" }
-                if isWeak { continue }
+                let isLet = varDecl.bindingSpecifier.tokenKind == .keyword(.let)
+                if isWeak && !isLet { continue }
                 // Each binding under an `@Inject var` becomes one
                 // injection point — `@Inject var a, b: Dep` is two points.
                 for binding in varDecl.bindings {

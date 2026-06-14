@@ -590,6 +590,53 @@ struct DiagnosticGalleryTests {
         #expect(rendered.contains("post-construct delivery patterns"))
     }
 
+    @Test func weakLetClosingCycleRendersBreakWithWeakVarNote() throws {
+        // `A` holds a `weak let b: B?` and `B` holds `var a: A` → a real
+        // cycle (a `weak let` is constructor-injected). The cyclic-
+        // dependency error carries a note pointing at the `weak let`,
+        // since converting it to `weak var` breaks the cycle. An acyclic
+        // `weak let` gets no diagnostic at all.
+        let source = """
+            @Singleton
+            final class A {
+                @Inject weak let b: B?
+            }
+
+            @Singleton
+            final class B {
+                @Inject var a: A
+            }
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "AB.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.cycles.count == 1)
+        #expect(rendered.contains("error: dependency cycle: A → B → A"))
+        #expect(rendered.contains("note: 'b' is an '@Inject weak let' that closes this cycle"))
+        #expect(rendered.contains("change it to 'weak var' to break the cycle"))
+    }
+
+    @Test func cycleThroughTwoWeakLetEdgesNotesBoth() throws {
+        // Both back-edges are `weak let`, so each is an init-time edge
+        // that closes the cycle — converting *either* to `weak var`
+        // breaks it. The cycle error notes both, one per edge.
+        let source = """
+            @Singleton
+            final class A {
+                @Inject weak let b: B?
+            }
+
+            @Singleton
+            final class B {
+                @Inject weak let a: A?
+            }
+            """
+        let (errors, rendered) = validate(source: source, sourcePath: "AB.swift")
+        let validationErrors = try #require(errors)
+        #expect(validationErrors.cycles.count == 1)
+        #expect(rendered.contains("note: 'b' is an '@Inject weak let' that closes this cycle"))
+        #expect(rendered.contains("note: 'a' is an '@Inject weak let' that closes this cycle"))
+    }
+
     @Test func privateInjectFuncRendersWithAsymmetryNote() throws {
         let source = """
             @Singleton

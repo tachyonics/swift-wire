@@ -264,11 +264,17 @@ private func methodCallInjection(
     )
 }
 
-/// Dispatch an `@Inject var` declaration into either init-time
-/// property deps (non-weak) or `.propertyAssignment` member
-/// injections (weak). Swift requires weak storage to be Optional;
-/// the Optional `?` is stripped for graph identity so the parameter
-/// resolves against the producer's `T` binding.
+/// Dispatch an `@Inject var`/`let` declaration:
+/// - `weak var` → a `.propertyAssignment` member injection (post-
+///   construct delivery — the cycle-breaker).
+/// - `weak let` → an init-time `.injectProperty` dependency (delivered
+///   at construction, so a cycle *participant*, not a breaker), with a
+///   warning to that effect.
+/// - non-weak → an init-time `.injectProperty` dependency.
+///
+/// Weak storage is forced to Optional by Swift; the declared type is
+/// kept as-is and the graph resolver promotes `T?`/`T!` against the
+/// producer's `T` binding. See `OptionalMatchingAndCycles.md`.
 private func applyInjectVar(
     _ varDecl: VariableDeclSyntax,
     into result: inout InjectExtractionResult,
@@ -279,6 +285,7 @@ private func applyInjectVar(
     guard let injectAttribute = attribute(in: varDecl.attributes, named: "Inject") else { return }
     let propertyKey = keyIdentifier(from: injectAttribute)
     let isWeak = varDecl.modifiers.contains { $0.name.text == "weak" }
+    let isLet = varDecl.bindingSpecifier.tokenKind == .keyword(.let)
     for binding in varDecl.bindings {
         guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
         guard let typeAnnotation = binding.typeAnnotation else { continue }
@@ -287,59 +294,90 @@ private func applyInjectVar(
             sourcePath: sourcePath,
             converter: converter
         )
-        if isWeak {
-            let weakAccess = accessLevel(from: varDecl.modifiers)
-            let weakSetter = setterAccessLevel(from: varDecl.modifiers)
-            if !weakAccess.isVisibleToGeneratedCode {
-                result.diagnostics.append(
-                    Diagnostic(
-                        location: location,
-                        message:
-                            "@Inject weak var '\(pattern.identifier.text)' is '\(weakAccess.keyword)' but must be at least 'internal' — Wire's generated bootstrap assigns to this property post-construct and lives in a separate file. Change to 'internal', 'package', or 'public'.",
-                        notes: [postConstructAsymmetryNote(at: location)],
-                        severity: .error
-                    )
-                )
-            }
-            if let setter = weakSetter, !setter.isVisibleToGeneratedCode {
-                result.diagnostics.append(
-                    Diagnostic(
-                        location: location,
-                        message:
-                            "@Inject weak var '\(pattern.identifier.text)' setter is '\(setter.keyword)(set)' but must be at least 'internal' — Wire's generated bootstrap assigns to this property post-construct and lives in a separate file. The setter restriction blocks Wire's write even though the property's read access is otherwise reachable.",
-                        notes: [
-                            Diagnostic.Note(
-                                location: location,
-                                message:
-                                    "Drop the setter restriction to inherit the property's read access, or use 'internal(set)' / higher if a narrower setter is required."
-                            )
-                        ],
-                        severity: .error
-                    )
-                )
-            }
-            result.memberInjections.append(
-                propertyAssignmentInjection(
-                    propertyName: pattern.identifier.text,
-                    typeAnnotation: typeAnnotation.type,
-                    propertyKey: propertyKey,
-                    location: location,
-                    accessLevel: weakAccess,
-                    setterAccessLevel: weakSetter
-                )
+        if isWeak && !isLet {
+            appendWeakVarMemberInjection(
+                propertyName: pattern.identifier.text,
+                typeAnnotation: typeAnnotation.type,
+                propertyKey: propertyKey,
+                location: location,
+                modifiers: varDecl.modifiers,
+                into: &result
             )
         } else {
+            // Non-weak property OR `weak let` — both are init-time,
+            // constructor-injected dependencies. `weak let` is flagged
+            // (`isWeakLet`) so that IF it closes a cycle, the
+            // cyclic-dependency error can point at it (converting to
+            // `weak var` breaks the cycle post-construct). No blanket
+            // warning: an acyclic `weak let` is a legitimate non-owning,
+            // immutable reference (SE-0481). See
+            // OptionalMatchingAndCycles.md.
             propertyDependencies.append(
                 DependencyParameter(
                     name: pattern.identifier.text,
                     type: typeAnnotation.type.trimmedDescription,
                     kind: .injectProperty,
                     location: location,
-                    keyIdentifier: propertyKey
+                    keyIdentifier: propertyKey,
+                    isWeakLet: isWeak
                 )
             )
         }
     }
+}
+
+/// Emit the `weak var` post-construct member injection (the cycle-break
+/// sugar) plus the declaration-too-private / setter-restriction errors it
+/// can trigger: the bootstrap assigns to the property from a separate
+/// file post-construct, so it must be reachable for writing.
+private func appendWeakVarMemberInjection(
+    propertyName: String,
+    typeAnnotation: TypeSyntax,
+    propertyKey: String?,
+    location: SourceLocation,
+    modifiers: DeclModifierListSyntax,
+    into result: inout InjectExtractionResult
+) {
+    let weakAccess = accessLevel(from: modifiers)
+    let weakSetter = setterAccessLevel(from: modifiers)
+    if !weakAccess.isVisibleToGeneratedCode {
+        result.diagnostics.append(
+            Diagnostic(
+                location: location,
+                message:
+                    "@Inject weak var '\(propertyName)' is '\(weakAccess.keyword)' but must be at least 'internal' — Wire's generated bootstrap assigns to this property post-construct and lives in a separate file. Change to 'internal', 'package', or 'public'.",
+                notes: [postConstructAsymmetryNote(at: location)],
+                severity: .error
+            )
+        )
+    }
+    if let setter = weakSetter, !setter.isVisibleToGeneratedCode {
+        result.diagnostics.append(
+            Diagnostic(
+                location: location,
+                message:
+                    "@Inject weak var '\(propertyName)' setter is '\(setter.keyword)(set)' but must be at least 'internal' — Wire's generated bootstrap assigns to this property post-construct and lives in a separate file. The setter restriction blocks Wire's write even though the property's read access is otherwise reachable.",
+                notes: [
+                    Diagnostic.Note(
+                        location: location,
+                        message:
+                            "Drop the setter restriction to inherit the property's read access, or use 'internal(set)' / higher if a narrower setter is required."
+                    )
+                ],
+                severity: .error
+            )
+        )
+    }
+    result.memberInjections.append(
+        propertyAssignmentInjection(
+            propertyName: propertyName,
+            typeAnnotation: typeAnnotation,
+            propertyKey: propertyKey,
+            location: location,
+            accessLevel: weakAccess,
+            setterAccessLevel: weakSetter
+        )
+    )
 }
 
 /// Build a `.propertyAssignment` member injection from an `@Inject

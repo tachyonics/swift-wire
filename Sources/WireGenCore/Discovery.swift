@@ -489,19 +489,27 @@ package struct DependencyParameter: Sendable {
     /// match only same-key bindings (Dagger-style — keys partition the
     /// binding space).
     package let keyIdentifier: String?
+    /// True when this init-time dependency came from an `@Inject weak
+    /// let`. Diagnostic-only metadata: a `weak let` edge that closes a
+    /// cycle can be broken by converting it to `weak var` (post-construct
+    /// delivery), so the cyclic-dependency error points at it. Doesn't
+    /// affect resolution or codegen. See `OptionalMatchingAndCycles.md`.
+    package let isWeakLet: Bool
 
     package init(
         name: String?,
         type: String,
         kind: DependencyKind,
         location: SourceLocation,
-        keyIdentifier: String? = nil
+        keyIdentifier: String? = nil,
+        isWeakLet: Bool = false
     ) {
         self.name = name
         self.type = type
         self.kind = kind
         self.location = location
         self.keyIdentifier = keyIdentifier
+        self.isWeakLet = isWeakLet
     }
 }
 

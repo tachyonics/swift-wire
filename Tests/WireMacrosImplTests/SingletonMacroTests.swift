@@ -86,6 +86,34 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
+    func test_injectWeakLet_includedInSynthesisedInitParameters() {
+        // Contrast with `weak var`: a `weak let` is delivered at
+        // construction (the single write a `let` allows), so the
+        // synthesised init takes it as a parameter and assigns it. It is
+        // constructor-injected — a cycle participant, not a breaker. See
+        // Documentation/Notes/OptionalMatchingAndCycles.md.
+        assertMacroExpansion(
+            """
+            @Singleton
+            final class View {
+                @Inject weak let coordinator: Coordinator?
+            }
+            """,
+            expandedSource: """
+                final class View {
+                    weak let coordinator: Coordinator?
+
+                    init(coordinator: Coordinator?) {
+                        self.coordinator = coordinator
+                    }
+
+                    static let key = BindingKey<View>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
     func test_injectWeakVar_coexistsWithStrongInjectInit() {
         // The "init OR properties, never both" rule has one
         // exception: weak `@Inject` properties may coexist with

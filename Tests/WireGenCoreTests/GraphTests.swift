@@ -343,6 +343,20 @@ struct GraphTests {
         #expect(order.map(\.boundType) == ["Coordinator", "View"])
     }
 
+    @Test func weakLetInitDependencyParticipatesInCycleDetection() throws {
+        // A `weak let` is an init-time dependency, so a cycle closed
+        // through it is a real cycle — unlike a `weak var`, whose
+        // post-construct delivery breaks it. A (weak let → `B?`) and B
+        // (→ A) form a cycle that promotion resolves into a real edge.
+        // See OptionalMatchingAndCycles.md.
+        let result = buildDependencyGraph(from: [
+            singleton("A", dependencies: [(name: "b", type: "B?")]),
+            singleton("B", dependencies: [(name: "a", type: "A")]),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.cycles.count == 1)
+    }
+
     @Test func nonOptionalDepIsNotSatisfiedByOptionalProducer() throws {
         // The asymmetry: a non-optional `Logger` consumer is NOT
         // satisfied by a `Logger?` producer — you cannot silently

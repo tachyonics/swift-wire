@@ -396,6 +396,45 @@ struct DiscoveryTests {
         #expect(injection.parameters[0].kind == .injectMethodParameter)
     }
 
+    @Test func weakInjectLetBecomesInitDependencyNotMemberInjection() {
+        // `@Inject weak let x: T?` is delivered at construction (the one
+        // write a `let` allows), so it's an ordinary init-time dependency
+        // — NOT a post-construct member injection like `weak var`. The
+        // declared optional type is kept and promotes against the `T`
+        // producer at resolution. See OptionalMatchingAndCycles.md.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak let coordinator: Coordinator?
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].memberInjections.isEmpty)
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].type == "Coordinator?")
+        #expect(result[0].dependencies[0].kind == .injectProperty)
+        // Flagged so the cyclic-dependency error can point at it if it
+        // closes a cycle.
+        #expect(result[0].dependencies[0].isWeakLet == true)
+    }
+
+    @Test func weakInjectLetEmitsNoBlanketDiagnostic() {
+        // A `weak let` is a legitimate non-owning, immutable reference
+        // (SE-0481); discovery emits NO per-declaration warning. Cycle
+        // guidance is a note on the cyclic-dependency error (graph layer),
+        // emitted only when a `weak let` actually closes a cycle. See
+        // OptionalMatchingAndCycles.md.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak let coordinator: Coordinator?
+            }
+            """
+        let result = discover(in: source, sourcePath: "View.swift")
+        #expect(result.warnings.isEmpty)
+    }
+
     @Test func injectFuncBecomesMethodCallMemberInjection() {
         // The general form: `@Inject func setX(_ x: T)` captures the
         // method's parameter list as the injection's parameters and

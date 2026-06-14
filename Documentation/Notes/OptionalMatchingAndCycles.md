@@ -243,14 +243,24 @@ The distinctions:
   detection**. It is the language finally being able to express weak's
   *retain* property decoupled from the *timing* property. Wire treats it
   as a constructor-injected `T?` dependency (resolved via promotion
-  against the `T` producer) and **warns**:
+  against the `T` producer).
 
-  > `@Inject weak let 'x'` is delivered at construction; unlike
-  > `weak var` it does not break reference cycles — it participates in
-  > cycle detection. Use `weak var` to break a cycle.
+  **No blanket warning.** An acyclic `weak let` is a legitimate
+  non-owning, immutable reference (exactly the case SE-0481 encourages
+  for `Sendable`) — warning on every declaration would be noise, and
+  discovery can't see cycles anyway. Instead, the guidance rides the
+  cyclic-dependency error: when a `weak let` edge *closes a cycle*, the
+  cycle error carries a `note:` at that edge —
 
-  A `weak let` written into an actual cycle then fails with Wire's
-  normal cyclic-dependency error, which backstops the warning.
+  > `'x'` is an `@Inject weak let` that closes this cycle; change it to
+  > `weak var` to break the cycle (the bootstrap then delivers it
+  > post-construct, off the init-time edge).
+
+  So the dangerous case gets precise, actionable guidance exactly when
+  the build fails, and the benign case is silent. The dependency is
+  flagged (`DependencyParameter.isWeakLet`) so cycle reporting can spot
+  the edge; the note is emitted only for the edge actually in the cycle,
+  not for a `weak let` that merely points at a cycle member.
 
 - **Strong post-construct (the `Ref`-box idea) — NOT a breaker.** A
   strong reference delivered post-construct severs the *construction*
@@ -311,9 +321,9 @@ once in `weak var`.
    discovery-time weak `?`-strip, handling both `T?` and `T!`, plus the
    asymmetry and ambiguity diagnostics.
 2. **`weak let` handling** — constructor-injected `T?` dependency
-   (resolved via promotion), cycle-participating, with the
-   "does not break cycles" warning. Rides on (1), so it needs no
-   per-feature strip.
+   (resolved via promotion), cycle-participating, silent when acyclic,
+   with a `note:` on the cyclic-dependency error when it closes a cycle.
+   Rides on (1), so it needs no per-feature strip.
 3. **`weak var x: T!`** — falls out of (1) for free once the matcher
    normalizes the IUO node; document it as the non-optional-access
    spelling of weak injection (with the trap-on-stale-access caveat).
