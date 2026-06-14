@@ -1,10 +1,9 @@
 import SwiftSyntax
 
 /// Attribute-name matching for Wire's macros, parsed from source by the
-/// build plugin. Extracted from `BindingDiscovery.swift`. Includes
-/// SE-0491 module-selector tolerance so a user may qualify Wire's macros
-/// with its module (`@Wire::Singleton`) — see `wireMacroNameMatches` and
-/// `MultiModuleComposition.md`.
+/// build plugin. Includes SE-0491 module-selector tolerance so a user may 
+/// qualify Wire's macros with its module (`@Wire::Singleton`) — see 
+/// `wireMacroNameMatches` and `MultiModuleComposition.md`.
 
 /// Find the first attribute in the list matching `name`, or `nil`.
 /// Used to reach the attribute's argument list when extracting a
