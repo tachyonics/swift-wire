@@ -304,28 +304,22 @@ private func applyInjectVar(
                 into: &result
             )
         } else {
-            if isWeak {
-                // `weak let`: delivered at construction (the one write a
-                // `let` allows), so it's an ordinary init-time edge that
-                // participates in cycle detection — it does NOT break
-                // cycles the way `weak var` does. Warn so the asymmetry
-                // isn't a surprise. See OptionalMatchingAndCycles.md.
-                result.diagnostics.append(
-                    Diagnostic(
-                        location: location,
-                        message:
-                            "@Inject weak let '\(pattern.identifier.text)' is delivered at construction; unlike '@Inject weak var' it does not break reference cycles — it participates in cycle detection. Use 'weak var' to break a reference cycle.",
-                        severity: .warning
-                    )
-                )
-            }
+            // Non-weak property OR `weak let` — both are init-time,
+            // constructor-injected dependencies. `weak let` is flagged
+            // (`isWeakLet`) so that IF it closes a cycle, the
+            // cyclic-dependency error can point at it (converting to
+            // `weak var` breaks the cycle post-construct). No blanket
+            // warning: an acyclic `weak let` is a legitimate non-owning,
+            // immutable reference (SE-0481). See
+            // OptionalMatchingAndCycles.md.
             propertyDependencies.append(
                 DependencyParameter(
                     name: pattern.identifier.text,
                     type: typeAnnotation.type.trimmedDescription,
                     kind: .injectProperty,
                     location: location,
-                    keyIdentifier: propertyKey
+                    keyIdentifier: propertyKey,
+                    isWeakLet: isWeak
                 )
             )
         }
