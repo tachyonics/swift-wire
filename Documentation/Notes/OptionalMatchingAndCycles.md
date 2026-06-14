@@ -352,6 +352,20 @@ once in `weak var`.
    `DependencyParameter.nonOwningInitForm`.
 
 ### Deferred (prove the need first)
+- **Non-owned *bindings*.** Consumer-site `weak let` / `unowned` carry no
+  lifetime semantics in Wire: `_WireGraph` (and each scope struct) holds
+  every binding *strongly*, so the graph keeps the target alive regardless
+  of how a consumer references it — the non-owning reference is correct
+  but inert (functionally a no-op versus `strong`; its value is the
+  cycle-redirect diagnostic, not lifetime). Lifetime *non-extension* can
+  only happen at the layer that retains — a binding marker that makes the
+  graph hold a binding `weak`/`unowned` instead of `let`. That only means
+  anything for an **externally-owned** dependency (one something else
+  owns; otherwise it deallocs immediately), so the most plausible trigger
+  is a **reference-type seeded-scope dependency with a caller-managed
+  lifetime**, where the scope shouldn't outlive what the caller passed in.
+  Niche feature for a niche case, no demonstrated demand — pick it up when
+  a real use case forces it.
 - **Construction-time / lazy-as-cycle-breaker.** Offers no leak-safety
   advantage under ARC (see Part 2) and needs `weak`/`unowned` anyway, so
   there is no compelling version of it. Deferred indefinitely.
