@@ -255,6 +255,21 @@ struct BootstrapTests {
         #expect(workshopToolbelt === graph.toolbelt)
     }
 
+    // MARK: - `@Inject weak let` constructor injection
+
+    @Test func weakLetInjectionDeliversNonOwningReferenceAtInit() async throws {
+        // `Dashboard` holds `Telemetry` via `@Inject weak let` — delivered
+        // at init (constructor injection), not post-construct. That this
+        // test *builds* is the load-bearing assertion: the macro-generated
+        // `init(telemetry: Telemetry?) { self.telemetry = telemetry }` has
+        // to compile against `weak let` storage. At runtime the graph
+        // retains the `@Singleton Telemetry` strongly, so the weak hold
+        // stays valid and resolves to the same instance.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.dashboard.telemetry === graph.telemetry)
+        #expect(graph.dashboard.describeTelemetry() == "telemetry id: telemetry")
+    }
+
     // MARK: - `@Scoped(seed:)` end-to-end
 
     @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {

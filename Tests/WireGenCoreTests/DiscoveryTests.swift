@@ -435,6 +435,43 @@ struct DiscoveryTests {
         #expect(result.warnings.isEmpty)
     }
 
+    @Test func weakInjectLetWithIUOBecomesInitDependency() {
+        // `weak let x: T!` (IUO) is constructor-injected just like
+        // `weak let x: T?`; the declared type is kept and promotes against
+        // the `T` producer (the IUO normalizes to optional). Parallels the
+        // `weak var x: T!` case. See OptionalMatchingAndCycles.md.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject weak let coordinator: Coordinator!
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "View.swift")
+        #expect(result.count == 1)
+        #expect(result[0].memberInjections.isEmpty)
+        #expect(result[0].dependencies.count == 1)
+        #expect(result[0].dependencies[0].type == "Coordinator!")
+        #expect(result[0].dependencies[0].kind == .injectProperty)
+        #expect(result[0].dependencies[0].isWeakLet == true)
+    }
+
+    @Test func privateWeakInjectLetEmitsNoTooPrivateError() {
+        // A `weak let` is constructor-injected (the macro writes the init
+        // in the host scope, which the bootstrap calls), so — like a
+        // non-weak `@Inject private let` — it can be `private`. None of
+        // the `weak var` post-construct `≥internal` / setter-restriction
+        // errors apply. See OptionalMatchingAndCycles.md and
+        // VisibilityModel.md.
+        let source = """
+            @Singleton
+            final class View {
+                @Inject private weak let coordinator: Coordinator?
+            }
+            """
+        let result = discover(in: source, sourcePath: "View.swift")
+        #expect(result.warnings.isEmpty)
+    }
+
     @Test func injectFuncBecomesMethodCallMemberInjection() {
         // The general form: `@Inject func setX(_ x: T)` captures the
         // method's parameter list as the injection's parameters and
