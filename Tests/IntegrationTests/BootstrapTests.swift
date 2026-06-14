@@ -239,6 +239,20 @@ struct BootstrapTests {
         #expect(graph.view.coordinator === graph.coordinator)
     }
 
+    @Test func iuoWeakVarBreaksSingletonCycle() async throws {
+        // Hub ↔ Spoke, with Spoke holding Hub weakly via the IUO form
+        // `@Inject weak var hub: Hub!`. The weak edge is excluded from
+        // cycle detection, so bootstrap succeeds — the `!` is ergonomic
+        // only. That this builds proves the generated `spoke.hub = hub`
+        // compiles against `weak var hub: Hub!` storage and the matcher's
+        // `T!` normalization resolves the edge; the runtime assertions
+        // pin the IUO non-optional access.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.hub.spoke === graph.spoke)
+        #expect(graph.spoke.hub === graph.hub)
+        #expect(graph.spoke.describeHub() == "hub owns this spoke: true")
+    }
+
     @Test func weakInjectionOnActorRoutesThroughGeneratedSetterExtension() async throws {
         // `@Inject weak var workshop: Workshop?` on a `Toolbelt`
         // actor compiles by virtue of the synthesised
