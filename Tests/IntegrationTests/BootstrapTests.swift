@@ -239,6 +239,20 @@ struct BootstrapTests {
         #expect(graph.view.coordinator === graph.coordinator)
     }
 
+    @Test func iuoWeakVarBreaksSingletonCycle() async throws {
+        // Hub ↔ Spoke, with Spoke holding Hub weakly via the IUO form
+        // `@Inject weak var hub: Hub!`. The weak edge is excluded from
+        // cycle detection, so bootstrap succeeds — the `!` is ergonomic
+        // only. That this builds proves the generated `spoke.hub = hub`
+        // compiles against `weak var hub: Hub!` storage and the matcher's
+        // `T!` normalization resolves the edge; the runtime assertions
+        // pin the IUO non-optional access.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.hub.spoke === graph.spoke)
+        #expect(graph.spoke.hub === graph.hub)
+        #expect(graph.spoke.describeHub() == "hub owns this spoke: true")
+    }
+
     @Test func weakInjectionOnActorRoutesThroughGeneratedSetterExtension() async throws {
         // `@Inject weak var workshop: Workshop?` on a `Toolbelt`
         // actor compiles by virtue of the synthesised
@@ -253,6 +267,21 @@ struct BootstrapTests {
         #expect(toolbeltWorkshop === graph.workshop)
         let workshopToolbelt = await graph.workshop.toolbelt
         #expect(workshopToolbelt === graph.toolbelt)
+    }
+
+    // MARK: - `@Inject weak let` constructor injection
+
+    @Test func weakLetInjectionDeliversNonOwningReferenceAtInit() async throws {
+        // `Dashboard` holds `Telemetry` via `@Inject weak let` — delivered
+        // at init (constructor injection), not post-construct. That this
+        // test *builds* is the load-bearing assertion: the macro-generated
+        // `init(telemetry: Telemetry?) { self.telemetry = telemetry }` has
+        // to compile against `weak let` storage. At runtime the graph
+        // retains the `@Singleton Telemetry` strongly, so the weak hold
+        // stays valid and resolves to the same instance.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.dashboard.telemetry === graph.telemetry)
+        #expect(graph.dashboard.describeTelemetry() == "telemetry id: telemetry")
     }
 
     // MARK: - `@Scoped(seed:)` end-to-end
