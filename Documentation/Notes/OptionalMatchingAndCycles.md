@@ -57,14 +57,16 @@ a parallel notion of compatibility.
 - **One level of optionality.** `T??` is not special-cased; document it
   as "strip at most one `?`." Nested optionals effectively never appear
   in a binding type and are not worth the matrix.
-- Everything else matches by spelling. Module-prefix / typealias
-  normalization (`Logger` vs `MyModule.Logger`, aliases, `[Int]` vs
-  `Array<Int>`, SE-0491 `Module::Logger`) is a **separate, pre-existing
-  limitation** of the structural matcher and is explicitly **out of
-  scope** here. Optional promotion is *not* normalization: `T` and `T?`
-  are different types with potentially different intent, whereas those
-  others are spelling synonyms for the *same* type. Conflating the two
-  would be a category error.
+- Everything else matches by spelling. Typealias / collection-sugar
+  normalization (aliases, `[Int]` vs `Array<Int>`) is a **separate,
+  pre-existing limitation** of the structural matcher and is explicitly
+  **out of scope** here. Optional promotion is *not* normalization: `T`
+  and `T?` are different types with potentially different intent, whereas
+  those are spelling synonyms for the *same* type. Conflating the two
+  would be a category error. (Module-qualified forms — `MyModule.Logger`,
+  SE-0491 `Module::Logger` — are *disambiguators*, not synonyms, and
+  belong to multi-module composition, not normalization. See
+  [`MultiModuleComposition.md`](MultiModuleComposition.md).)
 
 ### Ambiguity: a `T?` consumer with both candidates is an error
 
@@ -337,9 +339,13 @@ once in `weak var`.
 - **Construction-time / lazy-as-cycle-breaker.** Offers no leak-safety
   advantage under ARC (see Part 2) and needs `weak`/`unowned` anyway, so
   there is no compelling version of it. Deferred indefinitely.
-- **Module / typealias type-normalization** (`Module::T`, aliases,
-  collection sugar). Pre-existing structural-matcher limitation,
-  orthogonal to this note.
+- **Typealias / collection-sugar normalization** (aliases, `[Int]` vs
+  `Array<Int>`). Pre-existing structural-matcher limitation, orthogonal
+  to this note.
+- **Multi-module composition** — cross-module name disambiguation via
+  SE-0491 module selectors, plus the cross-module visibility threshold.
+  Not a normalization concern (module selectors disambiguate; they don't
+  normalize). See [`MultiModuleComposition.md`](MultiModuleComposition.md).
 
 ---
 
@@ -373,5 +379,7 @@ deferred reference.
 **Language proposals.** [SE-0481 `weak let`] is what makes the
 `weak let` row above expressible — weak's retain property decoupled from
 the timing property (and hence *not* a breaker). [SE-0491 module
-selectors] is noted only as part of the deferred type-normalization
-work, not addressed here.
+selectors] is not addressed here; it's a disambiguator (not a
+normalization target), and its payoff for Wire is coupled to multi-module
+composition — see
+[`MultiModuleComposition.md`](MultiModuleComposition.md).

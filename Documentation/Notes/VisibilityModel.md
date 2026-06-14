@@ -5,6 +5,13 @@
 > conceptual model that 5α implements and that 5β (multibindings)
 > + future container composition both build on. Not yet implemented.
 
+> **See also:** the "must be at least `internal`" threshold below assumes
+> the bootstrap is generated into the *same* module. Multi-module
+> composition raises it to `public`/`package` for cross-module-consumed
+> bindings — see
+> [`MultiModuleComposition.md`](MultiModuleComposition.md) (the naming
+> half of the same shift uses SE-0491 module selectors).
+
 ## What this note is for
 
 Wire reads source-level access modifiers (`public`, `package`,
