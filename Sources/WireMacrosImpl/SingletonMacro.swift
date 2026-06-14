@@ -457,13 +457,17 @@ enum WireDiagnostic: DiagnosticMessage {
 
 extension AttributeListSyntax {
     /// `true` if the list contains an attribute whose name matches `name`
-    /// (e.g. "Inject" matches `@Inject`). Macro names are matched leniently
-    /// against the trimmed identifier; module-qualified names like
-    /// `@Wire.Inject` aren't expected at the host source level.
+    /// (e.g. "Inject" matches `@Inject`). Tolerates an SE-0491 module
+    /// selector qualifying the macro with Wire's own module
+    /// (`@Wire::Inject` ≡ `@Inject`) so that a user who qualifies the host
+    /// macro — and its members — consistently still expands correctly.
+    /// Only Wire's selector is stripped; `@OtherModule::Inject` is a
+    /// different module's macro. See `MultiModuleComposition.md`.
     fileprivate func hasAttribute(named name: String) -> Bool {
         contains { element in
             guard let attr = element.as(AttributeSyntax.self) else { return false }
-            return attr.attributeName.trimmedDescription == name
+            let collapsed = attr.attributeName.trimmedDescription.filter { !$0.isWhitespace }
+            return collapsed == name || collapsed == "Wire::\(name)"
         }
     }
 }
