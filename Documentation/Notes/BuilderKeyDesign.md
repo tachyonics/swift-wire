@@ -20,6 +20,19 @@ design honours it: the fold function's return type comes from
 the builder's source or from the `BuilderKey` declaration, never
 from consumer annotations.
 
+Settled for iteration 5β (see `M1_PLAN.md`): discovery reads the
+key declaration for *all three* flavours, not just `BuilderKey`.
+`BuilderKey` forces it — without opaque support the emitted
+`@resultBuilder` fold needs an explicit concrete return type, and
+its only producer-side source is the builder's `buildBlock` /
+`buildFinalResult`. Running declaration-reading for `BuilderKey`
+and string-only `_check<T>` offload (the `BindingKey` precedent)
+for `CollectedKey` / `MappedKey` would mean two discovery
+disciplines; reading declarations uniformly is one mechanism with
+uniform producer authority. The `_check<T>`-style compiler
+assertion is still emitted as a backstop against reference→
+declaration matching brittleness (module qualification, typealiases).
+
 ## What `BuilderKey<B>` is
 
 The third multibinding key flavour alongside `CollectedKey<T>` (set/

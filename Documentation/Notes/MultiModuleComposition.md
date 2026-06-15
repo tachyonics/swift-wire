@@ -74,6 +74,33 @@ So the declaration-too-private threshold becomes **context-dependent**:
 cross-module-consumed bindings. Whether a binding is cross-module-
 consumed is, again, knowable structurally from the composition graph.
 
+## Multibinding key references across modules
+
+Iteration 5β's multibindings reference a key by name — `@Contributes(to:
+X)` on a contributor, `@Inject(X)` on a consumer — and 5β validates that
+`X` resolves to a discovered key declaration (a `CollectedKey` /
+`MappedKey` / `BuilderKey` `static let`). That "must exist" check is
+scoped to **the plugin's parse set**, which is one module today.
+
+Composition widens the parse set, not the rule: a contributor in module
+`B` may legitimately `@Contributes(to: A.serviceKey)` for a key declared
+in `A`, and an app module may aggregate contributors from both. The
+missing-key diagnostic stays "no such key *in the parse set*" and
+loosens automatically as more packages are parsed — no special-casing.
+Two constraints ride along, both already covered above:
+
+- **Visibility** — the key declaration must be reachable from the
+  contributing/consuming module (≥ `public`, or `package` within a
+  package), the same cross-module threshold as any other binding.
+- **Naming** — a key referenced across modules qualifies via SE-0491
+  (`A::serviceKey`) from origin-module metadata, like any other
+  cross-module reference.
+
+This makes cross-module multibindings the *motivating* case for
+composition: aggregating contributions a host module can't see is a
+thing DI users reach for (plugin registries, feature-module roundup),
+and it falls out of the parse-set framing without new mechanism.
+
 ## Summary
 
 Composition is "the bootstrap now lives in / is consumed by a different
