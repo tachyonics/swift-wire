@@ -488,7 +488,12 @@ extension BindingDiscovery {
                     initIsAsync: injectResult.initIsAsync,
                     initIsThrowing: injectResult.initIsThrowing,
                     memberInjections: injectResult.memberInjections,
-                    accessLevel: accessLevel(from: modifiers)
+                    accessLevel: accessLevel(from: modifiers),
+                    contributions: contributions(
+                        in: attributes,
+                        sourcePath: sourcePath,
+                        converter: converter
+                    )
                 )
             )
         )
@@ -552,7 +557,12 @@ extension BindingDiscovery {
                     keyIdentifier: key,
                     isAsync: propertyEffects.isAsync,
                     isThrowing: propertyEffects.isThrowing,
-                    accessLevel: providerAccess
+                    accessLevel: providerAccess,
+                    contributions: contributions(
+                        in: node.attributes,
+                        sourcePath: sourcePath,
+                        converter: converter
+                    )
                 )
             )
         )
@@ -624,7 +634,12 @@ extension BindingDiscovery {
                     keyIdentifier: key,
                     isAsync: effects.isAsync,
                     isThrowing: effects.isThrowing,
-                    accessLevel: providerAccess
+                    accessLevel: providerAccess,
+                    contributions: contributions(
+                        in: node.attributes,
+                        sourcePath: sourcePath,
+                        converter: converter
+                    )
                 )
             )
         )

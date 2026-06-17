@@ -94,13 +94,22 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
   instance-level declarations ignored.
 - **Ships:** discovered, unused.
 
-### Step 2 — discovery: contributions
-- **Add** `Contribution { keyReference, order?, mapKeyExpression?,
-  location }` as a **list** on `DiscoveredScopeBoundType` (and
-  `DiscoveredProvider` if `@Provides @Contributes` is in scope).
-- Parse `@Contributes(to:withOrder:atKey:)`, rendering `atKey:` textually.
-- **Test:** `DiscoveryTests` — order/atKey captured; multiple keys per
-  contributor (pending spike #1).
+### Step 2 — discovery: contributions ✅ **Done**
+- **Added** `Contribution { keyReference, order?, mapKeyExpression?,
+  location }` (`MultibindingTypes.swift`) as a **list** on *both*
+  `DiscoveredScopeBoundType` and `DiscoveredProvider`, plus a uniform
+  `DiscoveredBinding.contributions` accessor. Provider contributors
+  (`@Provides @Contributes`) are in scope — the design already lists
+  `@Provides` as a valid `@Contributes` host (Step 3), so capturing it
+  here keeps Step 2/3 consistent.
+- Parsing lives in `ContributionScanning.swift` (free functions, shared
+  by all three producer paths); `withOrder:` parsed as `Int`, `atKey:`
+  rendered verbatim. Tolerates the `@Wire::Contributes` selector.
+- Spike #1 resolved: repeated `@Contributes` compiles, so multiple keys
+  per contributor is a real list populated from multiple attributes.
+- **Test:** `ContributionDiscoveryTests` — 8 tests: key reference,
+  order, verbatim atKey, multiple contributions, `@Provides`
+  property/function hosts, plain-producer-empty, `Wire::` selector.
 - **Ships:** captured, unused.
 
 ### Step 3 — validation diagnostics
@@ -159,9 +168,9 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
   trips and that duplicate detection compares rendered expressions (two
   spellings of the same key value would slip the textual check — likely
   acceptable, note it).
-- **Provider contributors** — whether `@Provides @Contributes` is in 5β
-  or `@Singleton`/`@Scoped`-only for the first cut (affects whether Step 2
-  touches `DiscoveredProvider`).
+- ~~**Provider contributors** — whether `@Provides @Contributes` is in
+  5β.~~ **Resolved (Step 2):** in scope — contributions are captured on
+  `DiscoveredProvider` too, uniform with `@Singleton`/`@Scoped`.
 - **Aggregate inside `@Container` / seed scope** — per-scope `BuilderKey`
   storage rules (`BuilderKeyDesign.md` "Scope crossings"); the fan-in
   pass must respect scope partitioning, and cross-container contribution

@@ -191,6 +191,16 @@ extension DiscoveredBinding {
         case .provider(let provider): return provider.keyIdentifier
         }
     }
+
+    /// `@Contributes(to:)` annotations on this binding's producer —
+    /// empty for non-contributing bindings. The fan-in pass reads this
+    /// uniformly across both producer kinds.
+    package var contributions: [Contribution] {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.contributions
+        case .provider(let provider): return provider.contributions
+        }
+    }
 }
 
 /// One `@Singleton`-annotated type found in a source file, with the
@@ -253,6 +263,10 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// `private`) and the dead-binding warning's permissive-on-
     /// public rule. See `Documentation/Notes/VisibilityModel.md`.
     package let accessLevel: AccessLevel
+    /// `@Contributes(to:)` annotations on this type — empty for a plain
+    /// `@Singleton`/`@Scoped`. Captured but unused until the Step 4
+    /// fan-in pass.
+    package let contributions: [Contribution]
 
     package var sourcePath: String { location.file }
 
@@ -267,7 +281,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         initIsAsync: Bool = false,
         initIsThrowing: Bool = false,
         memberInjections: [MemberInjection] = [],
-        accessLevel: AccessLevel = .internal
+        accessLevel: AccessLevel = .internal,
+        contributions: [Contribution] = []
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -283,6 +298,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.initIsThrowing = initIsThrowing
         self.memberInjections = memberInjections
         self.accessLevel = accessLevel
+        self.contributions = contributions
     }
 }
 
@@ -429,6 +445,10 @@ package struct DiscoveredProvider: Sendable {
     /// dead-binding warning. See
     /// `Documentation/Notes/VisibilityModel.md`.
     package let accessLevel: AccessLevel
+    /// `@Contributes(to:)` annotations on this provider — empty for a
+    /// plain `@Provides`. Captured but unused until the Step 4 fan-in
+    /// pass.
+    package let contributions: [Contribution]
 
     package var sourcePath: String { location.file }
 
@@ -443,7 +463,8 @@ package struct DiscoveredProvider: Sendable {
         concreteGenericArguments: [String] = [],
         isAsync: Bool = false,
         isThrowing: Bool = false,
-        accessLevel: AccessLevel = .internal
+        accessLevel: AccessLevel = .internal,
+        contributions: [Contribution] = []
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -456,6 +477,7 @@ package struct DiscoveredProvider: Sendable {
         self.isAsync = isAsync
         self.isThrowing = isThrowing
         self.accessLevel = accessLevel
+        self.contributions = contributions
     }
 
     /// Whether the binding source is a property (read its value directly)
@@ -733,62 +755,6 @@ extension SourceFileDiscovery {
 /// are not unwrapped during resolution — `typealias UserID = UUID`
 /// followed by separate keyed bindings for each is a legitimate
 /// discriminator pattern.
-/// Which multibinding flavour a key declaration names. Drives the
-/// aggregate's codegen shape and the build plugin's per-flavour
-/// parameter-validity checks.
-package enum MultibindingKeyFlavour: Sendable, Equatable {
-    /// `CollectedKey<Element>` — aggregates contributors into `[Element]`.
-    case collected
-    /// `MappedKey<Key, Value>` — aggregates into `[Key: Value]`.
-    case mapped
-    /// `BuilderKey<Builder>` — folds contributors through `Builder`.
-    case builder
-}
-
-/// One multibinding key declaration found in source — a `static let`
-/// (or module-scope `let`) whose type is `CollectedKey<…>`,
-/// `MappedKey<…>`, or `BuilderKey<…>`. Unlike single-binding
-/// `BindingKey`s (which Wire never reads — the compiler enforces their
-/// type via generated `_check`s), multibinding keys are read producer-
-/// side: the aggregate takes its element/value/result type and its
-/// flavour from this declaration. See
-/// `Documentation/Notes/MultibindingsImplementationPlan.md`.
-package struct DiscoveredMultibindingKey: Sendable, Equatable {
-    /// Canonical reference text used to match `@Contributes(to:)` and
-    /// aggregate `@Inject` sites against this declaration — `App.services`
-    /// for a `static let services` on (an extension of) `App`, or just
-    /// `services` for a module-scope key. Same string-keyed discipline as
-    /// today's keyed bindings.
-    package let keyReference: String
-    package let flavour: MultibindingKeyFlavour
-    /// The flavour's generic argument(s), verbatim: `[Element]` for
-    /// collected, `[Key, Value]` for mapped, `[Builder]` for builder.
-    /// Empty when the key is declared without explicit generics
-    /// (`= CollectedKey()` and no annotation) — the producer-side type is
-    /// then unknown and downstream steps must diagnose it.
-    package let typeArguments: [String]
-    package let location: SourceLocation
-    /// Effective access — the declaration's own modifier folded with
-    /// every enclosing type's access. Drives the visibility-gated
-    /// empty/dead-key diagnostics (and, later, the cross-module
-    /// threshold).
-    package let accessLevel: AccessLevel
-
-    package init(
-        keyReference: String,
-        flavour: MultibindingKeyFlavour,
-        typeArguments: [String],
-        location: SourceLocation,
-        accessLevel: AccessLevel
-    ) {
-        self.keyReference = keyReference
-        self.flavour = flavour
-        self.typeArguments = typeArguments
-        self.location = location
-        self.accessLevel = accessLevel
-    }
-}
-
 package struct DiscoveredTypealias: Sendable {
     /// The typealias's own name, as written (e.g. `"UserID"`).
     package let name: String
