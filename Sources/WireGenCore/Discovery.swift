@@ -674,6 +674,12 @@ package struct SourceFileDiscovery: Sendable {
     /// `@Singleton` somewhere in the module — those inits collide
     /// with or shadow the macro-generated init.
     package let nonInjectExtensionInits: [NonInjectExtensionInit]
+    /// Multibinding key declarations (`CollectedKey`/`MappedKey`/
+    /// `BuilderKey` `static let`s) found in this file. Aggregated across
+    /// the module by `WireGen` and matched against `@Contributes(to:)`
+    /// references by `keyReference`. Captured but unused until the
+    /// fan-in pass (iteration 5β, Step 4) consumes them.
+    package let multibindingKeys: [DiscoveredMultibindingKey]
 
     package init(
         allBindings: [Partition: [DiscoveredBinding]] = [:],
@@ -682,7 +688,8 @@ package struct SourceFileDiscovery: Sendable {
         unannotatedExtensionProvides: [UnannotatedExtensionProvides] = [],
         typealiases: [DiscoveredTypealias] = [],
         declaredTypeNames: [String] = [],
-        nonInjectExtensionInits: [NonInjectExtensionInit] = []
+        nonInjectExtensionInits: [NonInjectExtensionInit] = [],
+        multibindingKeys: [DiscoveredMultibindingKey] = []
     ) {
         self.allBindings = allBindings
         self.imports = imports
@@ -691,6 +698,7 @@ package struct SourceFileDiscovery: Sendable {
         self.typealiases = typealiases
         self.declaredTypeNames = declaredTypeNames
         self.nonInjectExtensionInits = nonInjectExtensionInits
+        self.multibindingKeys = multibindingKeys
     }
 }
 
@@ -725,6 +733,62 @@ extension SourceFileDiscovery {
 /// are not unwrapped during resolution — `typealias UserID = UUID`
 /// followed by separate keyed bindings for each is a legitimate
 /// discriminator pattern.
+/// Which multibinding flavour a key declaration names. Drives the
+/// aggregate's codegen shape and the build plugin's per-flavour
+/// parameter-validity checks.
+package enum MultibindingKeyFlavour: Sendable, Equatable {
+    /// `CollectedKey<Element>` — aggregates contributors into `[Element]`.
+    case collected
+    /// `MappedKey<Key, Value>` — aggregates into `[Key: Value]`.
+    case mapped
+    /// `BuilderKey<Builder>` — folds contributors through `Builder`.
+    case builder
+}
+
+/// One multibinding key declaration found in source — a `static let`
+/// (or module-scope `let`) whose type is `CollectedKey<…>`,
+/// `MappedKey<…>`, or `BuilderKey<…>`. Unlike single-binding
+/// `BindingKey`s (which Wire never reads — the compiler enforces their
+/// type via generated `_check`s), multibinding keys are read producer-
+/// side: the aggregate takes its element/value/result type and its
+/// flavour from this declaration. See
+/// `Documentation/Notes/MultibindingsImplementationPlan.md`.
+package struct DiscoveredMultibindingKey: Sendable, Equatable {
+    /// Canonical reference text used to match `@Contributes(to:)` and
+    /// aggregate `@Inject` sites against this declaration — `App.services`
+    /// for a `static let services` on (an extension of) `App`, or just
+    /// `services` for a module-scope key. Same string-keyed discipline as
+    /// today's keyed bindings.
+    package let keyReference: String
+    package let flavour: MultibindingKeyFlavour
+    /// The flavour's generic argument(s), verbatim: `[Element]` for
+    /// collected, `[Key, Value]` for mapped, `[Builder]` for builder.
+    /// Empty when the key is declared without explicit generics
+    /// (`= CollectedKey()` and no annotation) — the producer-side type is
+    /// then unknown and downstream steps must diagnose it.
+    package let typeArguments: [String]
+    package let location: SourceLocation
+    /// Effective access — the declaration's own modifier folded with
+    /// every enclosing type's access. Drives the visibility-gated
+    /// empty/dead-key diagnostics (and, later, the cross-module
+    /// threshold).
+    package let accessLevel: AccessLevel
+
+    package init(
+        keyReference: String,
+        flavour: MultibindingKeyFlavour,
+        typeArguments: [String],
+        location: SourceLocation,
+        accessLevel: AccessLevel
+    ) {
+        self.keyReference = keyReference
+        self.flavour = flavour
+        self.typeArguments = typeArguments
+        self.location = location
+        self.accessLevel = accessLevel
+    }
+}
+
 package struct DiscoveredTypealias: Sendable {
     /// The typealias's own name, as written (e.g. `"UserID"`).
     package let name: String
@@ -804,7 +868,8 @@ package func discover(
         unannotatedExtensionProvides: visitor.unannotatedExtensionProvides,
         typealiases: visitor.typealiases,
         declaredTypeNames: visitor.declaredTypeNames,
-        nonInjectExtensionInits: visitor.nonInjectExtensionInits
+        nonInjectExtensionInits: visitor.nonInjectExtensionInits,
+        multibindingKeys: visitor.multibindingKeys
     )
 }
 

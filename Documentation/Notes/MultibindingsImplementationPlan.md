@@ -75,14 +75,23 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
   to compile — assert via the overload set, not the plugin.
 - **Ships:** compiles, no graph behaviour yet.
 
-### Step 1 — discovery: key-declaration scanner
-- **Add** `DiscoveredMultibindingKey { keyReference, flavour, typeArgs,
-  location, accessLevel }` and scan `static let X = <Flavour><…>("name")`
-  declarations. Reconstruct `keyReference` as `(enclosingType, member)`
-  for string-matching, same discipline as today's keyed bindings.
-- Thread into `SourceFileDiscovery` (a new merged-module-wide collection).
-- **Test:** `DiscoveryTests` — each flavour's type args captured; nested
-  / extension declarations resolve to the right reference string.
+### Step 1 — discovery: key-declaration scanner ✅ **Done**
+- **Added** `DiscoveredMultibindingKey { keyReference, flavour,
+  typeArguments, location, accessLevel }` + `MultibindingKeyFlavour`
+  (`Discovery.swift`). Scans `static let X = CollectedKey/MappedKey/
+  BuilderKey<…>(…)` and the explicit-annotation form; flavour + generics
+  read from the annotation when present, else the constructor call.
+- `keyReference` reconstructed as `(enclosingType…, member)` joined by
+  `.` (string-matching discipline). `accessLevel` is the effective
+  access (own modifier folded with enclosing types').
+- Recognition lives in `MultibindingKeyScanning.swift` (free functions,
+  to keep `BindingDiscovery` under the 1000-line `file_length` cap);
+  the visitor supplies enclosing-scope context and appends to
+  `SourceFileDiscovery.multibindingKeys`.
+- **Test:** `MultibindingKeyDiscoveryTests` — 9 tests: each flavour's
+  type args + reference; module-scope vs nested; annotation form;
+  no-generics empty capture; effective-access folding; non-key /
+  instance-level declarations ignored.
 - **Ships:** discovered, unused.
 
 ### Step 2 — discovery: contributions

@@ -86,6 +86,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// WireGen resolves these against the module-wide
     /// `@Singleton`-name set after aggregation.
     var nonInjectExtensionInits: [NonInjectExtensionInit] = []
+    /// Multibinding key declarations (`CollectedKey`/`MappedKey`/
+    /// `BuilderKey` `static let`s) found in this file, in source order.
+    /// The aggregate's element/value/result type is read producer-side
+    /// from these.
+    var multibindingKeys: [DiscoveredMultibindingKey] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
     /// One frame per enclosing type the visitor has entered, in
@@ -327,6 +332,17 @@ final class BindingDiscovery: SyntaxVisitor {
     // MARK: `@Provides` on variables and functions.
 
     override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
+        if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
+            let key = multibindingKey(
+                from: node,
+                enclosingTypeNames: scopes.map(\.typeName),
+                enclosingAccessLevels: scopes.map(\.access),
+                sourcePath: sourcePath,
+                converter: converter
+            )
+        {
+            multibindingKeys.append(key)
+        }
         if hasAttribute(node.attributes, named: "Provides"),
             isAtRecognisedProvidesPosition(modifiers: node.modifiers)
         {
