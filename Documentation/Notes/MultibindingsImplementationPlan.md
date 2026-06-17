@@ -35,13 +35,27 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
    per contributor). If it doesn't, the surface changes to a variadic
    `to:` or distinctly-named attributes — a Step 0 decision, not a
    refactor later.
-2. **BuilderKey emission shape.** Hand-write the IIFE form
-   (`let x: R = { @Builder () -> R in a; b }()`) against a real
-   `@resultBuilder` and confirm it compiles with the explicit concrete
-   `R` and that the result-builder transform fires on the statement
-   list. This is the BuilderKey-minus-opaque crux; validate the literal
-   before building codegen for it. Capture it as an integration example
-   (mirrors `WeakLetExample.swift` / `UnownedExample.swift`).
+2. **BuilderKey emission shape.** ✅ **Done** — `BuilderKeyFoldSpike.swift`.
+   **Finding:** the result-builder attribute is *not* supported on a
+   closure, so the originally-planned IIFE form
+   (`let x: R = { @Builder () -> R in a; b }()`) does **not** compile.
+   The working shape is a `@resultBuilder`-annotated **local function**
+   that captures the (already-constructed) contributor locals and is
+   invoked at the binding site:
+
+   ```swift
+   @MiddlewareBuilder
+   func fold() -> [any Middleware] {   // explicit R read from buildBlock
+       auth                            // contributor locals, in order
+       log
+   }
+   let chain = fold()
+   ```
+
+   Step 5 codegen emits this per `BuilderKey` aggregate. Local-function
+   capture (rather than passing contributors as parameters) preserves
+   each contributor's concrete static type into the builder, which
+   matters for order-/type-sensitive builders.
 3. **`buildBlock` return-type extraction.** Decide which signature Wire
    reads when a builder has overloaded `buildBlock` / a `buildFinalResult`
    — pick the rule (prefer `buildFinalResult` return when present, else

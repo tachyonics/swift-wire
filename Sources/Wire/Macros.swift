@@ -1,8 +1,7 @@
 // Public-facing macro declarations.
 //
 // The currently shipping surface is `@Singleton`, `@Scoped`,
-// `@Inject`, `@Provides`, and `@Container`. `@Contributes` is
-// planned for a later milestone.
+// `@Inject`, `@Provides`, `@Container`, and `@Contributes`.
 
 /// Declares a process-lifetime singleton. The macro generates:
 /// - A `static let key: BindingKey<Self>` for the auto-generated key.
@@ -126,3 +125,54 @@ public macro Provides<Value>(_ key: BindingKey<Value>) =
 /// plugin recognises during source scanning.
 @attached(peer)
 public macro Container() = #externalMacro(module: "WireMacrosImpl", type: "ContainerMacro")
+
+/// Declares the annotated binding as a *contributor* to a multibinding
+/// key — a `CollectedKey<Element>`, `MappedKey<Key, Value>`, or
+/// `BuilderKey<Builder>`. The contributor keeps its own binding identity
+/// (it stays independently `@Inject`-able) and additionally fans into the
+/// aggregate the key names.
+///
+///     @Singleton @Contributes(to: App.services)
+///     struct AuthService: Service { ... }
+///
+/// `@Contributes` itself contributes no code — it's a marker the build
+/// plugin recognises during source scanning. It requires a co-located
+/// producer macro (`@Singleton`/`@Scoped`/`@Provides`) to give the
+/// contributor a lifetime.
+///
+/// The typed `to:` parameter does double duty: it's how the plugin learns
+/// which key the contribution targets, and its overloads enforce
+/// flavour/argument validity at compile time — `atKey:` is required on
+/// `MappedKey` and rejected elsewhere, `withOrder:` is valid only on
+/// `CollectedKey`/`BuilderKey`, and `atKey:` is typed to the map's `Key`.
+@attached(peer)
+public macro Contributes<Element>(to: CollectedKey<Element>) =
+    #externalMacro(module: "WireMacrosImpl", type: "ContributesMacro")
+
+/// Ordered contribution to a `CollectedKey<Element>`. `withOrder:` ranks
+/// this contributor among the key's others; if any contributor on a key
+/// specifies an order, all must (the no-mixing rule the build plugin
+/// enforces).
+@attached(peer)
+public macro Contributes<Element>(to: CollectedKey<Element>, withOrder: Int) =
+    #externalMacro(module: "WireMacrosImpl", type: "ContributesMacro")
+
+/// Keyed contribution to a `MappedKey<Key, Value>`. `atKey:` is the map
+/// entry's key and is typed to `Key`. Duplicate keys across a map's
+/// contributors are a compile-time error raised by the build plugin.
+@attached(peer)
+public macro Contributes<Key: Hashable, Value>(to: MappedKey<Key, Value>, atKey: Key) =
+    #externalMacro(module: "WireMacrosImpl", type: "ContributesMacro")
+
+/// Contribution to a `BuilderKey<Builder>`. The contributor becomes one
+/// component folded through the builder.
+@attached(peer)
+public macro Contributes<Builder>(to: BuilderKey<Builder>) =
+    #externalMacro(module: "WireMacrosImpl", type: "ContributesMacro")
+
+/// Ordered contribution to a `BuilderKey<Builder>`. `withOrder:`
+/// sequences this contributor among the fold's components — often
+/// type-relevant for order-sensitive builders like middleware chains.
+@attached(peer)
+public macro Contributes<Builder>(to: BuilderKey<Builder>, withOrder: Int) =
+    #externalMacro(module: "WireMacrosImpl", type: "ContributesMacro")
