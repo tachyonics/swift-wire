@@ -1,6 +1,5 @@
 // Discovery data types for iteration 5β multibindings — the key
-// declarations and the contributions that fan into them. Extracted from
-// `Discovery.swift` to keep that file under the `file_length` cap; the
+// declarations and the contributions that fan into them. The
 // `contributions` fields and accessor live on the producer types in
 // `Discovery.swift` itself. See
 // `Documentation/Notes/MultibindingsImplementationPlan.md`.
