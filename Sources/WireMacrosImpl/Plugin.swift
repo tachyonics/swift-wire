@@ -9,5 +9,6 @@ struct WireMacrosPlugin: CompilerPlugin {
         InjectMacro.self,
         ProvidesMacro.self,
         ContainerMacro.self,
+        ContributesMacro.self,
     ]
 }
