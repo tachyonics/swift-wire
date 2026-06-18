@@ -112,13 +112,25 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
   property/function hosts, plain-producer-empty, `Wire::` selector.
 - **Ships:** captured, unused.
 
-### Step 3 — validation diagnostics
-- Bare `@Contributes` (no `@Singleton`/`@Scoped`/`@Provides`) → diagnostic.
-- `@Contributes(to: X)` where `X` ∉ parse-set key declarations →
-  missing-key diagnostic (the cross-module-widening rule).
-- Cross-contributor rules the overloads can't see: `withOrder:` mixing
-  (all-or-none), duplicate `atKey:` on a `MappedKey`.
-- **Test:** `DiagnosticGalleryTests`.
+### Step 3 — validation diagnostics ✅ **Done**
+- All diagnostics in `MultibindingDiagnostics.swift`, all `.error`.
+- **Bare `@Contributes`** (no producer macro) — `strayContributesDiagnostics`
+  run by the visitor from `enterTypeDecl` (one choke point covering every
+  type kind + extensions, producers `@Singleton`/`@Scoped`) and from the
+  var/func visits (producer `@Provides`).
+- **Module-wide** `multibindingContributionDiagnostics` run by WireGen in
+  `collectCrossFileDiagnostics`: undeclared-key (the parse-set-widening
+  rule), mixed `withOrder:` (all-or-none), duplicate `atKey:`. Output is
+  location-sorted for stable build output. The overload set already
+  enforces per-call argument validity, so only cross-declaration rules
+  live here.
+- Both paths feed `failIfAnyDiagnosticIsError`, so an `.error` fails the
+  build before bad code is emitted.
+- To make room, the shared syntax helpers (`makeSourceLocation`,
+  `accessLevel`, `setterAccessLevel`) moved to `DiscoverySyntaxHelpers.swift`.
+- **Test:** `MultibindingValidationTests` — 9 tests through real
+  discovery + the module-wide function, asserting message + `.error`
+  severity, with accepted-case negatives.
 - **Ships:** diagnostics only.
 
 ### Step 4 — graph: aggregate node + fan-in
