@@ -454,6 +454,10 @@ private func genericBindingSignature(
     case .provider(let provider):
         let parsed = parseGenericType(canonicalTypeName(provider.boundType))
         return (parsed.base, binding.genericParameterNames.count)
+    case .aggregate:
+        // Aggregates are never generic — the guard above already
+        // returns nil for them; this case only satisfies exhaustiveness.
+        return nil
     }
 }
 
@@ -528,6 +532,10 @@ private func specialiseBinding(
                     : []
             )
         )
+    case .aggregate:
+        // Aggregates are never generic, so never specialised; only
+        // present for exhaustiveness.
+        return binding
     }
 }
 
@@ -600,9 +608,14 @@ private func parseGenericType(_ expression: String) -> (base: String, params: [S
 /// rest of validation isn't trustworthy.
 package func buildDependencyGraph(
     from bindings: [DiscoveredBinding],
-    typealiases: [DiscoveredTypealias] = []
+    typealiases: [DiscoveredTypealias] = [],
+    multibindingKeys: [DiscoveredMultibindingKey] = []
 ) -> GraphResult {
-    let partition = partitionBindings(bindings)
+    // Fan-in: turn each declared multibinding key into a synthesised
+    // aggregate binding (deps = its contributors). Aggregates then flow
+    // through the rest of the pipeline as ordinary bindings.
+    let allBindings = bindings + synthesizeAggregates(keys: multibindingKeys, bindings: bindings)
+    let partition = partitionBindings(allBindings)
     let skipped = partition.skipped
 
     let (uniqueByIdentity, duplicates) = splitUniqueFromDuplicates(

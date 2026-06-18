@@ -205,6 +205,7 @@ private func displayName(_ binding: DiscoveredBinding) -> String {
     switch binding {
     case .scopeBound(let scopeBound): return scopeBound.typeName
     case .provider(let provider): return provider.accessPath
+    case .aggregate(let aggregate): return aggregate.collectionType
     }
 }
 

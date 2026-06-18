@@ -144,6 +144,8 @@ private func consumerTypeName(_ consumer: DiscoveredBinding) -> String {
         return scopeBound.typeName
     case .provider(let provider):
         return provider.accessPath
+    case .aggregate(let aggregate):
+        return aggregate.keyReference
     }
 }
 

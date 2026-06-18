@@ -135,17 +135,35 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
   severity, with accepted-case negatives.
 - **Ships:** diagnostics only.
 
-### Step 4 — graph: aggregate node + fan-in
-- **Add** the aggregate node (new `DiscoveredBinding` case or sibling
-  node form) carrying flavour + declared type (from Step 1) and ordered
-  contributors. Identity is **key-primary**, outside
-  `splitUniqueFromDuplicates`.
-- Fan-in pass: group `(binding, contribution)` by key, match to the key
-  declaration, add aggregate→contributor edges (deps = union), rewrite
-  consumer deps referencing a multibinding key to point at the aggregate.
-- **Test:** `GraphTests` — aggregate topo-sorts after all contributors;
-  co-contributors raise no false duplicate; contributor reachable only
-  via aggregate stays live.
+### Step 4 — graph: aggregate node + fan-in ✅ **Done** (collected + mapped)
+- **Added** `DiscoveredBinding.aggregate(DiscoveredAggregate)` + the
+  `synthesizeAggregates` fan-in (`MultibindingFanIn.swift`):
+  one aggregate per declared key, deps = its contributors (each an edge
+  to the contributing binding).
+- **Simpler than originally sketched.** The aggregate is a *synthesised
+  single node* with an ordinary `(collectionType, keyReference)`
+  identity — not a key-primary special case. So it flows through
+  `partitionBindings` → `splitUniqueFromDuplicates` → `resolveDependencies`
+  → `topologicalSort` **unchanged**: it's unique (one per key), co-
+  contributors keep their own identities (no false duplicate), and a
+  consumer's `@Inject(key) var x: [T]` dep already has identity
+  `([T], key)` so it resolves to the aggregate **by ordinary
+  `matchProducer`** — no consumer-dep rewrite, no special-casing. The
+  earlier "key-primary + rewrite + outside-split" framing turned out
+  unnecessary.
+- `collectionType` derived producer-side: `[Element]` / `[Key: Value]`.
+  **Builder deferred to Step 5** — its result type comes from the
+  builder's `buildBlock`, which lands with codegen; builder keys
+  synthesise no aggregate yet.
+- Wired into `buildDependencyGraph(…, multibindingKeys:)`. **Not** wired
+  into WireGen yet (no aggregate reaches codegen until Step 5);
+  `constructionExpression`'s aggregate case is a guarded
+  `preconditionFailure` until then.
+- **Test:** `MultibindingFanInTests` — 7 tests: aggregate sorts after
+  contributors (collected + mapped), consumer sorts after aggregate,
+  co-contributors aren't duplicates, contributor-only-via-aggregate is
+  constructed, empty aggregate still resolves, builder produces no
+  aggregate yet.
 - **Ships:** graph resolves; codegen next.
 
 ### Step 5 — codegen: the three forms

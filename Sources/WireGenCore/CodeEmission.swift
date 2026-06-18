@@ -538,6 +538,11 @@ private func constructionExpression(
             }
             return "\(prefix)\(provider.accessPath)(\(args))"
         }
+    case .aggregate:
+        // Aggregate codegen (the `[Element]` / `[K: V]` / fold forms)
+        // lands in Step 5, which also wires aggregates into WireGen. No
+        // aggregate reaches emission before then.
+        preconditionFailure("aggregate construction is emitted in iteration 5β Step 5")
     }
 }
 

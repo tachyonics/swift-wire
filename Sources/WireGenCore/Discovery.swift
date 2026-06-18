@@ -104,6 +104,11 @@ package struct Partition: Hashable, Sendable {
 package enum DiscoveredBinding: Sendable {
     case scopeBound(DiscoveredScopeBoundType)
     case provider(DiscoveredProvider)
+    /// A synthesised multibinding aggregate — no source declaration of
+    /// its own; the fan-in pass builds it from a key declaration and its
+    /// contributions. Construction collects the contributors rather than
+    /// calling a single producer.
+    case aggregate(DiscoveredAggregate)
 }
 
 extension DiscoveredBinding {
@@ -114,6 +119,7 @@ extension DiscoveredBinding {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.typeName
         case .provider(let provider): return provider.boundType
+        case .aggregate(let aggregate): return aggregate.collectionType
         }
     }
 
@@ -129,6 +135,7 @@ extension DiscoveredBinding {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.qualifiedTypeName
         case .provider(let provider): return provider.boundType
+        case .aggregate(let aggregate): return aggregate.collectionType
         }
     }
 
@@ -139,6 +146,7 @@ extension DiscoveredBinding {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.dependencies
         case .provider(let provider): return provider.dependencies
+        case .aggregate(let aggregate): return aggregate.contributors.map(\.dependency)
         }
     }
 
@@ -150,7 +158,7 @@ extension DiscoveredBinding {
     package var memberInjections: [MemberInjection] {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.memberInjections
-        case .provider: return []
+        case .provider, .aggregate: return []
         }
     }
 
@@ -163,7 +171,7 @@ extension DiscoveredBinding {
     package var consumerIsActor: Bool {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.typeKind == "actor"
-        case .provider: return false
+        case .provider, .aggregate: return false
         }
     }
 
@@ -174,6 +182,7 @@ extension DiscoveredBinding {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.genericParameterNames
         case .provider(let provider): return provider.genericParameterNames
+        case .aggregate: return []
         }
     }
 
@@ -181,6 +190,7 @@ extension DiscoveredBinding {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.location
         case .provider(let provider): return provider.location
+        case .aggregate(let aggregate): return aggregate.location
         }
     }
 
@@ -195,6 +205,7 @@ extension DiscoveredBinding {
         switch self {
         case .scopeBound: return nil
         case .provider(let provider): return provider.keyIdentifier
+        case .aggregate(let aggregate): return aggregate.keyReference
         }
     }
 
@@ -205,6 +216,7 @@ extension DiscoveredBinding {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.contributions
         case .provider(let provider): return provider.contributions
+        case .aggregate: return []
         }
     }
 }
@@ -868,6 +880,11 @@ package func renderDiscoveryReport(
                 renderScopeBoundType(scopeBound, into: &lines)
             case .provider(let provider):
                 renderProvider(provider, into: &lines)
+            case .aggregate(let aggregate):
+                lines.append(
+                    "  - aggregate \(aggregate.collectionType) [\(aggregate.keyReference)] "
+                        + "(\(aggregate.contributors.count) contributors)"
+                )
             }
         }
         lines.append("")
