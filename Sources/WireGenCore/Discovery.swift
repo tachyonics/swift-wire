@@ -28,8 +28,7 @@ package struct SourceLocation: Sendable, Hashable, Comparable {
     }
 
     /// Canonical source ordering — by file, then line, then column.
-    /// The single home for "source order" sorting; callers sort with
-    /// `<` rather than hand-rolling the tuple comparison.
+    /// The single home for "source order" sorting.
     package static func < (lhs: SourceLocation, rhs: SourceLocation) -> Bool {
         (lhs.file, lhs.line, lhs.column) < (rhs.file, rhs.line, rhs.column)
     }
