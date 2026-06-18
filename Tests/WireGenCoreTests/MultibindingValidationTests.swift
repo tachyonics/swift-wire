@@ -105,6 +105,34 @@ struct MultibindingValidationTests {
         #expect(first(source, matching: "all-or-none") == nil)
     }
 
+    @Test func duplicateWithOrderIsError() throws {
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            @Singleton @Contributes(to: App.services, withOrder: 1)
+            struct A {}
+            @Singleton @Contributes(to: App.services, withOrder: 1)
+            struct B {}
+            """
+        let diagnostic = try #require(first(source, matching: "duplicate withOrder"))
+        #expect(diagnostic.severity == .error)
+        #expect(diagnostic.message.contains("ranks must be unique"))
+        let note = try #require(diagnostic.notes.first)
+        #expect(note.message.contains("first used here"))
+    }
+
+    @Test func distinctWithOrderRanksAreAccepted() {
+        // Covered by uniformWithOrderIsAccepted's data, asserted here for
+        // the duplicate-order check specifically.
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            @Singleton @Contributes(to: App.services, withOrder: 1)
+            struct A {}
+            @Singleton @Contributes(to: App.services, withOrder: 2)
+            struct B {}
+            """
+        #expect(first(source, matching: "duplicate withOrder") == nil)
+    }
+
     // MARK: - Duplicate atKey
 
     @Test func duplicateMapKeyIsError() throws {
@@ -121,7 +149,7 @@ struct MultibindingValidationTests {
         // The first contributor's location is a separate note, not
         // embedded in the message.
         let note = try #require(diagnostic.notes.first)
-        #expect(note.message.contains("first contributed here"))
+        #expect(note.message.contains("first used here"))
     }
 
     @Test func distinctMapKeysAreAccepted() {

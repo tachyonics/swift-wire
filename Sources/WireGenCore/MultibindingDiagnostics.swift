@@ -41,8 +41,9 @@ func strayContributesDiagnostics(
 }
 
 /// Every cross-contributor multibinding diagnostic, module-wide:
-/// references to undeclared keys, mixed `withOrder:`, and duplicate
-/// `atKey:`. Output is sorted by source location for stable build output.
+/// references to undeclared keys, mixed `withOrder:`, duplicate `atKey:`,
+/// and duplicate `withOrder:`. Output is sorted by source location for
+/// stable build output.
 package func multibindingContributionDiagnostics(
     declaredKeyReferences: Set<String>,
     contributions: [Contribution]
@@ -54,6 +55,7 @@ package func multibindingContributionDiagnostics(
         )
         + mixedContributionOrderingDiagnostics(contributions: contributions)
         + duplicateMapKeyDiagnostics(contributions: contributions)
+        + duplicateOrderDiagnostics(contributions: contributions)
     return diagnostics.sorted { $0.location < $1.location }
 }
 
@@ -101,33 +103,66 @@ package func mixedContributionOrderingDiagnostics(
 
 /// `atKey:` values must be unique among a `MappedKey`'s contributors — a
 /// dictionary literal with duplicate keys is a runtime trap, so it has to
-/// be a build-time error. Flags the second and later contributions
-/// claiming a key already taken.
+/// be a build-time error.
 package func duplicateMapKeyDiagnostics(
     contributions: [Contribution]
 ) -> [Diagnostic] {
+    duplicatePerKeyArgumentDiagnostics(
+        contributions: contributions,
+        argumentLabel: "atKey",
+        uniquenessClause: "map keys must be unique",
+        valueOf: { $0.mapKeyExpression }
+    )
+}
+
+/// `withOrder:` ranks must be unique among a `CollectedKey`/`BuilderKey`'s
+/// contributors. Equal ranks leave the tied contributors' relative order
+/// undefined; requiring uniqueness keeps "ranked" a strict total order so
+/// codegen needs no tiebreak.
+package func duplicateOrderDiagnostics(
+    contributions: [Contribution]
+) -> [Diagnostic] {
+    duplicatePerKeyArgumentDiagnostics(
+        contributions: contributions,
+        argumentLabel: "withOrder",
+        uniquenessClause: "contributor ranks must be unique",
+        valueOf: { $0.order.map(String.init) }
+    )
+}
+
+/// Shared duplicate detection for a per-key contribution argument
+/// (`atKey:` / `withOrder:`): within each key, the second and later
+/// contributions sharing a rendered value get an error, with a note
+/// pointing at the first use. Contributions whose value is `nil` (the
+/// argument absent) are ignored.
+private func duplicatePerKeyArgumentDiagnostics(
+    contributions: [Contribution],
+    argumentLabel: String,
+    uniquenessClause: String,
+    valueOf: (Contribution) -> String?
+) -> [Diagnostic] {
     var diagnostics: [Diagnostic] = []
     for (keyReference, group) in groupedByKey(contributions) {
-        var firstByMapKey: [String: Contribution] = [:]
+        var firstByValue: [String: Contribution] = [:]
         for contribution in group.sorted(by: { $0.location < $1.location }) {
-            guard let mapKey = contribution.mapKeyExpression else { continue }
-            if let first = firstByMapKey[mapKey] {
+            guard let value = valueOf(contribution) else { continue }
+            if let first = firstByValue[value] {
                 diagnostics.append(
                     Diagnostic(
                         location: contribution.location,
                         message:
-                            "duplicate atKey: \(mapKey) on '\(keyReference)' — map keys must be unique.",
+                            "duplicate \(argumentLabel): \(value) on '\(keyReference)' — \(uniquenessClause).",
                         notes: [
                             Diagnostic.Note(
                                 location: first.location,
-                                message: "'\(mapKey)' first contributed here"
+                                message: "\(argumentLabel): \(value) first used here"
                             )
                         ],
                         severity: .error
                     )
                 )
             } else {
-                firstByMapKey[mapKey] = contribution
+                firstByValue[value] = contribution
             }
         }
     }
