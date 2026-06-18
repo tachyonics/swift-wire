@@ -105,6 +105,7 @@ struct WireGen {
         var typealiases: [DiscoveredTypealias] = []
         var declaredTypeNames: Set<String> = []
         var nonInjectExtensionInits: [NonInjectExtensionInit] = []
+        var multibindingKeys: [DiscoveredMultibindingKey] = []
     }
 
     private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
@@ -141,6 +142,7 @@ struct WireGen {
             aggregate.nonInjectExtensionInits.append(
                 contentsOf: result.nonInjectExtensionInits
             )
+            aggregate.multibindingKeys.append(contentsOf: result.multibindingKeys)
         }
         return aggregate
     }
@@ -294,6 +296,12 @@ struct WireGen {
             + extensionInitConflictDiagnostics(
                 candidates: aggregate.nonInjectExtensionInits,
                 singletonTypeNames: singletonTypeNames(in: aggregate)
+            )
+            + multibindingContributionDiagnostics(
+                declaredKeyReferences: Set(aggregate.multibindingKeys.map(\.keyReference)),
+                contributions: aggregate.allBindings.values
+                    .flatMap { $0 }
+                    .flatMap { $0.contributions }
             )
     }
 
