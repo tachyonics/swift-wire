@@ -95,6 +95,13 @@ Two constraints ride along, both already covered above:
 - **Naming** — a key referenced across modules qualifies via SE-0491
   (`A::serviceKey`) from origin-module metadata, like any other
   cross-module reference.
+- **`withOrder:` uniqueness** — iteration 5β requires globally-unique
+  ranks per key (duplicate `withOrder:` is an error, keeping "ranked" a
+  strict total order). That's fine in one module but hard to coordinate
+  across independently-authored modules contributing to a shared key.
+  When composition lands, revisit: either relax to ties-allowed with a
+  documented tiebreak (origin module, then source location — both already
+  known structurally), or scope rank-uniqueness per contributing module.
 
 This makes cross-module multibindings the *motivating* case for
 composition: aggregating contributions a host module can't see is a

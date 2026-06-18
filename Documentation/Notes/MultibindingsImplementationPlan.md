@@ -120,10 +120,12 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
   var/func visits (producer `@Provides`).
 - **Module-wide** `multibindingContributionDiagnostics` run by WireGen in
   `collectCrossFileDiagnostics`: undeclared-key (the parse-set-widening
-  rule), mixed `withOrder:` (all-or-none), duplicate `atKey:`. Output is
-  location-sorted for stable build output. The overload set already
-  enforces per-call argument validity, so only cross-declaration rules
-  live here.
+  rule), mixed `withOrder:` (all-or-none), duplicate `atKey:`, and
+  duplicate `withOrder:` (ranks must be unique — keeps "ranked" a strict
+  total order so codegen needs no tiebreak). The duplicate-`atKey:`/
+  `withOrder:` checks share one helper. Output is location-sorted for
+  stable build output. The overload set already enforces per-call
+  argument validity, so only cross-declaration rules live here.
 - Both paths feed `failIfAnyDiagnosticIsError`, so an `.error` fails the
   build before bad code is emitted.
 - To make room, the shared syntax helpers (`makeSourceLocation`,
