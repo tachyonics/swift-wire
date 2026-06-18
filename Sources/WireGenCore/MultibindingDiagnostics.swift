@@ -54,7 +54,7 @@ package func multibindingContributionDiagnostics(
         )
         + mixedContributionOrderingDiagnostics(contributions: contributions)
         + duplicateMapKeyDiagnostics(contributions: contributions)
-    return sortedByLocation(diagnostics)
+    return diagnostics.sorted { $0.location < $1.location }
 }
 
 /// `@Contributes(to: X)` where `X` matches no discovered key declaration
@@ -109,14 +109,20 @@ package func duplicateMapKeyDiagnostics(
     var diagnostics: [Diagnostic] = []
     for (keyReference, group) in groupedByKey(contributions) {
         var firstByMapKey: [String: Contribution] = [:]
-        for contribution in group.sorted(by: locationPrecedes) {
+        for contribution in group.sorted(by: { $0.location < $1.location }) {
             guard let mapKey = contribution.mapKeyExpression else { continue }
             if let first = firstByMapKey[mapKey] {
                 diagnostics.append(
                     Diagnostic(
                         location: contribution.location,
                         message:
-                            "@Contributes(to: \(keyReference), atKey: \(mapKey)) duplicates the key '\(mapKey)' already contributed at \(first.location.formattedPrefix) — map keys must be unique.",
+                            "duplicate atKey: \(mapKey) on '\(keyReference)' — map keys must be unique.",
+                        notes: [
+                            Diagnostic.Note(
+                                location: first.location,
+                                message: "'\(mapKey)' first contributed here"
+                            )
+                        ],
                         severity: .error
                     )
                 )
@@ -135,16 +141,4 @@ private func groupedByKey(_ contributions: [Contribution]) -> [(String, [Contrib
     }
     // Sort keys for deterministic diagnostic ordering before flattening.
     return byKey.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
-}
-
-private func locationPrecedes(_ lhs: Contribution, _ rhs: Contribution) -> Bool {
-    (lhs.location.file, lhs.location.line, lhs.location.column)
-        < (rhs.location.file, rhs.location.line, rhs.location.column)
-}
-
-private func sortedByLocation(_ diagnostics: [Diagnostic]) -> [Diagnostic] {
-    diagnostics.sorted {
-        ($0.location.file, $0.location.line, $0.location.column)
-            < ($1.location.file, $1.location.line, $1.location.column)
-    }
 }

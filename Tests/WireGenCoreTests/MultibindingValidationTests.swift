@@ -115,9 +115,13 @@ struct MultibindingValidationTests {
             @Singleton @Contributes(to: App.strategies, atKey: "fast")
             struct B {}
             """
-        let diagnostic = try #require(first(source, matching: "duplicates the key"))
+        let diagnostic = try #require(first(source, matching: "duplicate atKey"))
         #expect(diagnostic.severity == .error)
         #expect(diagnostic.message.contains("\"fast\""))
+        // The first contributor's location is a separate note, not
+        // embedded in the message.
+        let note = try #require(diagnostic.notes.first)
+        #expect(note.message.contains("first contributed here"))
     }
 
     @Test func distinctMapKeysAreAccepted() {
@@ -128,6 +132,6 @@ struct MultibindingValidationTests {
             @Singleton @Contributes(to: App.strategies, atKey: "slow")
             struct B {}
             """
-        #expect(first(source, matching: "duplicates the key") == nil)
+        #expect(first(source, matching: "duplicate atKey") == nil)
     }
 }
