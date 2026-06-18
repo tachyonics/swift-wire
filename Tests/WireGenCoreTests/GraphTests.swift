@@ -1184,6 +1184,7 @@ struct GraphTests {
                 switch binding {
                 case .scopeBound: return "scopeBound"
                 case .provider: return "provider"
+                case .aggregate: return "aggregate"
                 }
             }
         )

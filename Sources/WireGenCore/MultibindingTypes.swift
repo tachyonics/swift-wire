@@ -60,6 +60,64 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
     }
 }
 
+/// A synthesised aggregate binding — one per multibinding key — produced
+/// by the fan-in pass from a key declaration plus the contributions that
+/// target it. It has no source declaration of its own; Wire builds it by
+/// collecting its contributors. It carries an ordinary
+/// `(collectionType, keyReference)` identity, so consumers resolve to it
+/// and it topologically sorts after its contributors through the standard
+/// graph pipeline — no special-casing in split/resolve/topo.
+package struct DiscoveredAggregate: Sendable {
+    /// Reference text of the key this aggregates — becomes the binding's
+    /// `keyIdentifier`, so a consumer's `@Inject(key)` resolves here.
+    package let keyReference: String
+    /// The aggregated collection type — `[Element]` / `[Key: Value]` —
+    /// becomes the binding's `boundType`.
+    package let collectionType: String
+    package let flavour: MultibindingKeyFlavour
+    /// Contributors in final order (by `withOrder:`, else source order).
+    package let contributors: [AggregateContributor]
+    /// The key declaration's location — what aggregate-level diagnostics
+    /// point at.
+    package let location: SourceLocation
+
+    package init(
+        keyReference: String,
+        collectionType: String,
+        flavour: MultibindingKeyFlavour,
+        contributors: [AggregateContributor],
+        location: SourceLocation
+    ) {
+        self.keyReference = keyReference
+        self.collectionType = collectionType
+        self.flavour = flavour
+        self.contributors = contributors
+        self.location = location
+    }
+}
+
+/// One contributor folded into an aggregate: the graph edge to the
+/// contributing binding, plus the ordering / map-key metadata codegen
+/// needs.
+package struct AggregateContributor: Sendable {
+    /// Dependency edge to the contributing binding — its `.identity`
+    /// matches the contributor's, so the aggregate sorts after it and
+    /// codegen can reference the contributor's local by the same name.
+    package let dependency: DependencyParameter
+    package let order: Int?
+    package let mapKeyExpression: String?
+
+    package init(
+        dependency: DependencyParameter,
+        order: Int? = nil,
+        mapKeyExpression: String? = nil
+    ) {
+        self.dependency = dependency
+        self.order = order
+        self.mapKeyExpression = mapKeyExpression
+    }
+}
+
 /// One `@Contributes(to:)` annotation found on a producer. A producer
 /// keeps its own binding identity *and* carries a list of these (a
 /// contributor may target several keys via repeated `@Contributes`, which
