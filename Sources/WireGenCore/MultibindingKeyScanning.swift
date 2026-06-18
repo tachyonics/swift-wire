@@ -1,8 +1,7 @@
 import SwiftSyntax
 
 // Recognition of multibinding key declarations — `CollectedKey<…>`,
-// `MappedKey<…>`, `BuilderKey<…>` `static let`s. Factored out of
-// `BindingDiscovery` as free functions: the visitor supplies the
+// `MappedKey<…>`, `BuilderKey<…>` `static let`s. The visitor supplies the
 // enclosing-scope context (type names, access levels) and source
 // position; everything here is a pure function of syntax. See
 // `Documentation/Notes/MultibindingsImplementationPlan.md` (Step 1).

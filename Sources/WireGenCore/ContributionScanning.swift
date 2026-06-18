@@ -1,9 +1,8 @@
 import SwiftSyntax
 
 // Parsing of `@Contributes(to:withOrder:atKey:)` annotations into
-// `Contribution` values. Factored out of `BindingDiscovery` as free
-// functions; shared by the scope-bound and `@Provides` producer paths so
-// any producer can contribute uniformly. See
+// `Contribution` values, shared by the scope-bound and `@Provides`
+// producer paths so any producer can contribute uniformly. See
 // `Documentation/Notes/MultibindingsImplementationPlan.md` (Step 2).
 
 /// Every `@Contributes(to:)` annotation on a declaration, in source

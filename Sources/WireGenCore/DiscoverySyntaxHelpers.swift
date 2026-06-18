@@ -2,8 +2,6 @@ import SwiftSyntax
 
 // Shared syntax-extraction helpers used across the discovery files
 // (the visitor, the multibinding scanners, the diagnostic helpers).
-// Free functions, factored out of `BindingDiscovery` to keep that file
-// under the `file_length` cap.
 
 func makeSourceLocation(
     of node: some SyntaxProtocol,
