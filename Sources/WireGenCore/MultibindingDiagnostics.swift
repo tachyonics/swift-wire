@@ -34,7 +34,7 @@ func strayContributesDiagnostics(
                 converter: converter
             ),
             message:
-                "@Contributes requires a co-located \(producerList) — without a producer macro Wire can't construct the contributor, so the contribution is silently dropped.",
+                "@Contributes requires a co-located \(producerList) — without a producer macro Wire can't construct the contributor.",
             severity: .error
         )
     ]
