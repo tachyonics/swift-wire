@@ -29,6 +29,14 @@ struct MultibindingValidationTests {
         diagnostics(in: source).first { $0.message.contains(needle) }
     }
 
+    private func crossContainerDiagnostics(in source: String) -> [Diagnostic] {
+        let discovery = discover(in: source, sourcePath: "M.swift")
+        return crossContainerContributionDiagnostics(
+            multibindingKeys: discovery.multibindingKeys,
+            bindingsByPartition: discovery.allBindings
+        )
+    }
+
     // MARK: - Bare @Contributes (producer-pairing)
 
     @Test func bareContributesOnTypeRequiresScopeProducer() throws {
@@ -161,5 +169,43 @@ struct MultibindingValidationTests {
             struct B {}
             """
         #expect(first(source, matching: "duplicate atKey") == nil)
+    }
+
+    // MARK: - Cross-container contribution
+
+    @Test func crossContainerContributionIsError() throws {
+        // Key declared in container App; contributor in the default graph.
+        let source = """
+            @Container
+            enum App {
+                static let services = CollectedKey<any Service>()
+            }
+            @Singleton @Contributes(to: App.services)
+            struct AuthService {}
+            """
+        let diagnostic = try #require(crossContainerDiagnostics(in: source).first)
+        #expect(diagnostic.severity == .error)
+        #expect(diagnostic.message.contains("cross container"))
+    }
+
+    @Test func sameContainerContributionIsAccepted() {
+        let source = """
+            @Container
+            enum App {
+                static let services = CollectedKey<any Service>()
+                @Singleton @Contributes(to: App.services)
+                struct AuthService {}
+            }
+            """
+        #expect(crossContainerDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func defaultGraphContributionIsAccepted() {
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            @Singleton @Contributes(to: App.services)
+            struct AuthService {}
+            """
+        #expect(crossContainerDiagnostics(in: source).isEmpty)
     }
 }

@@ -365,6 +365,7 @@ final class BindingDiscovery: SyntaxVisitor {
                 from: node,
                 enclosingTypeNames: scopes.map(\.typeName),
                 enclosingAccessLevels: scopes.map(\.access),
+                containerName: scopes.last?.containerName,
                 sourcePath: sourcePath,
                 converter: converter
             )

@@ -196,13 +196,14 @@ struct WireGen {
             let scopes = partitions[containerKey] ?? [:]
             let singletons = scopes[nil] ?? []
             let parentGraphType = containerKey.map { "_\($0)WireGraph" } ?? "_WireGraph"
-            // Multibinding aggregates currently fan in to the default
-            // graph only; container/scope multibindings are deferred.
+            // Multibindings fan in per partition: each graph aggregates
+            // its own contributors atomically (synthesizeAggregates only
+            // builds keys used in this partition's bindings).
             let rawGraph = buildDependencyGraph(
                 from: singletons,
                 typealiases: aggregate.typealiases,
-                multibindingKeys: containerKey == nil ? aggregate.multibindingKeys : [],
-                resultBuilders: containerKey == nil ? aggregate.resultBuilders : []
+                multibindingKeys: aggregate.multibindingKeys,
+                resultBuilders: aggregate.resultBuilders
             )
             let graph = enrichMissingBindingsWithCrossScopeHints(
                 rawGraph,
@@ -230,7 +231,9 @@ struct WireGen {
                     scopeBindings: scopeBindings,
                     borrowBindings: borrows,
                     parentGraphType: parentGraphType,
-                    typealiases: aggregate.typealiases
+                    typealiases: aggregate.typealiases,
+                    multibindingKeys: aggregate.multibindingKeys,
+                    resultBuilders: aggregate.resultBuilders
                 )
                 let enrichedResult = enrichMissingBindingsWithCrossScopeHints(
                     orchestration.result,
@@ -309,6 +312,10 @@ struct WireGen {
                 contributions: aggregate.allBindings.values
                     .flatMap { $0 }
                     .flatMap { $0.contributions }
+            )
+            + crossContainerContributionDiagnostics(
+                multibindingKeys: aggregate.multibindingKeys,
+                bindingsByPartition: aggregate.allBindings
             )
     }
 

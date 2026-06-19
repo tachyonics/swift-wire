@@ -6,14 +6,19 @@
 // special-casing. See
 // `Documentation/Notes/MultibindingsImplementationPlan.md` (Step 4).
 
-/// Synthesise the aggregate bindings for a module's declared keys.
+/// Synthesise the aggregate bindings for one partition's bindings. Called
+/// per graph (default, each container, each seed scope) so each partition
+/// aggregates its own contributors atomically. Only keys *used* in this
+/// partition — contributed to, or consumed by an `@Inject` here — produce
+/// an aggregate, so declared-but-unused keys don't leak empty aggregates
+/// into every partition.
 func synthesizeAggregates(
     keys: [DiscoveredMultibindingKey],
     bindings: [DiscoveredBinding],
     resultBuilders: [DiscoveredResultBuilder] = []
 ) -> [DiscoveredBinding] {
-    // Index contributions module-wide by the key they target, pairing
-    // each with its contributing binding (the graph edge points there).
+    // Index contributions by the key they target, pairing each with its
+    // contributing binding (the graph edge points there).
     var entriesByKey: [String: [ContributorEntry]] = [:]
     for binding in bindings {
         for contribution in binding.contributions {
@@ -25,9 +30,12 @@ func synthesizeAggregates(
         resultBuilders.map { ($0.typeName, $0.resultType) },
         uniquingKeysWith: { first, _ in first }
     )
+    let consumedKeys = consumedKeyReferences(in: bindings, among: Set(keys.map(\.keyReference)))
 
     return keys.compactMap { key in
         let contributors = orderedContributors(entriesByKey[key.keyReference] ?? [])
+        // Skip keys neither contributed to nor consumed here.
+        guard !contributors.isEmpty || consumedKeys.contains(key.keyReference) else { return nil }
         guard
             let shape = aggregateShape(
                 for: key,
@@ -46,6 +54,23 @@ func synthesizeAggregates(
             )
         )
     }
+}
+
+/// Multibinding key references consumed by an `@Inject` dependency among
+/// these bindings.
+private func consumedKeyReferences(
+    in bindings: [DiscoveredBinding],
+    among keyReferences: Set<String>
+) -> Set<String> {
+    var consumed: Set<String> = []
+    for binding in bindings {
+        for dependency in binding.dependencies {
+            if let key = dependency.keyIdentifier, keyReferences.contains(key) {
+                consumed.insert(key)
+            }
+        }
+    }
+    return consumed
 }
 
 private struct ContributorEntry {
