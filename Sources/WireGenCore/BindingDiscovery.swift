@@ -91,6 +91,9 @@ final class BindingDiscovery: SyntaxVisitor {
     /// The aggregate's element/value/result type is read producer-side
     /// from these.
     var multibindingKeys: [DiscoveredMultibindingKey] = []
+    /// `@resultBuilder` types found in this file, with their fold result
+    /// type — the producer-side result type a `BuilderKey` aggregate has.
+    var resultBuilders: [DiscoveredResultBuilder] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
     /// One frame per enclosing type the visitor has entered, in
@@ -145,6 +148,11 @@ final class BindingDiscovery: SyntaxVisitor {
 
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
         declaredTypeNames.append(node.name.text)
+        recordResultBuilder(
+            name: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
+        )
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -179,6 +187,11 @@ final class BindingDiscovery: SyntaxVisitor {
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
         declaredTypeNames.append(node.name.text)
+        recordResultBuilder(
+            name: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
+        )
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -213,6 +226,11 @@ final class BindingDiscovery: SyntaxVisitor {
 
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
         declaredTypeNames.append(node.name.text)
+        recordResultBuilder(
+            name: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
+        )
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -252,6 +270,11 @@ final class BindingDiscovery: SyntaxVisitor {
         // `@Container`-annotated, in which case bindings inside the
         // primary declaration are routed to that container.
         declaredTypeNames.append(node.name.text)
+        recordResultBuilder(
+            name: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
+        )
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -281,6 +304,11 @@ final class BindingDiscovery: SyntaxVisitor {
         // belong in `declaredTypeNames` so extensions on locally
         // declared protocols don't trip the cross-module warning.
         declaredTypeNames.append(node.name.text)
+        recordResultBuilder(
+            name: node.name,
+            attributes: node.attributes,
+            members: node.memberBlock.members
+        )
         return .skipChildren
     }
 
@@ -441,6 +469,24 @@ final class BindingDiscovery: SyntaxVisitor {
 
     private func exitTypeDecl() {
         scopes.removeLast()
+    }
+
+    /// Capture a `@resultBuilder` type's fold result type. A no-op for
+    /// declarations that aren't result builders (including protocols).
+    private func recordResultBuilder(
+        name: TokenSyntax,
+        attributes: AttributeListSyntax,
+        members: MemberBlockItemListSyntax
+    ) {
+        if let builder = resultBuilder(
+            named: name,
+            attributes: attributes,
+            members: members,
+            sourcePath: sourcePath,
+            converter: converter
+        ) {
+            resultBuilders.append(builder)
+        }
     }
 
     /// `@Provides` is only recognised at module scope or as a `static`
@@ -683,23 +729,6 @@ extension BindingDiscovery {
 /// another — almost always a user error.
 let scopeMacroNames = ["Singleton", "Scoped"]
 
-/// Extract the canonical key identifier from an attribute's argument
-/// list. Returns `nil` for the unkeyed form (no parentheses or empty
-/// argument list). For the keyed form `@Inject(<expr>)` returns the
-/// trimmed text of `<expr>` — `Database.primary` → "Database.primary".
-///
-/// The build plugin matches keyed bindings to keyed consumers by
-/// canonical text, so what the user writes IS the key. `Foo.primary`
-/// on one side matches `Foo.primary` on the other; `.primary` does
-/// not match `Foo.primary` (different canonical text), and Swift's
-/// type inference for leading-dot is a separate concern handled by
-/// the macro signature, not the build plugin.
-func keyIdentifier(from attribute: AttributeSyntax) -> String? {
-    guard case let .argumentList(args) = attribute.arguments else { return nil }
-    guard let firstArg = args.first else { return nil }
-    return firstArg.expression.trimmedDescription
-}
-
 /// Extract the seed type expression from a `@Scoped(seed: SomeType.self)`
 /// attribute. Returns the base of the `.self` member access — `"SomeType"`
 /// for `SomeType.self`, `"Foo<Bar>"` for `Foo<Bar>.self`. Returns `nil`
@@ -718,28 +747,6 @@ private func seedTypeExpression(from attribute: AttributeSyntax) -> String? {
         let base = memberAccess.base
     else { return nil }
     return base.trimmedDescription
-}
-
-/// The parameter's external label — what callers write at the call
-/// site. The generated bootstrap emits `Type(label: resolvedValue)`
-/// calls and needs the label.
-///
-/// Returns `nil` for wildcard (`_`) labels so the call site is told
-/// to omit the label entirely rather than emit `"_"` as a sentinel
-/// the consumer has to special-case downstream.
-///
-/// - `init(label internal: A)` → `"label"`
-/// - `init(_ a: A)` → `nil`
-/// - `init(a: A)` → `"a"`
-///
-/// The internal name (`secondName`, when present) is irrelevant — it
-/// only appears inside the init body, which is the user's code, not
-/// Wire's.
-func parameterName(_ parameter: FunctionParameterSyntax) -> String? {
-    if parameter.firstName.tokenKind == .wildcard {
-        return nil
-    }
-    return parameter.firstName.text
 }
 
 /// Recover the bound type from a `Foo(...)` or `Foo<Bar>(...)`

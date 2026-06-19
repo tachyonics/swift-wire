@@ -392,4 +392,23 @@ struct BootstrapTests {
         #expect(strategies["slow"]?.run() == "slow")
         #expect(strategies["missing"] == nil)
     }
+
+    @Test func builderMultibindingFoldsToConcreteResultInRankOrder() async throws {
+        // AuthMiddleware (withOrder: 1) and LoggingMiddleware (withOrder: 2)
+        // fold through PipelineBuilder's buildBlock into a concrete Pipeline.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.middlewareHost.pipeline.steps == ["auth", "log"])
+    }
+
+    @Test func builderMultibindingFoldsToCollectionResult() async throws {
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.middlewareHost.list.map(\.step) == ["auth", "log"])
+    }
+
+    @Test func builderMultibindingFoldsToExistentialResult() async throws {
+        // The builder folds the contributors into a single `any Middleware`
+        // — exercises a result type whose string carries an `any ` prefix.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.middlewareHost.composed.step == "auth>log")
+    }
 }

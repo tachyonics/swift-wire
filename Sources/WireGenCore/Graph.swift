@@ -606,15 +606,43 @@ private func parseGenericType(_ expression: String) -> (base: String, params: [S
 /// Duplicate bindings (two bindings producing the same `(type, key)`
 /// identity) cause an early-exit failure: without unique bindings, the
 /// rest of validation isn't trustworthy.
+/// A pre-resolution validation failure (duplicate bindings,
+/// specialisation ambiguities, or identifier collisions) — each aborts
+/// before dependency resolution, so cycles/missing-bindings are empty.
+private func earlyValidationFailure(
+    duplicateBindings: [DuplicateBinding] = [],
+    identifierCollisions: [IdentifierCollision] = [],
+    skipped: [DiscoveredBinding]
+) -> GraphResult {
+    GraphResult(
+        outcome: .validationFailed(
+            GraphResult.ValidationErrors(
+                cycles: [],
+                missingBindings: [],
+                duplicateBindings: duplicateBindings,
+                identifierCollisions: identifierCollisions
+            )
+        ),
+        skipped: skipped
+    )
+}
+
 package func buildDependencyGraph(
     from bindings: [DiscoveredBinding],
     typealiases: [DiscoveredTypealias] = [],
-    multibindingKeys: [DiscoveredMultibindingKey] = []
+    multibindingKeys: [DiscoveredMultibindingKey] = [],
+    resultBuilders: [DiscoveredResultBuilder] = []
 ) -> GraphResult {
     // Fan-in: turn each declared multibinding key into a synthesised
     // aggregate binding (deps = its contributors). Aggregates then flow
     // through the rest of the pipeline as ordinary bindings.
-    let allBindings = bindings + synthesizeAggregates(keys: multibindingKeys, bindings: bindings)
+    let allBindings =
+        bindings
+        + synthesizeAggregates(
+            keys: multibindingKeys,
+            bindings: bindings,
+            resultBuilders: resultBuilders
+        )
     let partition = partitionBindings(allBindings)
     let skipped = partition.skipped
 
@@ -622,16 +650,7 @@ package func buildDependencyGraph(
         partition.groupedByIdentity
     )
     if !duplicates.isEmpty {
-        return GraphResult(
-            outcome: .validationFailed(
-                GraphResult.ValidationErrors(
-                    cycles: [],
-                    missingBindings: [],
-                    duplicateBindings: duplicates
-                )
-            ),
-            skipped: skipped
-        )
+        return earlyValidationFailure(duplicateBindings: duplicates, skipped: skipped)
     }
 
     // Generic specialisation: walk every binding's deps; for each
@@ -650,31 +669,12 @@ package func buildDependencyGraph(
         genericBindings: partition.genericBindings
     )
     if !specialisationAmbiguities.isEmpty {
-        return GraphResult(
-            outcome: .validationFailed(
-                GraphResult.ValidationErrors(
-                    cycles: [],
-                    missingBindings: [],
-                    duplicateBindings: specialisationAmbiguities
-                )
-            ),
-            skipped: skipped
-        )
+        return earlyValidationFailure(duplicateBindings: specialisationAmbiguities, skipped: skipped)
     }
 
     let identifierCollisions = detectIdentifierCollisions(in: resolvedBindings)
     if !identifierCollisions.isEmpty {
-        return GraphResult(
-            outcome: .validationFailed(
-                GraphResult.ValidationErrors(
-                    cycles: [],
-                    missingBindings: [],
-                    duplicateBindings: [],
-                    identifierCollisions: identifierCollisions
-                )
-            ),
-            skipped: skipped
-        )
+        return earlyValidationFailure(identifierCollisions: identifierCollisions, skipped: skipped)
     }
 
     let (dependencyEdges, missingBindings) = resolveDependencies(

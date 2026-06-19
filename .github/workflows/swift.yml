@@ -103,12 +103,20 @@ jobs:
         run: swift build -c release --swift-sdk aarch64-swift-linux-musl
 
   SwiftLint:
-    name: SwiftLint version 3.2.1
+    name: SwiftLint 0.63.2
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: GitHub Action for SwiftLint
-        uses: norio-nomura/action-swiftlint@3.2.1
+      - name: Install SwiftLint
+        # Pin the same SwiftLint the BuildAndTest job's `analyze` step
+        # uses, so CI matches a modern local install. The prebuilt Linux
+        # binary needs the GLIBC on ubuntu-24.04+.
+        run: |
+          curl -sL https://github.com/realm/SwiftLint/releases/download/0.63.2/swiftlint_linux_amd64.zip -o swiftlint.zip
+          unzip -o swiftlint.zip -d /usr/local/bin
+          chmod +x /usr/local/bin/swiftlint
+      - name: SwiftLint
+        run: swiftlint lint --quiet
 
   SwiftFormat:
     name: swift-format / Swift ${{ matrix.swift-version }}

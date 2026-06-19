@@ -86,6 +86,24 @@ struct MultibindingFanInTests {
         )
     }
 
+    private func builderKey(_ reference: String, builder: String) -> DiscoveredMultibindingKey {
+        DiscoveredMultibindingKey(
+            keyReference: reference,
+            flavour: .builder,
+            typeArguments: [builder],
+            location: mockLocation("\(reference).swift"),
+            accessLevel: .internal
+        )
+    }
+
+    private func resultBuilder(_ name: String, resultType: String) -> DiscoveredResultBuilder {
+        DiscoveredResultBuilder(
+            typeName: name,
+            resultType: resultType,
+            location: mockLocation("\(name).swift")
+        )
+    }
+
     // MARK: - Topological placement
 
     @Test func aggregateSortsAfterAllContributors() throws {
@@ -174,21 +192,37 @@ struct MultibindingFanInTests {
         #expect(names.contains("[any Service]"))
     }
 
-    @Test func builderKeyProducesNoAggregateYet() {
-        // Step 4 can't derive a builder's result type, so no aggregate is
-        // synthesised — flips to a real aggregate when Step 5 lands.
-        let key = DiscoveredMultibindingKey(
-            keyReference: "App.middleware",
-            flavour: .builder,
-            typeArguments: ["MiddlewareBuilder"],
-            location: mockLocation("App.swift"),
-            accessLevel: .internal
-        )
+    @Test func builderAggregateUsesResultBuilderResultType() throws {
         let result = buildDependencyGraph(
-            from: [contributor("LogMiddleware", to: "App.middleware")],
-            multibindingKeys: [key]
+            from: [contributor("AuthMW", to: "App.pipeline")],
+            multibindingKeys: [builderKey("App.pipeline", builder: "PipelineBuilder")],
+            resultBuilders: [resultBuilder("PipelineBuilder", resultType: "Pipeline")]
         )
-        let order = result.outcome.topologicalOrder
-        #expect(order?.contains { $0.keyIdentifier == "App.middleware" } != true)
+        let names = try #require(result.outcome.topologicalOrder).map { $0.boundType }
+        // The aggregate's type is the builder's result type, not a collection.
+        let aggregateIndex = try #require(names.firstIndex(of: "Pipeline"))
+        #expect(try #require(names.firstIndex(of: "AuthMW")) < aggregateIndex)
+    }
+
+    @Test func builderWithoutDiscoveredResultBuilderIsSkipped() {
+        // No result type to spell → no aggregate (the consumer would be
+        // reported missing). Guards against emitting an unspellable fold.
+        let result = buildDependencyGraph(
+            from: [contributor("AuthMW", to: "App.pipeline")],
+            multibindingKeys: [builderKey("App.pipeline", builder: "PipelineBuilder")],
+            resultBuilders: []
+        )
+        #expect(result.outcome.topologicalOrder?.contains { $0.keyIdentifier == "App.pipeline" } != true)
+    }
+
+    @Test func emptyBuilderProducesNoAggregate() {
+        // A zero-component fold has no well-defined result, so an empty
+        // builder key synthesises no aggregate.
+        let result = buildDependencyGraph(
+            from: [],
+            multibindingKeys: [builderKey("App.pipeline", builder: "PipelineBuilder")],
+            resultBuilders: [resultBuilder("PipelineBuilder", resultType: "Pipeline")]
+        )
+        #expect(result.outcome.topologicalOrder?.contains { $0.keyIdentifier == "App.pipeline" } != true)
     }
 }

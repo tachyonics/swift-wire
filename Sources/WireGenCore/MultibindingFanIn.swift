@@ -7,12 +7,10 @@
 // `Documentation/Notes/MultibindingsImplementationPlan.md` (Step 4).
 
 /// Synthesise the aggregate bindings for a module's declared keys.
-/// Collected and mapped keys are handled here; builder keys need the
-/// builder's result type (read from `buildBlock`), which lands with
-/// codegen, so they're skipped for now.
 func synthesizeAggregates(
     keys: [DiscoveredMultibindingKey],
-    bindings: [DiscoveredBinding]
+    bindings: [DiscoveredBinding],
+    resultBuilders: [DiscoveredResultBuilder] = []
 ) -> [DiscoveredBinding] {
     // Index contributions module-wide by the key they target, pairing
     // each with its contributing binding (the graph edge points there).
@@ -23,15 +21,27 @@ func synthesizeAggregates(
                 .append(ContributorEntry(binding: binding, contribution: contribution))
         }
     }
+    let resultTypeByBuilder = Dictionary(
+        resultBuilders.map { ($0.typeName, $0.resultType) },
+        uniquingKeysWith: { first, _ in first }
+    )
 
     return keys.compactMap { key in
-        guard let collectionType = aggregateCollectionType(for: key) else { return nil }
+        let contributors = orderedContributors(entriesByKey[key.keyReference] ?? [])
+        guard
+            let shape = aggregateShape(
+                for: key,
+                resultTypeByBuilder: resultTypeByBuilder,
+                contributorCount: contributors.count
+            )
+        else { return nil }
         return .aggregate(
             DiscoveredAggregate(
                 keyReference: key.keyReference,
-                collectionType: collectionType,
+                collectionType: shape.collectionType,
                 flavour: key.flavour,
-                contributors: orderedContributors(entriesByKey[key.keyReference] ?? []),
+                builderTypeName: shape.builderTypeName,
+                contributors: contributors,
                 location: key.location
             )
         )
@@ -43,16 +53,27 @@ private struct ContributorEntry {
     let contribution: Contribution
 }
 
-/// The aggregated collection type for a key, or `nil` for flavours/shapes
-/// whose type can't be derived from the declaration alone — builder (its
-/// result type is read later, with codegen), or a malformed
-/// collected/mapped declaration with the wrong generic arity.
-private func aggregateCollectionType(for key: DiscoveredMultibindingKey) -> String? {
+/// The aggregate's type and (for builder) the `@resultBuilder` name, or
+/// `nil` when the aggregate can't be formed: a malformed collected/mapped
+/// declaration (wrong generic arity), a builder whose result type isn't
+/// discoverable, or an *empty* builder (a zero-component fold has no
+/// well-defined result unless the builder defines `buildBlock()`).
+private func aggregateShape(
+    for key: DiscoveredMultibindingKey,
+    resultTypeByBuilder: [String: String],
+    contributorCount: Int
+) -> (collectionType: String, builderTypeName: String?)? {
     switch (key.flavour, key.typeArguments) {
     case (.collected, let arguments) where arguments.count == 1:
-        return "[\(arguments[0])]"
+        return ("[\(arguments[0])]", nil)
     case (.mapped, let arguments) where arguments.count == 2:
-        return "[\(arguments[0]): \(arguments[1])]"
+        return ("[\(arguments[0]): \(arguments[1])]", nil)
+    case (.builder, let arguments) where arguments.count == 1:
+        let builderTypeName = arguments[0]
+        guard contributorCount > 0, let resultType = resultTypeByBuilder[builderTypeName] else {
+            return nil
+        }
+        return (resultType, builderTypeName)
     default:
         return nil
     }
