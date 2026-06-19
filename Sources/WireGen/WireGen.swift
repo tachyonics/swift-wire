@@ -83,7 +83,8 @@ struct WireGen {
         let allBindingsFlat = aggregate.allBindings.values.flatMap { $0 }
         let keyChecks = renderWireKeyChecks(
             imports: aggregate.imports,
-            allBindings: allBindingsFlat
+            allBindings: allBindingsFlat,
+            multibindingKeyReferences: Set(aggregate.multibindingKeys.map(\.keyReference))
         )
         try keyChecks.write(toFile: keyChecksOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(keyChecksOutputPath)")
@@ -193,9 +194,12 @@ struct WireGen {
             let scopes = partitions[containerKey] ?? [:]
             let singletons = scopes[nil] ?? []
             let parentGraphType = containerKey.map { "_\($0)WireGraph" } ?? "_WireGraph"
+            // Multibinding aggregates currently fan in to the default
+            // graph only; container/scope multibindings are deferred.
             let rawGraph = buildDependencyGraph(
                 from: singletons,
-                typealiases: aggregate.typealiases
+                typealiases: aggregate.typealiases,
+                multibindingKeys: containerKey == nil ? aggregate.multibindingKeys : []
             )
             let graph = enrichMissingBindingsWithCrossScopeHints(
                 rawGraph,

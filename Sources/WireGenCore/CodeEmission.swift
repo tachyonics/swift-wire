@@ -538,11 +538,41 @@ private func constructionExpression(
             }
             return "\(prefix)\(provider.accessPath)(\(args))"
         }
-    case .aggregate:
-        // Aggregate codegen (the `[Element]` / `[K: V]` / fold forms)
-        // lands in Step 5, which also wires aggregates into WireGen. No
-        // aggregate reaches emission before then.
-        preconditionFailure("aggregate construction is emitted in iteration 5β Step 5")
+    case .aggregate(let aggregate):
+        return aggregateConstruction(aggregate, resolvingLocal: resolvingLocal)
+    }
+}
+
+/// Emit an aggregate's construction: a collection literal over the
+/// contributor locals, coerced to the declared collection type so the
+/// heterogeneous concrete elements unify (`[a, b] as [any P]`). Each
+/// contributor is referenced by the same local name its own binding
+/// emits. The builder fold lands in Step 5b.
+private func aggregateConstruction(
+    _ aggregate: DiscoveredAggregate,
+    resolvingLocal: ((String) -> String?)?
+) -> String {
+    func local(for contributor: AggregateContributor) -> String {
+        let name = identifierName(
+            forType: contributor.dependency.type,
+            key: contributor.dependency.keyIdentifier
+        )
+        return resolvingLocal?(name) ?? name
+    }
+    switch aggregate.flavour {
+    case .collected:
+        let elements = aggregate.contributors.map(local).joined(separator: ", ")
+        return "[\(elements)] as \(aggregate.collectionType)"
+    case .mapped:
+        if aggregate.contributors.isEmpty {
+            return "[:] as \(aggregate.collectionType)"
+        }
+        let pairs = aggregate.contributors.map { contributor in
+            "\(contributor.mapKeyExpression ?? "_"): \(local(for: contributor))"
+        }.joined(separator: ", ")
+        return "[\(pairs)] as \(aggregate.collectionType)"
+    case .builder:
+        preconditionFailure("builder aggregate construction lands in iteration 5β Step 5b")
     }
 }
 
@@ -744,7 +774,8 @@ private func lowerCamelCased(_ name: String) -> String {
 /// without conditional logic in the plugin.
 package func renderWireKeyChecks(
     imports: [String],
-    allBindings: [DiscoveredBinding]
+    allBindings: [DiscoveredBinding],
+    multibindingKeyReferences: Set<String> = []
 ) -> String {
     var lines: [String] = []
 
@@ -768,7 +799,7 @@ package func renderWireKeyChecks(
     // Walk every binding, both keyed providers and keyed dependencies,
     // gathering (keyExpression, declaredType, location) for each.
     var groupedSites: [KeyCheckPair: [KeyCheckSite]] = [:]
-    for site in collectKeyCheckSites(allBindings) {
+    for site in collectKeyCheckSites(allBindings, excludingKeys: multibindingKeyReferences) {
         let pair = KeyCheckPair(key: site.keyExpression, type: site.declaredType)
         groupedSites[pair, default: []].append(site)
     }
@@ -822,11 +853,15 @@ private struct KeyCheckPair: Hashable, Comparable {
 /// `(type, key)`) and the consumer side (each keyed dependency
 /// requests a slot `(type, key)`). Both must type-check against the
 /// same key declaration; both contribute sites.
-private func collectKeyCheckSites(_ bindings: [DiscoveredBinding]) -> [KeyCheckSite] {
+private func collectKeyCheckSites(
+    _ bindings: [DiscoveredBinding],
+    excludingKeys multibindingKeyReferences: Set<String>
+) -> [KeyCheckSite] {
     var sites: [KeyCheckSite] = []
     for binding in bindings {
         if case .provider(let provider) = binding,
             let key = provider.keyIdentifier,
+            !multibindingKeyReferences.contains(key),
             shouldEmitCheck(forType: provider.boundType)
         {
             sites.append(
@@ -839,6 +874,7 @@ private func collectKeyCheckSites(_ bindings: [DiscoveredBinding]) -> [KeyCheckS
         }
         for dependency in binding.dependencies {
             guard let key = dependency.keyIdentifier else { continue }
+            guard !multibindingKeyReferences.contains(key) else { continue }
             guard shouldEmitCheck(forType: dependency.type) else { continue }
             sites.append(
                 KeyCheckSite(

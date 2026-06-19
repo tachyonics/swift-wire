@@ -373,4 +373,23 @@ struct BootstrapTests {
         // The scope-bound types are value types here; "distinct
         // instances" is observable via the seed-derived output above.
     }
+
+    // MARK: - Multibindings
+
+    @Test func collectedMultibindingAggregatesContributorsInRankOrder() async throws {
+        // LoggingPlugin (withOrder: 1) and MetricsPlugin (withOrder: 2)
+        // contribute to PluginRegistry.ordered; the injected `[any Plugin]`
+        // is in rank order despite the source declaring metrics first.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.pluginHost.plugins.map { $0.label() } == ["logging", "metrics"])
+    }
+
+    @Test func mappedMultibindingKeysContributorsByAtKey() async throws {
+        let graph = try await _WireGraph.bootstrap()
+        let strategies = graph.strategyHost.strategies
+        #expect(strategies.count == 2)
+        #expect(strategies["fast"]?.run() == "fast")
+        #expect(strategies["slow"]?.run() == "slow")
+        #expect(strategies["missing"] == nil)
+    }
 }

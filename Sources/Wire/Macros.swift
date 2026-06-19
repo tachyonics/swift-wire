@@ -62,6 +62,24 @@ public macro Inject() = #externalMacro(module: "WireMacrosImpl", type: "InjectMa
 public macro Inject<Value>(_ key: BindingKey<Value>) =
     #externalMacro(module: "WireMacrosImpl", type: "InjectMacro")
 
+/// Inject a multibinding aggregate. Pass the `CollectedKey`/`MappedKey`/
+/// `BuilderKey` the contributors target; the property's type is the
+/// aggregated shape — `[Element]`, `[Key: Value]`, or the builder's
+/// result type respectively.
+///
+///     @Inject(App.services) var services: [any Service]
+@attached(peer)
+public macro Inject<Element>(_ key: CollectedKey<Element>) =
+    #externalMacro(module: "WireMacrosImpl", type: "InjectMacro")
+
+@attached(peer)
+public macro Inject<Key, Value>(_ key: MappedKey<Key, Value>) =
+    #externalMacro(module: "WireMacrosImpl", type: "InjectMacro")
+
+@attached(peer)
+public macro Inject<Builder>(_ key: BuilderKey<Builder>) =
+    #externalMacro(module: "WireMacrosImpl", type: "InjectMacro")
+
 /// Declares a binding for the dependency graph at module scope or as a
 /// `static` member of a non-`@Container` enclosing type. Attach to a
 /// property (the binding has no dependencies) or a function (the
