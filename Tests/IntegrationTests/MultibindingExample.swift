@@ -31,10 +31,6 @@ struct LoggingPlugin: Plugin {
 @Singleton
 struct PluginHost {
     @Inject(PluginRegistry.ordered) var plugins: [any Plugin]
-
-    func labels() -> [String] {
-        plugins.map { $0.label() }
-    }
 }
 
 protocol Strategy {
@@ -58,8 +54,4 @@ struct SlowStrategy: Strategy {
 @Singleton
 struct StrategyHost {
     @Inject(StrategyRegistry.byName) var strategies: [String: any Strategy]
-
-    func run(_ name: String) -> String? {
-        strategies[name]?.run()
-    }
 }

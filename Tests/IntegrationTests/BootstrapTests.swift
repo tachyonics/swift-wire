@@ -378,17 +378,18 @@ struct BootstrapTests {
 
     @Test func collectedMultibindingAggregatesContributorsInRankOrder() async throws {
         // LoggingPlugin (withOrder: 1) and MetricsPlugin (withOrder: 2)
-        // contribute to PluginRegistry.ordered; the consumer injects them
-        // as `[any Plugin]` in rank order despite the source declaring
-        // metrics first.
+        // contribute to PluginRegistry.ordered; the injected `[any Plugin]`
+        // is in rank order despite the source declaring metrics first.
         let graph = try await _WireGraph.bootstrap()
-        #expect(graph.pluginHost.labels() == ["logging", "metrics"])
+        #expect(graph.pluginHost.plugins.map { $0.label() } == ["logging", "metrics"])
     }
 
     @Test func mappedMultibindingKeysContributorsByAtKey() async throws {
         let graph = try await _WireGraph.bootstrap()
-        #expect(graph.strategyHost.run("fast") == "fast")
-        #expect(graph.strategyHost.run("slow") == "slow")
-        #expect(graph.strategyHost.run("missing") == nil)
+        let strategies = graph.strategyHost.strategies
+        #expect(strategies.count == 2)
+        #expect(strategies["fast"]?.run() == "fast")
+        #expect(strategies["slow"]?.run() == "slow")
+        #expect(strategies["missing"] == nil)
     }
 }
