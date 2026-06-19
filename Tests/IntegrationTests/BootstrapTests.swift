@@ -392,4 +392,12 @@ struct BootstrapTests {
         #expect(strategies["slow"]?.run() == "slow")
         #expect(strategies["missing"] == nil)
     }
+
+    @Test func builderMultibindingFoldsContributorsInRankOrder() async throws {
+        // AuthMiddleware (withOrder: 1) and LoggingMiddleware (withOrder: 2)
+        // fold through MiddlewarePipeline's buildBlock into a Pipeline; the
+        // injected result reflects the rank order.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.middlewareHost.pipeline.steps == ["auth", "log"])
+    }
 }

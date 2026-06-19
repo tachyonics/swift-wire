@@ -107,6 +107,7 @@ struct WireGen {
         var declaredTypeNames: Set<String> = []
         var nonInjectExtensionInits: [NonInjectExtensionInit] = []
         var multibindingKeys: [DiscoveredMultibindingKey] = []
+        var resultBuilders: [DiscoveredResultBuilder] = []
     }
 
     private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
@@ -144,6 +145,7 @@ struct WireGen {
                 contentsOf: result.nonInjectExtensionInits
             )
             aggregate.multibindingKeys.append(contentsOf: result.multibindingKeys)
+            aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
         }
         return aggregate
     }
@@ -199,7 +201,8 @@ struct WireGen {
             let rawGraph = buildDependencyGraph(
                 from: singletons,
                 typealiases: aggregate.typealiases,
-                multibindingKeys: containerKey == nil ? aggregate.multibindingKeys : []
+                multibindingKeys: containerKey == nil ? aggregate.multibindingKeys : [],
+                resultBuilders: containerKey == nil ? aggregate.resultBuilders : []
             )
             let graph = enrichMissingBindingsWithCrossScopeHints(
                 rawGraph,

@@ -12,6 +12,45 @@ func makeSourceLocation(
     return SourceLocation(file: sourcePath, line: position.line, column: position.column)
 }
 
+/// Extract the canonical key identifier from an attribute's argument
+/// list. Returns `nil` for the unkeyed form (no parentheses or empty
+/// argument list). For the keyed form `@Inject(<expr>)` returns the
+/// trimmed text of `<expr>` — `Database.primary` → "Database.primary".
+///
+/// The build plugin matches keyed bindings to keyed consumers by
+/// canonical text, so what the user writes IS the key. `Foo.primary`
+/// on one side matches `Foo.primary` on the other; `.primary` does
+/// not match `Foo.primary` (different canonical text), and Swift's
+/// type inference for leading-dot is a separate concern handled by
+/// the macro signature, not the build plugin.
+func keyIdentifier(from attribute: AttributeSyntax) -> String? {
+    guard case let .argumentList(args) = attribute.arguments else { return nil }
+    guard let firstArg = args.first else { return nil }
+    return firstArg.expression.trimmedDescription
+}
+
+/// The parameter's external label — what callers write at the call
+/// site. The generated bootstrap emits `Type(label: resolvedValue)`
+/// calls and needs the label.
+///
+/// Returns `nil` for wildcard (`_`) labels so the call site is told
+/// to omit the label entirely rather than emit `"_"` as a sentinel
+/// the consumer has to special-case downstream.
+///
+/// - `init(label internal: A)` → `"label"`
+/// - `init(_ a: A)` → `nil`
+/// - `init(a: A)` → `"a"`
+///
+/// The internal name (`secondName`, when present) is irrelevant — it
+/// only appears inside the init body, which is the user's code, not
+/// Wire's.
+func parameterName(_ parameter: FunctionParameterSyntax) -> String? {
+    if parameter.firstName.tokenKind == .wildcard {
+        return nil
+    }
+    return parameter.firstName.text
+}
+
 /// Extract the source-level read access from a declaration's
 /// modifier list. Returns `.internal` (Swift's default) when no
 /// bare access modifier is present.

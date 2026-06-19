@@ -326,6 +326,14 @@ private func appendStruct(
     // works because Swift resolves the RHS in the outer scope before
     // binding the LHS local, so the local shadows cleanly.
     for binding in topologicalOrder {
+        // A builder aggregate emits a `@resultBuilder`-annotated local
+        // function (capturing the contributor locals) plus its call —
+        // the attribute can't sit on a closure, so it can't be a single
+        // expression like the other forms.
+        if case .aggregate(let aggregate) = binding, aggregate.flavour == .builder {
+            lines.append(contentsOf: builderFoldLines(aggregate))
+            continue
+        }
         let local = propertyName(for: binding)
         let construction = constructionExpression(for: binding)
         lines.append("    let \(local) = \(construction)")
@@ -572,8 +580,36 @@ private func aggregateConstruction(
         }.joined(separator: ", ")
         return "[\(pairs)] as \(aggregate.collectionType)"
     case .builder:
-        preconditionFailure("builder aggregate construction lands in iteration 5β Step 5b")
+        // Builder aggregates are emitted by `builderFoldLines` in the
+        // bootstrap body (a local function + call), not as a single
+        // expression, so this is never reached.
+        preconditionFailure("builder aggregate is emitted via builderFoldLines")
     }
+}
+
+/// Emit a builder aggregate as a `@resultBuilder`-annotated local
+/// function listing the contributor locals in order, followed by its
+/// invocation binding the aggregate local. The function captures the
+/// already-constructed contributor locals (topological order guarantees
+/// they precede the aggregate), so it takes no parameters.
+private func builderFoldLines(_ aggregate: DiscoveredAggregate) -> [String] {
+    let aggregateLocal = identifierName(forType: aggregate.collectionType, key: aggregate.keyReference)
+    let foldName = "_wireFold" + upperCamelCased(sanitizeKeyComponents(aggregate.keyReference))
+    let builderType = aggregate.builderTypeName ?? ""
+    var lines = [
+        "    @\(builderType)",
+        "    func \(foldName)() -> \(aggregate.collectionType) {",
+    ]
+    for contributor in aggregate.contributors {
+        let local = identifierName(
+            forType: contributor.dependency.type,
+            key: contributor.dependency.keyIdentifier
+        )
+        lines.append("        \(local)")
+    }
+    lines.append("    }")
+    lines.append("    let \(aggregateLocal) = \(foldName)()")
+    return lines
 }
 
 /// Combine `isAsync` / `isThrowing` into the call-site prefix Swift

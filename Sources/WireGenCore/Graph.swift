@@ -609,12 +609,19 @@ private func parseGenericType(_ expression: String) -> (base: String, params: [S
 package func buildDependencyGraph(
     from bindings: [DiscoveredBinding],
     typealiases: [DiscoveredTypealias] = [],
-    multibindingKeys: [DiscoveredMultibindingKey] = []
+    multibindingKeys: [DiscoveredMultibindingKey] = [],
+    resultBuilders: [DiscoveredResultBuilder] = []
 ) -> GraphResult {
     // Fan-in: turn each declared multibinding key into a synthesised
     // aggregate binding (deps = its contributors). Aggregates then flow
     // through the rest of the pipeline as ordinary bindings.
-    let allBindings = bindings + synthesizeAggregates(keys: multibindingKeys, bindings: bindings)
+    let allBindings =
+        bindings
+        + synthesizeAggregates(
+            keys: multibindingKeys,
+            bindings: bindings,
+            resultBuilders: resultBuilders
+        )
     let partition = partitionBindings(allBindings)
     let skipped = partition.skipped
 

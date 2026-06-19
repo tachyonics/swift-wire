@@ -720,6 +720,10 @@ package struct SourceFileDiscovery: Sendable {
     /// references by `keyReference`. Captured but unused until the
     /// fan-in pass (iteration 5β, Step 4) consumes them.
     package let multibindingKeys: [DiscoveredMultibindingKey]
+    /// `@resultBuilder` types found in this file, with their fold result
+    /// type. Matched against `BuilderKey<Builder>` keys so a builder
+    /// aggregate knows its producer-side result type.
+    package let resultBuilders: [DiscoveredResultBuilder]
 
     package init(
         allBindings: [Partition: [DiscoveredBinding]] = [:],
@@ -729,7 +733,8 @@ package struct SourceFileDiscovery: Sendable {
         typealiases: [DiscoveredTypealias] = [],
         declaredTypeNames: [String] = [],
         nonInjectExtensionInits: [NonInjectExtensionInit] = [],
-        multibindingKeys: [DiscoveredMultibindingKey] = []
+        multibindingKeys: [DiscoveredMultibindingKey] = [],
+        resultBuilders: [DiscoveredResultBuilder] = []
     ) {
         self.allBindings = allBindings
         self.imports = imports
@@ -739,6 +744,7 @@ package struct SourceFileDiscovery: Sendable {
         self.declaredTypeNames = declaredTypeNames
         self.nonInjectExtensionInits = nonInjectExtensionInits
         self.multibindingKeys = multibindingKeys
+        self.resultBuilders = resultBuilders
     }
 }
 
@@ -853,7 +859,8 @@ package func discover(
         typealiases: visitor.typealiases,
         declaredTypeNames: visitor.declaredTypeNames,
         nonInjectExtensionInits: visitor.nonInjectExtensionInits,
-        multibindingKeys: visitor.multibindingKeys
+        multibindingKeys: visitor.multibindingKeys,
+        resultBuilders: visitor.resultBuilders
     )
 }
 

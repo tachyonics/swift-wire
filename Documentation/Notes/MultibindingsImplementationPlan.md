@@ -166,17 +166,35 @@ Cheap throwaway checks that retire the assumptions the plan leans on:
   aggregate yet.
 - **Ships:** graph resolves; codegen next.
 
-### Step 5 — codegen: the three forms
-- `boundTypeReference` for aggregates = declared collection/result type
-  (the BuilderKey read-point for the `_WireGraph` stored property).
-- `constructionExpression`: `[Element]` literal / `[K:V]` literal /
-  IIFE `@resultBuilder` fold — all over contributor locals, ordered.
-- `identifierName` key-primary for aggregates; symmetric on the consumer
-  dep so resolution lands.
-- **No** `_check` extension; rely on self-checking literals + typed
-  consumer calls. Duplicate `atKey:` already guarded in Step 3.
-- **Test:** `IntegrationTests` fixtures exercising each form end-to-end.
-- **Ships:** feature works end-to-end.
+### Step 5 — codegen: the three forms ✅ **Done** (5a collected/mapped, 5b builder)
+- Consumer-side `@Inject` overloads for `CollectedKey`/`MappedKey`/
+  `BuilderKey` added (`Macros.swift`); `multibindingKeys`/`resultBuilders`
+  wired into WireGen's default-graph build.
+- `boundType`/`boundTypeReference` for aggregates = the collection type
+  (`[Element]` / `[Key: Value]`) or, for builder, the result type read
+  from `buildBlock`/`buildFinalResult` (`ResultBuilderScanning.swift`).
+- `constructionExpression`: `[a, b] as [Element]` / `[k: v] as [K: V]`
+  over the contributor locals (the `as` coercion unifies the
+  heterogeneous concrete contributors). **Builder** can't be a single
+  expression (the `@resultBuilder` attribute is unsupported on closures —
+  spike #2), so `builderFoldLines` emits a `@Builder`-annotated *local
+  function* capturing the contributor locals, plus its call.
+- **No `_check` extension** — multibinding-keyed sites are excluded from
+  the `BindingKey` `_check` codegen; aggregates self-check via the typed
+  literal / fold and the consumer's typed `@Inject` overload. (The actual
+  snag in 5a was the reverse: the `_check` *did* wrongly include them —
+  fixed by the exclusion.)
+- Empty builder (zero contributors) synthesises no aggregate — a
+  zero-component fold has no well-defined result. Empty collected/mapped
+  emit `[] as …` / `[:] as …`.
+- To make room, `keyIdentifier` / `parameterName` joined the other shared
+  helpers in `DiscoverySyntaxHelpers.swift`.
+- **Test:** `MultibindingExample` (collected + mapped), `BuilderMultibinding-
+  Example` (a `BuilderKey` folding into a concrete `Pipeline`), exercised
+  by `BootstrapTests`; plus `ResultBuilderDiscoveryTests` and the builder
+  cases in `MultibindingFanInTests`.
+- **Ships:** feature works end-to-end (default graph; container/scope
+  multibindings still deferred).
 
 ### Step 6 — empty / dead diagnostics (5α inheritance)
 - Empty multibinding (consumer exists, zero contributors) → visibility-

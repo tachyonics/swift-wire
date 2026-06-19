@@ -71,10 +71,14 @@ package struct DiscoveredAggregate: Sendable {
     /// Reference text of the key this aggregates — becomes the binding's
     /// `keyIdentifier`, so a consumer's `@Inject(key)` resolves here.
     package let keyReference: String
-    /// The aggregated collection type — `[Element]` / `[Key: Value]` —
-    /// becomes the binding's `boundType`.
+    /// The aggregated type — `[Element]` / `[Key: Value]` for collected/
+    /// mapped, or the builder's `buildBlock`/`buildFinalResult` result
+    /// type for builder. Becomes the binding's `boundType`.
     package let collectionType: String
     package let flavour: MultibindingKeyFlavour
+    /// The `@resultBuilder` type the fold is annotated with, for builder
+    /// aggregates only (`nil` for collected/mapped).
+    package let builderTypeName: String?
     /// Contributors in final order (by `withOrder:`, else source order).
     package let contributors: [AggregateContributor]
     /// The key declaration's location — what aggregate-level diagnostics
@@ -85,13 +89,31 @@ package struct DiscoveredAggregate: Sendable {
         keyReference: String,
         collectionType: String,
         flavour: MultibindingKeyFlavour,
+        builderTypeName: String? = nil,
         contributors: [AggregateContributor],
         location: SourceLocation
     ) {
         self.keyReference = keyReference
         self.collectionType = collectionType
         self.flavour = flavour
+        self.builderTypeName = builderTypeName
         self.contributors = contributors
+        self.location = location
+    }
+}
+
+/// A `@resultBuilder` type found in source, with the result type of its
+/// `buildBlock`/`buildFinalResult` — the producer-side type a
+/// `BuilderKey<Builder>` aggregate produces. Read because a builder fold
+/// function needs an explicit concrete return type (the no-opaque slice).
+package struct DiscoveredResultBuilder: Sendable, Equatable {
+    package let typeName: String
+    package let resultType: String
+    package let location: SourceLocation
+
+    package init(typeName: String, resultType: String, location: SourceLocation) {
+        self.typeName = typeName
+        self.resultType = resultType
         self.location = location
     }
 }
