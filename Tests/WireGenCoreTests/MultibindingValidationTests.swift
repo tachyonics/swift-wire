@@ -15,13 +15,12 @@ struct MultibindingValidationTests {
     /// the same composition WireGen performs.
     private func diagnostics(in source: String) -> [Diagnostic] {
         let discovery = discover(in: source, sourcePath: "M.swift")
-        let contributions = discovery.allBindings.values
-            .flatMap { $0 }
-            .flatMap { $0.contributions }
         return discovery.warnings
             + multibindingContributionDiagnostics(
                 declaredKeyReferences: Set(discovery.multibindingKeys.map(\.keyReference)),
-                contributions: contributions
+                contributionsByPartition: discovery.allBindings.mapValues { bindings in
+                    bindings.flatMap { $0.contributions }
+                }
             )
     }
 
@@ -137,6 +136,24 @@ struct MultibindingValidationTests {
             struct A {}
             @Singleton @Contributes(to: App.services, withOrder: 2)
             struct B {}
+            """
+        #expect(first(source, matching: "duplicate withOrder") == nil)
+    }
+
+    @Test func sameWithOrderInDifferentPartitionsIsAccepted() {
+        // A container singleton and a container seed-scope type both
+        // contribute withOrder: 2 to the same key — separate partitions
+        // form separate aggregates, so the per-partition check doesn't
+        // flag a conflict.
+        let source = """
+            @Container
+            enum App {
+                static let services = CollectedKey<any Service>()
+                @Singleton @Contributes(to: App.services, withOrder: 2)
+                struct A {}
+                @Scoped(seed: Seed.self) @Contributes(to: App.services, withOrder: 2)
+                struct B {}
+            }
             """
         #expect(first(source, matching: "duplicate withOrder") == nil)
     }

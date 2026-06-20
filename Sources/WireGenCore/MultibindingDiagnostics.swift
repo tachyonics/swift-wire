@@ -40,22 +40,25 @@ func strayContributesDiagnostics(
     ]
 }
 
-/// Every cross-contributor multibinding diagnostic, module-wide:
-/// references to undeclared keys, mixed `withOrder:`, duplicate `atKey:`,
-/// and duplicate `withOrder:`. Output is sorted by source location for
-/// stable build output.
+/// Every cross-contributor multibinding diagnostic. Missing-key is
+/// module-wide (a key is declared once); the per-key cross-contributor
+/// checks (mixed `withOrder:`, duplicate `atKey:`, duplicate `withOrder:`)
+/// run **per partition**, because contributions to the same key in
+/// different partitions form separate aggregates and so don't conflict.
+/// Output is sorted by source location for stable build output.
 package func multibindingContributionDiagnostics(
     declaredKeyReferences: Set<String>,
-    contributions: [Contribution]
+    contributionsByPartition: [Partition: [Contribution]]
 ) -> [Diagnostic] {
-    let diagnostics =
-        unknownMultibindingKeyDiagnostics(
-            contributions: contributions,
-            declaredKeyReferences: declaredKeyReferences
-        )
-        + mixedContributionOrderingDiagnostics(contributions: contributions)
-        + duplicateMapKeyDiagnostics(contributions: contributions)
-        + duplicateOrderDiagnostics(contributions: contributions)
+    var diagnostics = unknownMultibindingKeyDiagnostics(
+        contributions: contributionsByPartition.values.flatMap { $0 },
+        declaredKeyReferences: declaredKeyReferences
+    )
+    for partitionContributions in contributionsByPartition.values {
+        diagnostics += mixedContributionOrderingDiagnostics(contributions: partitionContributions)
+        diagnostics += duplicateMapKeyDiagnostics(contributions: partitionContributions)
+        diagnostics += duplicateOrderDiagnostics(contributions: partitionContributions)
+    }
     return diagnostics.sorted { $0.location < $1.location }
 }
 

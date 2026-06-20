@@ -430,15 +430,18 @@ struct BootstrapTests {
         #expect(scope.report.render() == ["header:Q3", "body"])
     }
 
-    @Test func containerSeedScopeMultibindingAggregatesScopeContributors() async throws {
-        // The (container, seed) cell: key declared in WidgetContainer,
-        // contributors scope-bound within the container's seed scope. The
-        // cross-container check allows it (container matches, scope differs).
+    @Test func containerPartitionsPickTheirOwnContributions() async throws {
+        // SingletonWidget (container singleton) and ScopedWidget (container
+        // seed scope) both contribute to WidgetContainer.widgets with
+        // withOrder: 2. They don't conflict, and each partition's aggregate
+        // contains only its own contributor.
         let containerGraph = try await _WidgetContainerWireGraph.bootstrap()
+        #expect(containerGraph.singletonView.render() == ["singleton"])
+
         let scope = try await _WidgetContainer_WidgetSeedWireScope.bootstrap(
             seed: WidgetSeed(theme: "dark"),
             widgetContainerWireGraph: containerGraph
         )
-        #expect(scope.widgetView.render() == ["button:dark", "label"])
+        #expect(scope.scopedView.render() == ["scoped:dark"])
     }
 }

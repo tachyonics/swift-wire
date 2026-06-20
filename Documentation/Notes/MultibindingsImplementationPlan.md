@@ -214,6 +214,12 @@ atomically per partition.
   partition container differs from the key's. Only the *container* axis is
   compared, so cross-scope reads within one container / the default graph
   stay legal.
+- **Per-partition cross-contributor diagnostics:** mixed `withOrder:`,
+  duplicate `atKey:`, and duplicate `withOrder:` are checked *per
+  partition*, not module-wide — contributions to the same key in different
+  partitions form separate aggregates, so e.g. a `@Singleton` and a
+  `@Scoped` may both use `withOrder: 2` for the same container key without
+  conflict. Missing-key stays module-wide (a key is declared once).
 - **Known limitation:** a borrowed singleton's contribution stays with the
   default graph (borrow bindings don't carry contributions), so a
   `@Singleton` contributor can't fan into a *scope's* aggregate

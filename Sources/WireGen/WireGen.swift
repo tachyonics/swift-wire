@@ -309,9 +309,9 @@ struct WireGen {
             )
             + multibindingContributionDiagnostics(
                 declaredKeyReferences: Set(aggregate.multibindingKeys.map(\.keyReference)),
-                contributions: aggregate.allBindings.values
-                    .flatMap { $0 }
-                    .flatMap { $0.contributions }
+                contributionsByPartition: aggregate.allBindings.mapValues { bindings in
+                    bindings.flatMap { $0.contributions }
+                }
             )
             + crossContainerContributionDiagnostics(
                 multibindingKeys: aggregate.multibindingKeys,
