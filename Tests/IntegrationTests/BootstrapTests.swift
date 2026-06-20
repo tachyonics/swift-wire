@@ -429,4 +429,16 @@ struct BootstrapTests {
         )
         #expect(scope.report.render() == ["header:Q3", "body"])
     }
+
+    @Test func containerSeedScopeMultibindingAggregatesScopeContributors() async throws {
+        // The (container, seed) cell: key declared in WidgetContainer,
+        // contributors scope-bound within the container's seed scope. The
+        // cross-container check allows it (container matches, scope differs).
+        let containerGraph = try await _WidgetContainerWireGraph.bootstrap()
+        let scope = try await _WidgetContainer_WidgetSeedWireScope.bootstrap(
+            seed: WidgetSeed(theme: "dark"),
+            widgetContainerWireGraph: containerGraph
+        )
+        #expect(scope.widgetView.render() == ["button:dark", "label"])
+    }
 }
