@@ -566,7 +566,9 @@ extension BindingDiscovery {
                         in: attributes,
                         sourcePath: sourcePath,
                         converter: converter
-                    )
+                    ),
+                    allowUnused: allowUnusedFlag(in: attributes, named: "Singleton")
+                        || allowUnusedFlag(in: attributes, named: "Scoped")
                 )
             )
         )
@@ -635,7 +637,8 @@ extension BindingDiscovery {
                         in: node.attributes,
                         sourcePath: sourcePath,
                         converter: converter
-                    )
+                    ),
+                    allowUnused: allowUnusedFlag(in: node.attributes, named: "Provides")
                 )
             )
         )
@@ -712,7 +715,8 @@ extension BindingDiscovery {
                         in: node.attributes,
                         sourcePath: sourcePath,
                         converter: converter
-                    )
+                    ),
+                    allowUnused: allowUnusedFlag(in: node.attributes, named: "Provides")
                 )
             )
         )

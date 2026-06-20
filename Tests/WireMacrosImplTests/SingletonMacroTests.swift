@@ -32,6 +32,28 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
+    func test_singletonWithAllowUnused_generatesSameMembers() {
+        // The `allowUnused:` argument is a build-plugin signal; the macro
+        // ignores it and synthesises the usual init + key.
+        assertMacroExpansion(
+            """
+            @Singleton(allowUnused: true)
+            struct A {
+            }
+            """,
+            expandedSource: """
+                struct A {
+
+                    init() {
+                    }
+
+                    static let key = BindingKey<A>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
     // MARK: - Single @Inject property
 
     func test_singletonWithOneInject_generatesParameterisedInit() {
