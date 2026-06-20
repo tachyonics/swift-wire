@@ -44,25 +44,19 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
     /// empty/dead-key diagnostics (and, later, the cross-module
     /// threshold).
     package let accessLevel: AccessLevel
-    /// The `@Container` the key is declared in, or `nil` for a
-    /// default-graph key. Contributions must come from the same
-    /// container — aggregates are atomic per partition.
-    package let containerName: String?
 
     package init(
         keyReference: String,
         flavour: MultibindingKeyFlavour,
         typeArguments: [String],
         location: SourceLocation,
-        accessLevel: AccessLevel,
-        containerName: String? = nil
+        accessLevel: AccessLevel
     ) {
         self.keyReference = keyReference
         self.flavour = flavour
         self.typeArguments = typeArguments
         self.location = location
         self.accessLevel = accessLevel
-        self.containerName = containerName
     }
 }
 

@@ -430,6 +430,17 @@ struct BootstrapTests {
         #expect(scope.report.render() == ["header:Q3", "body"])
     }
 
+    @Test func moduleScopeKeyContributedPerContainer() async throws {
+        // ServiceRegistry.all is a module-scope key; ProdContainer and
+        // TestEnvContainer each contribute their own service and build
+        // their own aggregate — the production/test container pattern.
+        let prod = try await _ProdContainerWireGraph.bootstrap()
+        #expect(prod.serviceHost.services.map { $0.name() } == ["real"])
+
+        let test = try await _TestEnvContainerWireGraph.bootstrap()
+        #expect(test.serviceHost.services.map { $0.name() } == ["mock"])
+    }
+
     @Test func containerPartitionsPickTheirOwnContributions() async throws {
         // SingletonWidget (container singleton) and ScopedWidget (container
         // seed scope) both contribute to WidgetContainer.widgets with

@@ -17,7 +17,6 @@ func multibindingKey(
     from node: VariableDeclSyntax,
     enclosingTypeNames: [String],
     enclosingAccessLevels: [AccessLevel],
-    containerName: String?,
     sourcePath: String,
     converter: SourceLocationConverter
 ) -> DiscoveredMultibindingKey? {
@@ -40,8 +39,7 @@ func multibindingKey(
         flavour: info.flavour,
         typeArguments: info.typeArguments,
         location: makeSourceLocation(of: pattern.identifier, sourcePath: sourcePath, converter: converter),
-        accessLevel: effectiveAccess,
-        containerName: containerName
+        accessLevel: effectiveAccess
     )
 }
 

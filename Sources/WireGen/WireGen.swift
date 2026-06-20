@@ -313,10 +313,6 @@ struct WireGen {
                     bindings.flatMap { $0.contributions }
                 }
             )
-            + crossContainerContributionDiagnostics(
-                multibindingKeys: aggregate.multibindingKeys,
-                bindingsByPartition: aggregate.allBindings
-            )
     }
 
     /// Collect type names of `@Singleton` bindings across every graph
