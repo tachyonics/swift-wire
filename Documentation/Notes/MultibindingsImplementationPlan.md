@@ -208,12 +208,17 @@ atomically per partition.
 - Each partition aggregates its **own** contributors. Within a container
   (key + contributors + consumer co-located) and within a seed scope
   (scope-bound contributors, which may read the seed) both work.
-- **Cross-container rejection:** key declarations are tagged with their
-  container (`DiscoveredMultibindingKey.containerName`);
-  `crossContainerContributionDiagnostics` errors when a contribution's
-  partition container differs from the key's. Only the *container* axis is
-  compared, so cross-scope reads within one container / the default graph
-  stay legal.
+- **Keys are global identities, not container-owned.** A multibinding key
+  is a name (consistent with `BindingKey`, whose declaration location Wire
+  never tracks); *any* partition may contribute to it, and each partition
+  builds its own aggregate. This is what enables the production/test
+  container pattern — a module-scope (or library) key with a `Prod` and a
+  `Test` container each providing their own contributors, selected at the
+  entry point. A stray contributor (no consumer in its partition) becomes
+  a **dead binding** (Step 6's visibility-gated warning), not a hard
+  error. (An earlier cross-container *rejection* was tried and reverted —
+  it wrongly treated keys as owned by their declaring container and broke
+  this pattern.)
 - **Per-partition cross-contributor diagnostics:** mixed `withOrder:`,
   duplicate `atKey:`, and duplicate `withOrder:` are checked *per
   partition*, not module-wide — contributions to the same key in different
