@@ -516,12 +516,15 @@ extension BindingDiscovery {
         members: MemberBlockItemListSyntax
     ) {
         let scopeKey: ScopeKey?
-        if hasAttribute(attributes, named: "Singleton") {
+        let allowUnused: Bool
+        if let singletonAttribute = attribute(in: attributes, named: "Singleton") {
             scopeKey = nil
+            allowUnused = allowUnusedFlag(from: singletonAttribute)
         } else if let scopedAttribute = attribute(in: attributes, named: "Scoped"),
             let seed = seedTypeExpression(from: scopedAttribute)
         {
             scopeKey = ScopeKey(seed: seed)
+            allowUnused = allowUnusedFlag(from: scopedAttribute)
         } else {
             return
         }
@@ -567,8 +570,7 @@ extension BindingDiscovery {
                         sourcePath: sourcePath,
                         converter: converter
                     ),
-                    allowUnused: allowUnusedFlag(in: attributes, named: "Singleton")
-                        || allowUnusedFlag(in: attributes, named: "Scoped")
+                    allowUnused: allowUnused
                 )
             )
         )
@@ -602,8 +604,8 @@ extension BindingDiscovery {
 
         let propertyName = pattern.identifier.text
         let accessPath = (scopes.map(\.typeName) + [propertyName]).joined(separator: ".")
-        let key = attribute(in: node.attributes, named: "Provides")
-            .flatMap { keyIdentifier(from: $0) }
+        let providesAttribute = attribute(in: node.attributes, named: "Provides")
+        let key = providesAttribute.flatMap { keyIdentifier(from: $0) }
         let providerLocation = location(of: pattern.identifier)
         // Computed properties (`@Provides var x: T { get async throws { … } }`)
         // can carry effect specifiers on the `get` accessor. Stored
@@ -638,7 +640,7 @@ extension BindingDiscovery {
                         sourcePath: sourcePath,
                         converter: converter
                     ),
-                    allowUnused: allowUnusedFlag(in: node.attributes, named: "Provides")
+                    allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false
                 )
             )
         )
@@ -677,8 +679,8 @@ extension BindingDiscovery {
         }
         let genericParameterNames =
             node.genericParameterClause?.parameters.map { $0.name.text } ?? []
-        let key = attribute(in: node.attributes, named: "Provides")
-            .flatMap { keyIdentifier(from: $0) }
+        let providesAttribute = attribute(in: node.attributes, named: "Provides")
+        let key = providesAttribute.flatMap { keyIdentifier(from: $0) }
         let providerLocation = location(of: node.name)
         unannotatedExtensionProvides.append(
             contentsOf: unannotatedExtensionProvidesCandidates(
@@ -716,7 +718,7 @@ extension BindingDiscovery {
                         sourcePath: sourcePath,
                         converter: converter
                     ),
-                    allowUnused: allowUnusedFlag(in: node.attributes, named: "Provides")
+                    allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false
                 )
             )
         )

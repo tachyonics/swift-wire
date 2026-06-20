@@ -63,16 +63,29 @@ struct DeadBindingDiagnosticsTests {
         deadBindingDiagnostics(in: bindings)
     }
 
+    /// The set of source files the warnings are anchored at. Each fixture
+    /// uses a distinct `<name>.swift`, so this pins *exactly* which
+    /// bindings warned — and, by Set equality, that nothing else did.
+    private func warnedFiles(_ bindings: [DiscoveredBinding]) -> Set<String> {
+        Set(warnings(bindings).map(\.location.file))
+    }
+
     // MARK: - Visibility gating
 
-    @Test func unusedInternalSingletonWarns() throws {
-        let warning = try #require(warnings([singleton("Orphan")]).first)
+    @Test func unusedInternalSingletonWarnsWithExplanatoryMessage() throws {
+        let result = warnings([singleton("Orphan")])
+        #expect(result.count == 1)
+        let warning = try #require(result.first)
         #expect(warning.severity == .warning)
-        #expect(warning.message.contains("'Orphan'"))
+        #expect(warning.location.file == "Orphan.swift")
+        #expect(
+            warning.message.contains("'Orphan' is declared but nothing in the build consumes it")
+        )
+        #expect(warning.message.contains("allowUnused: true"))
     }
 
     @Test func unusedPackageSingletonWarns() {
-        #expect(!warnings([singleton("Orphan", access: .package)]).isEmpty)
+        #expect(warnedFiles([singleton("Orphan", access: .package)]) == ["Orphan.swift"])
     }
 
     @Test func unusedPublicSingletonIsSilent() {
@@ -84,7 +97,7 @@ struct DeadBindingDiagnosticsTests {
     }
 
     @Test func unusedProviderWarns() {
-        #expect(!warnings([provider("makeFoo", boundType: "Foo")]).isEmpty)
+        #expect(warnedFiles([provider("makeFoo", boundType: "Foo")]) == ["makeFoo.swift"])
     }
 
     @Test func allowUnusedSilencesTheWarning() {
@@ -93,39 +106,46 @@ struct DeadBindingDiagnosticsTests {
 
     // MARK: - Liveness
 
-    @Test func consumedBindingIsLive() {
-        // Consumer depends on Producer: Producer is live; Consumer is the
-        // root (nothing consumes it) and warns.
-        let result = warnings([
-            singleton("Consumer", deps: [(type: "Producer", key: nil)]),
-            singleton("Producer"),
-        ])
-        #expect(result.contains { $0.message.contains("'Consumer'") })
-        #expect(!result.contains { $0.message.contains("'Producer'") })
+    @Test func consumedBindingIsLiveOnlyRootWarns() {
+        // Consumer depends on Producer: Producer is live; exactly one
+        // warning, anchored at the Consumer root — nothing at Producer.
+        #expect(
+            warnedFiles([
+                singleton("Consumer", deps: [(type: "Producer", key: nil)]),
+                singleton("Producer"),
+            ]) == ["Consumer.swift"]
+        )
     }
 
     @Test func optionalConsumerKeepsProducerLive() {
-        // A `Producer?` dependency promotes to the `Producer` producer.
-        let result = warnings([
-            singleton("Consumer", deps: [(type: "Producer?", key: nil)]),
-            singleton("Producer"),
-        ])
-        #expect(!result.contains { $0.message.contains("'Producer'") })
+        // A `Producer?` dependency promotes to the `Producer` producer, so
+        // only the Consumer root warns.
+        #expect(
+            warnedFiles([
+                singleton("Consumer", deps: [(type: "Producer?", key: nil)]),
+                singleton("Producer"),
+            ]) == ["Consumer.swift"]
+        )
     }
 
     @Test func keyedConsumerKeepsKeyedProducerLive() {
-        let result = warnings([
-            singleton("Consumer", deps: [(type: "Database", key: "Database.primary")]),
-            provider("primaryDB", boundType: "Database", key: "Database.primary"),
-        ])
-        #expect(!result.contains { $0.message.contains("key Database.primary") })
+        // The keyed provider is consumed; only the Consumer root warns.
+        #expect(
+            warnedFiles([
+                singleton("Consumer", deps: [(type: "Database", key: "Database.primary")]),
+                provider("primaryDB", boundType: "Database", key: "Database.primary"),
+            ]) == ["Consumer.swift"]
+        )
     }
 
-    @Test func unconsumedKeyedBindingWarnsWithKeyInMessage() throws {
-        let warning = try #require(
-            warnings([provider("primaryDB", boundType: "Database", key: "Database.primary")]).first
-        )
-        #expect(warning.message.contains("key Database.primary"))
+    @Test func unconsumedKeyedBindingNamesTheKeyedSlot() throws {
+        let result = warnings([
+            provider("primaryDB", boundType: "Database", key: "Database.primary")
+        ])
+        #expect(result.count == 1)
+        let warning = try #require(result.first)
+        #expect(warning.location.file == "primaryDB.swift")
+        #expect(warning.message.contains("'Database' (key Database.primary)"))
     }
 
     // MARK: - Multibinding contributors (conservative skip for now)

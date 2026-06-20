@@ -28,12 +28,11 @@ func hasAttribute(
     attribute(in: attributes, named: name) != nil
 }
 
-/// Whether the named Wire macro attribute carries `allowUnused: true` —
-/// the dead-binding-warning silencer. Only a literal `true` counts;
-/// absent or `false` returns `false`.
-func allowUnusedFlag(in attributes: AttributeListSyntax, named name: String) -> Bool {
-    guard let attribute = attribute(in: attributes, named: name),
-        case let .argumentList(arguments) = attribute.arguments,
+/// Whether a Wire macro attribute carries `allowUnused: true` — the
+/// dead-binding-warning silencer. Only a literal `true` counts; absent or
+/// `false` returns `false`.
+func allowUnusedFlag(from attribute: AttributeSyntax) -> Bool {
+    guard case let .argumentList(arguments) = attribute.arguments,
         let argument = arguments.first(where: { $0.label?.text == "allowUnused" })
     else { return false }
     return argument.expression.as(BooleanLiteralExprSyntax.self)?.literal.text == "true"
