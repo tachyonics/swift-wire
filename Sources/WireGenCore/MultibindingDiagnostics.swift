@@ -40,23 +40,66 @@ func strayContributesDiagnostics(
     ]
 }
 
-/// Every cross-contributor multibinding diagnostic, module-wide:
-/// references to undeclared keys, mixed `withOrder:`, duplicate `atKey:`,
-/// and duplicate `withOrder:`. Output is sorted by source location for
-/// stable build output.
+/// Every cross-contributor multibinding diagnostic. Missing-key is
+/// module-wide (a key is declared once); the per-key cross-contributor
+/// checks (mixed `withOrder:`, duplicate `atKey:`, duplicate `withOrder:`)
+/// run **per partition**, because contributions to the same key in
+/// different partitions form separate aggregates and so don't conflict.
+/// Output is sorted by source location for stable build output.
 package func multibindingContributionDiagnostics(
     declaredKeyReferences: Set<String>,
-    contributions: [Contribution]
+    contributionsByPartition: [Partition: [Contribution]]
 ) -> [Diagnostic] {
-    let diagnostics =
-        unknownMultibindingKeyDiagnostics(
-            contributions: contributions,
-            declaredKeyReferences: declaredKeyReferences
-        )
-        + mixedContributionOrderingDiagnostics(contributions: contributions)
-        + duplicateMapKeyDiagnostics(contributions: contributions)
-        + duplicateOrderDiagnostics(contributions: contributions)
+    var diagnostics = unknownMultibindingKeyDiagnostics(
+        contributions: contributionsByPartition.values.flatMap { $0 },
+        declaredKeyReferences: declaredKeyReferences
+    )
+    for partitionContributions in contributionsByPartition.values {
+        diagnostics += mixedContributionOrderingDiagnostics(contributions: partitionContributions)
+        diagnostics += duplicateMapKeyDiagnostics(contributions: partitionContributions)
+        diagnostics += duplicateOrderDiagnostics(contributions: partitionContributions)
+    }
     return diagnostics.sorted { $0.location < $1.location }
+}
+
+/// A contribution whose partition's container differs from the key's
+/// declaring container. Aggregates are atomic per partition — a
+/// container's aggregate is built only from that container's contributors
+/// — so a cross-container contribution would silently never reach the
+/// key's consumers. `bindingsByPartition` is the module-wide partitioned
+/// binding set (`WireGen` holds it); only the container axis is compared,
+/// so cross-scope reads within one container/the default graph are fine.
+package func crossContainerContributionDiagnostics(
+    multibindingKeys: [DiscoveredMultibindingKey],
+    bindingsByPartition: [Partition: [DiscoveredBinding]]
+) -> [Diagnostic] {
+    let keyByReference = Dictionary(
+        multibindingKeys.map { ($0.keyReference, $0) },
+        uniquingKeysWith: { first, _ in first }
+    )
+    var diagnostics: [Diagnostic] = []
+    for (partition, bindings) in bindingsByPartition {
+        for binding in bindings {
+            for contribution in binding.contributions {
+                guard let key = keyByReference[contribution.keyReference],
+                    key.containerName != partition.container
+                else { continue }
+                diagnostics.append(
+                    Diagnostic(
+                        location: contribution.location,
+                        message:
+                            "@Contributes(to: \(contribution.keyReference)) is in \(describe(partition.container)) but '\(contribution.keyReference)' is declared in \(describe(key.containerName)) — contributions can't cross container boundaries (aggregates are atomic per container).",
+                        severity: .error
+                    )
+                )
+            }
+        }
+    }
+    return diagnostics.sorted { $0.location < $1.location }
+}
+
+private func describe(_ container: String?) -> String {
+    container.map { "container '\($0)'" } ?? "the default graph"
 }
 
 /// `@Contributes(to: X)` where `X` matches no discovered key declaration

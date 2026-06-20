@@ -87,7 +87,9 @@ package func orchestrateSeedScope(
     scopeBindings: [DiscoveredBinding],
     borrowBindings: [DiscoveredBinding],
     parentGraphType: String = "_WireGraph",
-    typealiases: [DiscoveredTypealias]
+    typealiases: [DiscoveredTypealias],
+    multibindingKeys: [DiscoveredMultibindingKey] = [],
+    resultBuilders: [DiscoveredResultBuilder] = []
 ) -> SeedScopeOrchestration {
     let seedSuffix = sanitizeIdentifier(seedKey.seed)
     let identifierSuffix: String
@@ -100,7 +102,15 @@ package func orchestrateSeedScope(
     let seedBinding = syntheticSeedBinding(seedTypeExpression: seedKey.seed)
 
     let combined = scopeBindings + [seedBinding] + borrowBindings
-    let result = buildDependencyGraph(from: combined, typealiases: typealiases)
+    // Multibindings aggregate from the scope's own contributors (a
+    // borrowed singleton's contribution stays with the default graph, so
+    // cross-scope contribution into a scope aggregate isn't supported).
+    let result = buildDependencyGraph(
+        from: combined,
+        typealiases: typealiases,
+        multibindingKeys: multibindingKeys,
+        resultBuilders: resultBuilders
+    )
 
     var borrowedNames: Set<String> = []
     borrowedNames.reserveCapacity(borrowBindings.count)

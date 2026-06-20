@@ -15,18 +15,25 @@ struct MultibindingValidationTests {
     /// the same composition WireGen performs.
     private func diagnostics(in source: String) -> [Diagnostic] {
         let discovery = discover(in: source, sourcePath: "M.swift")
-        let contributions = discovery.allBindings.values
-            .flatMap { $0 }
-            .flatMap { $0.contributions }
         return discovery.warnings
             + multibindingContributionDiagnostics(
                 declaredKeyReferences: Set(discovery.multibindingKeys.map(\.keyReference)),
-                contributions: contributions
+                contributionsByPartition: discovery.allBindings.mapValues { bindings in
+                    bindings.flatMap { $0.contributions }
+                }
             )
     }
 
     private func first(_ source: String, matching needle: String) -> Diagnostic? {
         diagnostics(in: source).first { $0.message.contains(needle) }
+    }
+
+    private func crossContainerDiagnostics(in source: String) -> [Diagnostic] {
+        let discovery = discover(in: source, sourcePath: "M.swift")
+        return crossContainerContributionDiagnostics(
+            multibindingKeys: discovery.multibindingKeys,
+            bindingsByPartition: discovery.allBindings
+        )
     }
 
     // MARK: - Bare @Contributes (producer-pairing)
@@ -133,6 +140,24 @@ struct MultibindingValidationTests {
         #expect(first(source, matching: "duplicate withOrder") == nil)
     }
 
+    @Test func sameWithOrderInDifferentPartitionsIsAccepted() {
+        // A container singleton and a container seed-scope type both
+        // contribute withOrder: 2 to the same key — separate partitions
+        // form separate aggregates, so the per-partition check doesn't
+        // flag a conflict.
+        let source = """
+            @Container
+            enum App {
+                static let services = CollectedKey<any Service>()
+                @Singleton @Contributes(to: App.services, withOrder: 2)
+                struct A {}
+                @Scoped(seed: Seed.self) @Contributes(to: App.services, withOrder: 2)
+                struct B {}
+            }
+            """
+        #expect(first(source, matching: "duplicate withOrder") == nil)
+    }
+
     // MARK: - Duplicate atKey
 
     @Test func duplicateMapKeyIsError() throws {
@@ -161,5 +186,43 @@ struct MultibindingValidationTests {
             struct B {}
             """
         #expect(first(source, matching: "duplicate atKey") == nil)
+    }
+
+    // MARK: - Cross-container contribution
+
+    @Test func crossContainerContributionIsError() throws {
+        // Key declared in container App; contributor in the default graph.
+        let source = """
+            @Container
+            enum App {
+                static let services = CollectedKey<any Service>()
+            }
+            @Singleton @Contributes(to: App.services)
+            struct AuthService {}
+            """
+        let diagnostic = try #require(crossContainerDiagnostics(in: source).first)
+        #expect(diagnostic.severity == .error)
+        #expect(diagnostic.message.contains("cross container"))
+    }
+
+    @Test func sameContainerContributionIsAccepted() {
+        let source = """
+            @Container
+            enum App {
+                static let services = CollectedKey<any Service>()
+                @Singleton @Contributes(to: App.services)
+                struct AuthService {}
+            }
+            """
+        #expect(crossContainerDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func defaultGraphContributionIsAccepted() {
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            @Singleton @Contributes(to: App.services)
+            struct AuthService {}
+            """
+        #expect(crossContainerDiagnostics(in: source).isEmpty)
     }
 }

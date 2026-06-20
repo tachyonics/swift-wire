@@ -411,4 +411,37 @@ struct BootstrapTests {
         let graph = try await _WireGraph.bootstrap()
         #expect(graph.middlewareHost.composed.step == "auth>log")
     }
+
+    @Test func containerMultibindingAggregatesContainerContributors() async throws {
+        // The key, contributors, and consumer all live in PluginContainer,
+        // so the aggregate is built in the container's own graph.
+        let graph = try await _PluginContainerWireGraph.bootstrap()
+        #expect(graph.pluginConsumer.plugins.map { $0.id() } == ["alpha", "beta"])
+    }
+
+    @Test func seedScopeMultibindingAggregatesScopeContributors() async throws {
+        // HeaderSection and BodySection are @Scoped contributors; the
+        // aggregate is built per scope (HeaderSection even reads the seed).
+        let graph = try await _WireGraph.bootstrap()
+        let scope = try await _ReportSeedWireScope.bootstrap(
+            seed: ReportSeed(name: "Q3"),
+            wireGraph: graph
+        )
+        #expect(scope.report.render() == ["header:Q3", "body"])
+    }
+
+    @Test func containerPartitionsPickTheirOwnContributions() async throws {
+        // SingletonWidget (container singleton) and ScopedWidget (container
+        // seed scope) both contribute to WidgetContainer.widgets with
+        // withOrder: 2. They don't conflict, and each partition's aggregate
+        // contains only its own contributor.
+        let containerGraph = try await _WidgetContainerWireGraph.bootstrap()
+        #expect(containerGraph.singletonView.render() == ["singleton"])
+
+        let scope = try await _WidgetContainer_WidgetSeedWireScope.bootstrap(
+            seed: WidgetSeed(theme: "dark"),
+            widgetContainerWireGraph: containerGraph
+        )
+        #expect(scope.scopedView.render() == ["scoped:dark"])
+    }
 }
