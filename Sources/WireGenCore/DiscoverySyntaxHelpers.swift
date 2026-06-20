@@ -25,7 +25,10 @@ func makeSourceLocation(
 /// the macro signature, not the build plugin.
 func keyIdentifier(from attribute: AttributeSyntax) -> String? {
     guard case let .argumentList(args) = attribute.arguments else { return nil }
-    guard let firstArg = args.first else { return nil }
+    // The key is the positional (unlabelled) first argument. A leading
+    // labelled argument — e.g. `@Provides(allowUnused: true)` — means
+    // there's no key, not that `allowUnused`'s value is the key.
+    guard let firstArg = args.first, firstArg.label == nil else { return nil }
     return firstArg.expression.trimmedDescription
 }
 

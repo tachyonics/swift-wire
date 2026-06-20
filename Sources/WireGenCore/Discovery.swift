@@ -219,6 +219,28 @@ extension DiscoveredBinding {
         case .aggregate: return []
         }
     }
+
+    /// Source-level access modifier on the binding's declaration. Drives
+    /// the dead-binding warning's visibility gate. Synthesised aggregates
+    /// have no source declaration; they report `.internal` (they're never
+    /// part of the discovered set the dead-binding analysis walks).
+    package var accessLevel: AccessLevel {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.accessLevel
+        case .provider(let provider): return provider.accessLevel
+        case .aggregate: return .internal
+        }
+    }
+
+    /// `allowUnused: true` on the binding's macro — the dead-binding-
+    /// warning silencer. Aggregates have no macro and never silence.
+    package var allowUnused: Bool {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.allowUnused
+        case .provider(let provider): return provider.allowUnused
+        case .aggregate: return false
+        }
+    }
 }
 
 /// One `@Singleton`-annotated type found in a source file, with the
@@ -285,6 +307,9 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// `@Singleton`/`@Scoped`. Captured but unused until the Step 4
     /// fan-in pass.
     package let contributions: [Contribution]
+    /// `allowUnused: true` on the scope macro — silences the dead-binding
+    /// warning for an intentionally-unconsumed binding (e.g. a graph root).
+    package let allowUnused: Bool
 
     package var sourcePath: String { location.file }
 
@@ -300,7 +325,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         initIsThrowing: Bool = false,
         memberInjections: [MemberInjection] = [],
         accessLevel: AccessLevel = .internal,
-        contributions: [Contribution] = []
+        contributions: [Contribution] = [],
+        allowUnused: Bool = false
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -317,6 +343,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.memberInjections = memberInjections
         self.accessLevel = accessLevel
         self.contributions = contributions
+        self.allowUnused = allowUnused
     }
 }
 
@@ -467,6 +494,9 @@ package struct DiscoveredProvider: Sendable {
     /// plain `@Provides`. Captured but unused until the Step 4 fan-in
     /// pass.
     package let contributions: [Contribution]
+    /// `allowUnused: true` on `@Provides` — silences the dead-binding
+    /// warning for an intentionally-unconsumed binding.
+    package let allowUnused: Bool
 
     package var sourcePath: String { location.file }
 
@@ -482,7 +512,8 @@ package struct DiscoveredProvider: Sendable {
         isAsync: Bool = false,
         isThrowing: Bool = false,
         accessLevel: AccessLevel = .internal,
-        contributions: [Contribution] = []
+        contributions: [Contribution] = [],
+        allowUnused: Bool = false
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -496,6 +527,7 @@ package struct DiscoveredProvider: Sendable {
         self.isThrowing = isThrowing
         self.accessLevel = accessLevel
         self.contributions = contributions
+        self.allowUnused = allowUnused
     }
 
     /// Whether the binding source is a property (read its value directly)

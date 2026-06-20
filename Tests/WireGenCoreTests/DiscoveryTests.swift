@@ -2621,4 +2621,40 @@ struct DiscoveryTests {
             )
         )
     }
+
+    // MARK: - allowUnused (dead-binding silencer)
+
+    @Test func allowUnusedTrueIsCapturedOnSingleton() {
+        let result = discoverSingletons(
+            in: "@Singleton(allowUnused: true) struct A {}",
+            sourcePath: "A.swift"
+        )
+        #expect(result.count == 1)
+        #expect(result[0].allowUnused)
+    }
+
+    @Test func plainSingletonIsNotAllowUnused() {
+        let result = discoverSingletons(in: "@Singleton struct A {}", sourcePath: "A.swift")
+        #expect(!result[0].allowUnused)
+    }
+
+    @Test func allowUnusedTrueIsCapturedOnProvides() {
+        let result = discoverProviders(
+            in: "@Provides(allowUnused: true) let foo: Foo = Foo()",
+            sourcePath: "F.swift"
+        )
+        #expect(result.count == 1)
+        #expect(result[0].allowUnused)
+        // The labelled `allowUnused:` argument must not be mistaken for a key.
+        #expect(result[0].keyIdentifier == nil)
+    }
+
+    @Test func keyedProvidesWithAllowUnusedCapturesBoth() {
+        let result = discoverProviders(
+            in: "@Provides(Foo.primary, allowUnused: true) let foo: Foo = Foo()",
+            sourcePath: "F.swift"
+        )
+        #expect(result[0].keyIdentifier == "Foo.primary")
+        #expect(result[0].allowUnused)
+    }
 }

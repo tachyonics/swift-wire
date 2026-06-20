@@ -12,7 +12,8 @@
 /// supported and stay generic — type parameters propagate through the
 /// generated init and key.
 @attached(member, names: named(init), named(key))
-public macro Singleton() = #externalMacro(module: "WireMacrosImpl", type: "SingletonMacro")
+public macro Singleton(allowUnused: Bool = false) =
+    #externalMacro(module: "WireMacrosImpl", type: "SingletonMacro")
 
 /// Declares a type that lives for the dynamic extent of a scope keyed
 /// by `seed`. The seed type uniquely identifies the scope — two
@@ -34,7 +35,7 @@ public macro Singleton() = #externalMacro(module: "WireMacrosImpl", type: "Singl
 /// `@Singleton` is the special case for process-lifetime values that
 /// have no seed.
 @attached(member, names: named(init), named(key))
-public macro Scoped<Seed>(seed: Seed.Type) =
+public macro Scoped<Seed>(seed: Seed.Type, allowUnused: Bool = false) =
     #externalMacro(module: "WireMacrosImpl", type: "ScopedMacro")
 
 /// Marks a stored property (or init parameter) as an injection point.
@@ -103,10 +104,11 @@ public macro Inject<Builder>(_ key: BuilderKey<Builder>) =
 /// Consumers reference the same key at the `@Inject` site to select
 /// which binding to inject.
 @attached(peer)
-public macro Provides() = #externalMacro(module: "WireMacrosImpl", type: "ProvidesMacro")
+public macro Provides(allowUnused: Bool = false) =
+    #externalMacro(module: "WireMacrosImpl", type: "ProvidesMacro")
 
 @attached(peer)
-public macro Provides<Value>(_ key: BindingKey<Value>) =
+public macro Provides<Value>(_ key: BindingKey<Value>, allowUnused: Bool = false) =
     #externalMacro(module: "WireMacrosImpl", type: "ProvidesMacro")
 
 /// Declares a type (or an extension) as a selectable container.
