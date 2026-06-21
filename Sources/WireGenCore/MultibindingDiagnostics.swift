@@ -62,6 +62,64 @@ package func multibindingContributionDiagnostics(
     return diagnostics.sorted { $0.location < $1.location }
 }
 
+/// Dead-/empty-multibinding warnings, gated by the *key's* visibility and
+/// `allowUnused:`. A key consumed by nothing is **dead**; a key consumed
+/// in a partition that has no contributors there is **empty** (its
+/// consumer receives an empty collection). `public`/`open` keys stay
+/// silent — downstream may contribute or consume. Anchored at the key
+/// declaration.
+package func multibindingLivenessDiagnostics(
+    multibindingKeys: [DiscoveredMultibindingKey],
+    bindingsByPartition: [Partition: [DiscoveredBinding]]
+) -> [Diagnostic] {
+    var diagnostics: [Diagnostic] = []
+    for key in multibindingKeys where keyWarrantsLivenessWarning(key) {
+        var consumedAnywhere = false
+        var emptyWhereConsumed = false
+        for bindings in bindingsByPartition.values {
+            let consumedHere = bindings.contains { binding in
+                binding.dependencies.contains { $0.keyIdentifier == key.keyReference }
+            }
+            guard consumedHere else { continue }
+            consumedAnywhere = true
+            let contributedHere = bindings.contains {
+                $0.contributions.contains { $0.keyReference == key.keyReference }
+            }
+            if !contributedHere { emptyWhereConsumed = true }
+        }
+        if !consumedAnywhere {
+            diagnostics.append(
+                Diagnostic(
+                    location: key.location,
+                    message:
+                        "multibinding key '\(key.keyReference)' has no consumer — nothing @Injects it. Inject it somewhere, raise the key to 'public', or declare it 'allowUnused: true'.",
+                    severity: .warning
+                )
+            )
+        } else if emptyWhereConsumed {
+            diagnostics.append(
+                Diagnostic(
+                    location: key.location,
+                    message:
+                        "multibinding key '\(key.keyReference)' is consumed but has no @Contributes contributors — the consumer receives an empty collection. Add a contributor, or declare the key 'allowUnused: true'.",
+                    severity: .warning
+                )
+            )
+        }
+    }
+    return diagnostics.sorted { $0.location < $1.location }
+}
+
+/// Whether a multibinding key's dead/empty state should warn: `internal`/
+/// `package` warn, `public`/`open` stay silent, `allowUnused:` silences.
+private func keyWarrantsLivenessWarning(_ key: DiscoveredMultibindingKey) -> Bool {
+    guard !key.allowUnused else { return false }
+    switch key.accessLevel {
+    case .internal, .package: return true
+    case .public, .open, .fileprivate, .private: return false
+    }
+}
+
 /// `@Contributes(to: X)` where `X` matches no discovered key declaration
 /// in the parse set. (The parse set is one module today; it widens under
 /// composition — see `MultiModuleComposition.md`.)

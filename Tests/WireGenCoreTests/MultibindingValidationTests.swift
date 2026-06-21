@@ -28,6 +28,14 @@ struct MultibindingValidationTests {
         diagnostics(in: source).first { $0.message.contains(needle) }
     }
 
+    private func livenessDiagnostics(in source: String) -> [Diagnostic] {
+        let discovery = discover(in: source, sourcePath: "M.swift")
+        return multibindingLivenessDiagnostics(
+            multibindingKeys: discovery.multibindingKeys,
+            bindingsByPartition: discovery.allBindings
+        )
+    }
+
     // MARK: - Bare @Contributes (producer-pairing)
 
     @Test func bareContributesOnTypeRequiresScopeProducer() throws {
@@ -130,6 +138,76 @@ struct MultibindingValidationTests {
             struct B {}
             """
         #expect(first(source, matching: "duplicate withOrder") == nil)
+    }
+
+    // MARK: - Empty / dead multibinding
+
+    @Test func emptyMultibindingWarns() throws {
+        // Consumer exists, no contributors → the consumer gets `[]`.
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            @Singleton
+            struct Host { @Inject(App.services) var services: [any Service] }
+            """
+        let diagnostic = try #require(livenessDiagnostics(in: source).first)
+        #expect(diagnostic.severity == .warning)
+        #expect(diagnostic.message.contains("App.services"))
+        #expect(diagnostic.message.contains("empty collection"))
+    }
+
+    @Test func deadKeyWarns() throws {
+        let source = "enum App { static let services = CollectedKey<any Service>() }"
+        let diagnostic = try #require(livenessDiagnostics(in: source).first)
+        #expect(diagnostic.severity == .warning)
+        #expect(diagnostic.message.contains("has no consumer"))
+    }
+
+    @Test func liveMultibindingIsSilent() {
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            @Singleton @Contributes(to: App.services)
+            struct AuthService {}
+            @Singleton
+            struct Host { @Inject(App.services) var services: [any Service] }
+            """
+        #expect(livenessDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func publicEmptyKeyIsSilent() {
+        let source = """
+            public enum App { public static let services = CollectedKey<any Service>() }
+            @Singleton
+            struct Host { @Inject(App.services) var services: [any Service] }
+            """
+        #expect(livenessDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func allowUnusedKeyIsSilent() {
+        let source = """
+            enum App { static let services = CollectedKey<any Service>(allowUnused: true) }
+            @Singleton
+            struct Host { @Inject(App.services) var services: [any Service] }
+            """
+        #expect(livenessDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func keyConsumedInTwoContainersEachContributedIsLive() {
+        // The production/test pattern: consumed in two containers, each
+        // with its own contributor — not empty in either.
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            @Container
+            enum Prod {
+                @Singleton @Contributes(to: App.services) struct Real {}
+                @Singleton struct Host { @Inject(App.services) var s: [any Service] }
+            }
+            @Container
+            enum Test {
+                @Singleton @Contributes(to: App.services) struct Mock {}
+                @Singleton struct Host { @Inject(App.services) var s: [any Service] }
+            }
+            """
+        #expect(livenessDiagnostics(in: source).isEmpty)
     }
 
     @Test func sameWithOrderInDifferentPartitionsIsAccepted() {

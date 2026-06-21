@@ -250,11 +250,20 @@ declaration-too-private error was — so it had to be finished first):
   wired into WireGen's diagnostics. The 25 integration-fixture roots
   (accessed via `graph.<name>`) are annotated `allowUnused: true`.
 
-**Multibinding-specific (remaining):**
-- Empty multibinding (consumer exists, zero contributors) → visibility-
-  driven warn, silenceable. Dead key (no consumer) → the aggregate is a
-  dead binding. Public stays silent.
-- **Test:** `internal` empty key warns, `public` stays silent.
+**Multibinding-specific ✅ Done:**
+- `multibindingLivenessDiagnostics` — gated by the *key's* visibility and
+  `allowUnused:`. A key consumed by nothing → **dead** warning; a key
+  consumed in a partition with no contributors there → **empty** warning
+  (consumer gets `[]`). `public`/`open` keys stay silent. Anchored at the
+  key declaration; runs per partition (the production/test pattern, where
+  a key is consumed in two containers each with its own contributor, stays
+  silent).
+- Silencer added to the key types: `CollectedKey/MappedKey/BuilderKey(
+  allowUnused: true)` (defaulted init param), read by the scanner onto
+  `DiscoveredMultibindingKey.allowUnused`.
+- **Test:** `MultibindingValidationTests` (empty warns, dead warns, live
+  silent, public silent, `allowUnused` silent, two-container pattern
+  silent) + `EmptyMultibindingExample` bootstrapping to `[]`.
 
 ### Step 7 — validation gate
 - The `M1_PLAN.md` test app: 3 `CollectedKey<any Service>` contributors

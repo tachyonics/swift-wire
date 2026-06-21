@@ -44,19 +44,24 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
     /// empty/dead-key diagnostics (and, later, the cross-module
     /// threshold).
     package let accessLevel: AccessLevel
+    /// `allowUnused: true` on the key declaration — silences the
+    /// dead-/empty-multibinding warning.
+    package let allowUnused: Bool
 
     package init(
         keyReference: String,
         flavour: MultibindingKeyFlavour,
         typeArguments: [String],
         location: SourceLocation,
-        accessLevel: AccessLevel
+        accessLevel: AccessLevel,
+        allowUnused: Bool = false
     ) {
         self.keyReference = keyReference
         self.flavour = flavour
         self.typeArguments = typeArguments
         self.location = location
         self.accessLevel = accessLevel
+        self.allowUnused = allowUnused
     }
 }
 

@@ -430,6 +430,12 @@ struct BootstrapTests {
         #expect(scope.report.render() == ["header:Q3", "body"])
     }
 
+    @Test func emptyMultibindingBootstrapsToEmptyCollection() async throws {
+        // HookRegistry.all has no contributors; the consumer gets `[]`.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.hookHost.hooks.isEmpty)
+    }
+
     @Test func moduleScopeKeyContributedPerContainer() async throws {
         // ServiceRegistry.all is a module-scope key; ProdContainer and
         // TestEnvContainer each contribute their own service and build
