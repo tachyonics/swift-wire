@@ -16,7 +16,13 @@ import SwiftSyntaxMacros
 /// even when both scopes are active at runtime.
 ///
 /// Validation parity with `@Singleton`: see that macro's doc comment.
-public struct ScopedMacro: MemberMacro {
+///
+/// Two roles: as a `MemberMacro` on a type it synthesises `init`/`key`
+/// (delegating to `@Singleton`); as a `PeerMacro` on a `@Provides`
+/// var/func it emits nothing — the role exists only to make
+/// `@Provides @Scoped(seed:)` legal, with scope identity read from the
+/// attribute by the build plugin.
+public struct ScopedMacro: MemberMacro, PeerMacro {
     public static func expansion(
         of node: AttributeSyntax,
         providingMembersOf declaration: some DeclGroupSyntax,
@@ -33,6 +39,14 @@ public struct ScopedMacro: MemberMacro {
         } catch SingletonMacroError.unsupportedDeclaration {
             throw ScopedMacroError.unsupportedDeclaration
         }
+    }
+
+    public static func expansion(
+        of node: AttributeSyntax,
+        providingPeersOf declaration: some DeclSyntaxProtocol,
+        in context: some MacroExpansionContext
+    ) throws -> [DeclSyntax] {
+        []
     }
 }
 

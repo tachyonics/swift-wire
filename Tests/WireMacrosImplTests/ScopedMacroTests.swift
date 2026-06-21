@@ -15,6 +15,7 @@ final class ScopedMacroTests: XCTestCase {
     let macros: [String: Macro.Type] = [
         "Scoped": ScopedMacro.self,
         "Inject": InjectMacro.self,
+        "Provides": ProvidesMacro.self,
     ]
 
     // MARK: - Basic expansion
@@ -195,6 +196,43 @@ final class ScopedMacroTests: XCTestCase {
                     severity: .error
                 )
             ],
+            macros: macros
+        )
+    }
+
+    // MARK: - Peer role on a `@Provides` producer (Axis A)
+
+    /// Stacked on a `@Provides` function, `@Scoped`'s peer role makes the
+    /// combination legal and emits nothing — the value comes from the
+    /// `@Provides` declaration; the plugin reads scope identity from the
+    /// attribute. No member-role error (a function isn't a type decl).
+    func test_scopedOnProvidesFunction_emitsNothingAndDoesNotError() {
+        assertMacroExpansion(
+            """
+            @Provides @Scoped(seed: RequestSeed.self)
+            static func makeFoo() -> Foo {
+                Foo()
+            }
+            """,
+            expandedSource: """
+                static func makeFoo() -> Foo {
+                    Foo()
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    /// Same for a `@Provides` stored property.
+    func test_scopedOnProvidesProperty_emitsNothingAndDoesNotError() {
+        assertMacroExpansion(
+            """
+            @Provides @Scoped(seed: RequestSeed.self)
+            static let foo: Foo = Foo()
+            """,
+            expandedSource: """
+                static let foo: Foo = Foo()
+                """,
             macros: macros
         )
     }

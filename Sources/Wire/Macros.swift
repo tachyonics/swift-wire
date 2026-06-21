@@ -34,7 +34,17 @@ public macro Singleton(allowUnused: Bool = false) =
 ///
 /// `@Singleton` is the special case for process-lifetime values that
 /// have no seed.
+///
+/// Also stackable on a `@Provides` declaration to scope an explicit
+/// producer — `@Provides @Scoped(seed: X.self) static func makeFoo(...)`
+/// routes the produced binding into the `X`-seed scope the same way a
+/// `@Scoped` *type* is routed. On a producer the macro emits nothing
+/// (the `@Provides` marker already carries the value); it's a marker the
+/// build plugin reads for scope identity. The `member` role still drives
+/// type-level use; the `peer` role makes it legal — and inert — on a
+/// var/func.
 @attached(member, names: named(init), named(key))
+@attached(peer)
 public macro Scoped<Seed>(seed: Seed.Type, allowUnused: Bool = false) =
     #externalMacro(module: "WireMacrosImpl", type: "ScopedMacro")
 
