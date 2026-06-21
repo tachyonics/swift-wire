@@ -39,8 +39,18 @@ func multibindingKey(
         flavour: info.flavour,
         typeArguments: info.typeArguments,
         location: makeSourceLocation(of: pattern.identifier, sourcePath: sourcePath, converter: converter),
-        accessLevel: effectiveAccess
+        accessLevel: effectiveAccess,
+        allowUnused: keyAllowUnused(from: binding.initializer?.value)
     )
+}
+
+/// Whether a key initialiser carries `allowUnused: true` — e.g.
+/// `CollectedKey<T>(allowUnused: true)`.
+private func keyAllowUnused(from initializer: ExprSyntax?) -> Bool {
+    guard let call = initializer?.as(FunctionCallExprSyntax.self),
+        let argument = call.arguments.first(where: { $0.label?.text == "allowUnused" })
+    else { return false }
+    return argument.expression.as(BooleanLiteralExprSyntax.self)?.literal.text == "true"
 }
 
 /// Resolve a key declaration's flavour and generic argument list from its

@@ -314,6 +314,10 @@ struct WireGen {
                 }
             )
             + deadBindingDiagnostics(across: aggregate.allBindings)
+            + multibindingLivenessDiagnostics(
+                multibindingKeys: aggregate.multibindingKeys,
+                bindingsByPartition: aggregate.allBindings
+            )
     }
 
     /// Collect type names of `@Singleton` bindings across every graph

@@ -26,7 +26,10 @@
 /// declaration. Contribution order is controlled by `withOrder:` on
 /// `@Contributes`.
 public struct CollectedKey<Element>: Sendable {
-    public init() {}
+    /// `allowUnused: true` silences the dead-/empty-multibinding warning
+    /// for an intentionally-unconsumed or intentionally-empty key. The
+    /// value is a build-plugin signal; it's otherwise ignored.
+    public init(allowUnused: Bool = false) {}
 }
 
 /// A map-style multibinding key. Contributors tagged `@Contributes(to:,
@@ -47,7 +50,10 @@ public struct CollectedKey<Element>: Sendable {
 /// error raised by the build plugin (a duplicate-key dictionary literal
 /// is a runtime trap, so it can't be left to the compiler).
 public struct MappedKey<Key: Hashable, Value>: Sendable {
-    public init() {}
+    /// `allowUnused: true` silences the dead-/empty-multibinding warning
+    /// for an intentionally-unconsumed or intentionally-empty key. The
+    /// value is a build-plugin signal; it's otherwise ignored.
+    public init(allowUnused: Bool = false) {}
 }
 
 /// A builder-style multibinding key. Contributors tagged
@@ -74,5 +80,8 @@ public struct MappedKey<Key: Hashable, Value>: Sendable {
 /// `OpaqueTypesSupport`; the fixed-result case ships in iteration 5β.
 /// `withOrder:` on `@Contributes` sequences the fold's components.
 public struct BuilderKey<Builder>: Sendable {
-    public init() {}
+    /// `allowUnused: true` silences the dead-/empty-multibinding warning
+    /// for an intentionally-unconsumed or intentionally-empty key. The
+    /// value is a build-plugin signal; it's otherwise ignored.
+    public init(allowUnused: Bool = false) {}
 }
