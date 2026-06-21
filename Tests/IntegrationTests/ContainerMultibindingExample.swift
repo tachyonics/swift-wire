@@ -24,7 +24,7 @@ enum PluginContainer {
         func id() -> String { "beta" }
     }
 
-    @Singleton
+    @Singleton(allowUnused: true)
     struct PluginConsumer {
         @Inject(PluginContainer.plugins) var plugins: [any ContainerPlugin]
     }

@@ -57,7 +57,7 @@ package func makeLazyResource(callCount: LazyResourceCallCount) -> Lazy<LazyReso
 /// type — injected through the same `@Inject` mechanism as any
 /// other dependency. `materialise()` exposes the `.get()` call to
 /// the test.
-@Singleton
+@Singleton(allowUnused: true)
 package struct LazyResourceConsumer {
     @Inject package var resource: Lazy<LazyResource>
 

@@ -22,7 +22,7 @@ package func makeAsyncToken() async throws -> AsyncToken {
 /// so no propagation through to its construction call — only the
 /// `makeAsyncToken()` line gets the `try await` prefix in the
 /// emitted bootstrap.
-@Singleton
+@Singleton(allowUnused: true)
 package struct AsyncTokenConsumer {
     @Inject package var token: AsyncToken
 

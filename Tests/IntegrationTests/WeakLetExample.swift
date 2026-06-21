@@ -24,7 +24,7 @@ package final class Telemetry {
     package let id = "telemetry"
 }
 
-@Singleton
+@Singleton(allowUnused: true)
 package final class Dashboard {
     @Inject package weak let telemetry: Telemetry?
 

@@ -29,7 +29,7 @@ enum WidgetContainer {
         func render() -> String { "singleton" }
     }
 
-    @Singleton
+    @Singleton(allowUnused: true)
     struct SingletonView {
         @Inject(WidgetContainer.widgets) var widgets: [any Widget]
 
@@ -44,7 +44,7 @@ enum WidgetContainer {
         func render() -> String { "scoped:\(widgetSeed.theme)" }
     }
 
-    @Scoped(seed: WidgetSeed.self)
+    @Scoped(seed: WidgetSeed.self, allowUnused: true)
     struct ScopedView {
         @Inject(WidgetContainer.widgets) var widgets: [any Widget]
 

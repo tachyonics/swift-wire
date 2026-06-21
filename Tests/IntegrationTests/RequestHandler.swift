@@ -4,7 +4,7 @@ import Wire
 /// the same seed scope. Exercises in-scope dependency resolution: the
 /// generated bootstrap must construct `RequestLogger` before
 /// `RequestHandler` and pass the same `RequestLogger` instance.
-@Scoped(seed: TestRequestSeed.self)
+@Scoped(seed: TestRequestSeed.self, allowUnused: true)
 struct RequestHandler {
     @Inject var requestLogger: RequestLogger
 

@@ -4,7 +4,7 @@ import Wire
 /// through `@Inject`. Closes the loop: `@Provides` declarations enter
 /// the graph, get topologically ordered, and reach a `@Singleton`'s
 /// dependency slot just like another `@Singleton` would.
-@Singleton
+@Singleton(allowUnused: true)
 struct BannerService {
     @Inject var banner: Banner
 

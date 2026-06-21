@@ -12,7 +12,7 @@ import Wire
 /// the `await` propagates a real suspension point through to the
 /// bootstrap function's evaluation, not just a syntactic prefix
 /// the compiler optimises out.
-@Singleton
+@Singleton(allowUnused: true)
 package struct AsyncInitConsumer {
     package let token: AsyncToken
     package let message: AsyncMessage

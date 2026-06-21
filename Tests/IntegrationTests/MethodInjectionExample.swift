@@ -17,7 +17,7 @@ import Wire
 /// surfaces at the right layer: the user's binding profile
 /// dictates the graph's conformance, not a hardcoded annotation
 /// from Wire.
-@Singleton
+@Singleton(allowUnused: true)
 package final class NoteBoard {
     /// State mutated by the `@Inject` method. Single-write,
     /// multi-read pattern that's safe by audit (the write happens

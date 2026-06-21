@@ -1,9 +1,10 @@
 # Wire's visibility model — design notes
 
-> **Status:** design contract pinned ahead of iteration 5α
-> (visibility-driven dead-binding diagnostics). Locks the
-> conceptual model that 5α implements and that 5β (multibindings)
-> + future container composition both build on. Not yet implemented.
+> **Status:** 5α implemented — the declaration-too-private error, the
+> dead-binding warning (`DeadBindingDiagnostics.swift`, gated by
+> visibility, judged per container), and the `allowUnused:` silencer on
+> `@Singleton`/`@Scoped`/`@Provides`. Locks the conceptual model that 5β
+> (multibindings) + future container composition both build on.
 
 > **See also:** the "must be at least `internal`" threshold below assumes
 > the bootstrap is generated into the *same* module. Multi-module
@@ -212,6 +213,13 @@ multibinding key flavors.
 - Transitively-dead bindings (a binding consumed only by another
   dead binding). 5α detects first-order dead bindings only; a
   fixed-point analysis is a future refinement if it proves useful.
+- Bindings consumed only through generic specialisation. Liveness
+  runs first-order on *discovered* bindings, before specialisation,
+  so the generic `Foo<T>` template (consumed as `Foo<Concrete>`) and
+  a `@Provides T` injected only as a generic's type parameter aren't
+  seen as consumed. Generic templates are therefore skipped outright;
+  a non-generic binding consumed only via specialisation may
+  false-warn and is silenced with `allowUnused:`.
 
 ## Policy 2: container composition contract (future)
 

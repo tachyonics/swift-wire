@@ -4,7 +4,7 @@ import Wire
 /// init takes precedence over property scanning" path. The macro
 /// preserves this init verbatim and uses its parameter list as the
 /// dependency declaration.
-@Singleton
+@Singleton(allowUnused: true)
 struct Greeter {
     let repository: UserRepository
 
