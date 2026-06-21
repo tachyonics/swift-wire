@@ -108,6 +108,21 @@ composition: aggregating contributions a host module can't see is a
 thing DI users reach for (plugin registries, feature-module roundup),
 and it falls out of the parse-set framing without new mechanism.
 
+## Single-key (`BindingKey`) tracking rides here too
+
+Today Wire tracks *multibinding* keys (it must — the type lives on the
+key) but not single `BindingKey`s (the type lives producer-side, so the
+compiler enforces it via generated `_check`s). That asymmetry is fine
+single-module, but composition already forces Wire to discover keys
+across the parse set — and once it tracks single keys too, they become
+**self-describing** (type + identity from one reference), which unlocks
+consistent single/multi key diagnostics and a value-level scope-input
+key. Tracking single keys is a **behavioural change** (Wire would begin
+diagnosing them), so it's deliberately bundled here — landed *before*
+library behaviour expectations lock in, and on the same key-discovery
+work composition needs anyway. See
+[`ScopeAndKeyModelEvolution.md`](ScopeAndKeyModelEvolution.md).
+
 ## Summary
 
 Composition is "the bootstrap now lives in / is consumed by a different
