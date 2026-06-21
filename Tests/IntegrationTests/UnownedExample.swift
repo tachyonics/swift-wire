@@ -19,7 +19,7 @@ package final class Sensor {
     package let id = "sensor"
 }
 
-@Singleton
+@Singleton(allowUnused: true)
 package final class Monitor {
     @Inject package unowned let sensor: Sensor
 

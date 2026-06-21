@@ -28,7 +28,7 @@ struct LoggingPlugin: Plugin {
     func label() -> String { "logging" }
 }
 
-@Singleton
+@Singleton(allowUnused: true)
 struct PluginHost {
     @Inject(PluginRegistry.ordered) var plugins: [any Plugin]
 }
@@ -51,7 +51,7 @@ struct SlowStrategy: Strategy {
     func run() -> String { "slow" }
 }
 
-@Singleton
+@Singleton(allowUnused: true)
 struct StrategyHost {
     @Inject(StrategyRegistry.byName) var strategies: [String: any Strategy]
 }

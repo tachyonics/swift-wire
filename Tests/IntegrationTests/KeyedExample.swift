@@ -17,7 +17,7 @@ extension AppName {
 @Provides(AppName.alternate)
 let alternateAppName: AppName = AppName(value: "alternate")
 
-@Singleton
+@Singleton(allowUnused: true)
 struct KeyedConsumer {
     @Inject(AppName.alternate) var alternate: AppName
 

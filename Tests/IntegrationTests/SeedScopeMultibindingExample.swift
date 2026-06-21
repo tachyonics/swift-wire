@@ -31,7 +31,7 @@ struct BodySection: ReportSection {
     func render() -> String { "body" }
 }
 
-@Scoped(seed: ReportSeed.self)
+@Scoped(seed: ReportSeed.self, allowUnused: true)
 struct Report {
     @Inject(ReportRegistry.sections) var sections: [any ReportSection]
 

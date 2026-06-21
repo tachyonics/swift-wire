@@ -9,7 +9,7 @@ import Wire
 /// even though `bump(by:)` itself isn't declared `async` — the
 /// `await` is paying for the isolation crossing from the
 /// (non-isolated) bootstrap function into the actor's domain.
-@Singleton
+@Singleton(allowUnused: true)
 package actor TickCounter {
     private(set) package var ticks: Int = 0
 

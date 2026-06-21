@@ -9,8 +9,24 @@
 // not yet detected (no fixed-point pass). Runs per partition — each graph
 // is atomic, so liveness is judged within the partition's own bindings.
 
+/// Dead-binding warnings across a module, grouped by container. Liveness
+/// is judged per *container* (all of a container's scopes merged), not per
+/// `(container, scope)` partition: a seed scope borrows its container's
+/// singletons, so a singleton consumed only by a scope binding must still
+/// count as live. Containers are atomic, so each is judged independently.
+package func deadBindingDiagnostics(
+    across bindingsByPartition: [Partition: [DiscoveredBinding]]
+) -> [Diagnostic] {
+    var bindingsByContainer: [String?: [DiscoveredBinding]] = [:]
+    for (partition, bindings) in bindingsByPartition {
+        bindingsByContainer[partition.container, default: []].append(contentsOf: bindings)
+    }
+    let diagnostics = bindingsByContainer.values.flatMap { deadBindingDiagnostics(in: $0) }
+    return diagnostics.sorted { $0.location < $1.location }
+}
+
 /// Warn for each binding in `bindings` that no other binding consumes,
-/// subject to the visibility gate. `bindings` is one partition's
+/// subject to the visibility gate. `bindings` is one container's
 /// discovered bindings (no synthesised aggregates). Output is sorted by
 /// source location for stable build output.
 package func deadBindingDiagnostics(in bindings: [DiscoveredBinding]) -> [Diagnostic] {
@@ -62,12 +78,15 @@ private func consumedIdentities(
 }
 
 /// Whether an unconsumed binding should warn. An explicit `allowUnused:
-/// true` silences it. `public`/`open` stay silent (external consumers may
-/// exist). A binding that contributes to a multibinding is live via its
-/// aggregate's consumer, so it's skipped here (the multibinding empty/
-/// dead-key cases handle aggregates separately).
+/// true` silences it. Generic bindings are skipped — their liveness is via
+/// specialisation (consumed as `Foo<Concrete>`), which this first-order
+/// analysis doesn't track. A binding that contributes to a multibinding is
+/// live via its aggregate's consumer, so it's skipped too (the
+/// multibinding empty/dead-key cases handle aggregates separately).
+/// `public`/`open` stay silent (external consumers may exist).
 private func shouldWarnUnused(_ binding: DiscoveredBinding) -> Bool {
     guard !binding.allowUnused else { return false }
+    guard binding.genericParameterNames.isEmpty else { return false }
     guard binding.contributions.isEmpty else { return false }
     switch binding.accessLevel {
     case .internal, .package: return true

@@ -313,6 +313,7 @@ struct WireGen {
                     bindings.flatMap { $0.contributions }
                 }
             )
+            + deadBindingDiagnostics(across: aggregate.allBindings)
     }
 
     /// Collect type names of `@Singleton` bindings across every graph

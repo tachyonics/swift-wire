@@ -24,7 +24,7 @@ enum ProdContainer {
         func name() -> String { "real" }
     }
 
-    @Singleton
+    @Singleton(allowUnused: true)
     struct ServiceHost {
         @Inject(ServiceRegistry.all) var services: [any AppService]
     }
@@ -37,7 +37,7 @@ enum TestEnvContainer {
         func name() -> String { "mock" }
     }
 
-    @Singleton
+    @Singleton(allowUnused: true)
     struct ServiceHost {
         @Inject(ServiceRegistry.all) var services: [any AppService]
     }

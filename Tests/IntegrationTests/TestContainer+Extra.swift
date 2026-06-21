@@ -11,5 +11,5 @@ struct TestMode: Sendable {
 
 @Container
 extension TestContainer {
-    @Provides static let testMode: TestMode = TestMode(value: "integration-test")
+    @Provides(allowUnused: true) static let testMode: TestMode = TestMode(value: "integration-test")
 }

@@ -23,7 +23,7 @@ struct TestJobSeed: Sendable {
 enum TestContainer {
     @Provides static let banner: Banner = Banner(text: "test container")
 
-    @Singleton
+    @Singleton(allowUnused: true)
     struct MockBannerService {
         @Inject var banner: Banner
 
@@ -32,7 +32,7 @@ enum TestContainer {
         }
     }
 
-    @Scoped(seed: TestJobSeed.self)
+    @Scoped(seed: TestJobSeed.self, allowUnused: true)
     struct JobRunner {
         @Inject var testJobSeed: TestJobSeed
         @Inject var banner: Banner

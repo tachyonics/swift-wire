@@ -234,11 +234,27 @@ atomically per partition.
   (+ `BootstrapTests`); cross-container cases in `MultibindingValidationTests`.
 
 ### Step 6 — empty / dead diagnostics (5α inheritance)
+
+**5α prerequisite ✅ Done** (it wasn't implemented — only the
+declaration-too-private error was — so it had to be finished first):
+- **3-i:** the general dead-binding warning logic (`DeadBindingDiagnostics.swift`)
+  — first-order liveness via `matchProducer` (optional promotion honoured),
+  visibility-gated (`internal`/`package` warn, `public`/`open` silent),
+  generic templates and multibinding contributors skipped.
+- **3-ii:** the `allowUnused:` silencer on `@Singleton`/`@Scoped`/`@Provides`
+  (defaulted param), captured in discovery, honoured by the check. Also
+  fixed `keyIdentifier(from:)` to read the positional arg (a labelled
+  `allowUnused:` was being mistaken for a key).
+- **3-iii:** turned on — `deadBindingDiagnostics(across:)` runs per
+  *container* (scopes merged, so borrowed singletons stay live) and is
+  wired into WireGen's diagnostics. The 25 integration-fixture roots
+  (accessed via `graph.<name>`) are annotated `allowUnused: true`.
+
+**Multibinding-specific (remaining):**
 - Empty multibinding (consumer exists, zero contributors) → visibility-
-  driven warn, silenceable via 5α's silencer. Dead key (no consumer) via
-  the existing dead-binding path. Public stays silent.
-- **Test:** `DiagnosticGalleryTests` — `internal` empty key warns,
-  `public` stays silent.
+  driven warn, silenceable. Dead key (no consumer) → the aggregate is a
+  dead binding. Public stays silent.
+- **Test:** `internal` empty key warns, `public` stays silent.
 
 ### Step 7 — validation gate
 - The `M1_PLAN.md` test app: 3 `CollectedKey<any Service>` contributors

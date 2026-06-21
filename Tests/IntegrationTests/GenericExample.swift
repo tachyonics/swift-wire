@@ -11,7 +11,9 @@ struct DataPoint: Sendable {
     let value: Int
 }
 
-@Provides
+// Consumed via Container<DataPoint> specialisation, which the
+// first-order dead-binding analysis doesn't track.
+@Provides(allowUnused: true)
 let dataPoint: DataPoint = DataPoint(value: 42)
 
 @Singleton
@@ -23,7 +25,7 @@ struct Container<T: Sendable>: Sendable {
     }
 }
 
-@Singleton
+@Singleton(allowUnused: true)
 struct GenericConsumer {
     @Inject var container: Container<DataPoint>
 

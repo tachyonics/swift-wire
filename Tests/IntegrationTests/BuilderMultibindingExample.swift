@@ -68,7 +68,7 @@ struct AuthMiddleware: Middleware {
     let step = "auth"
 }
 
-@Singleton
+@Singleton(allowUnused: true)
 struct MiddlewareHost {
     @Inject(MiddlewareRegistry.pipeline) var pipeline: Pipeline
     @Inject(MiddlewareRegistry.list) var list: [any Middleware]

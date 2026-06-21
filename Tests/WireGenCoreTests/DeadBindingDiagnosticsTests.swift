@@ -148,6 +148,35 @@ struct DeadBindingDiagnosticsTests {
         #expect(warning.message.contains("'Database' (key Database.primary)"))
     }
 
+    // MARK: - Per-container grouping (across:)
+
+    @Test func singletonConsumedOnlyByScopeIsLive() {
+        // Logger lives in the default singleton partition; only a default
+        // seed-scope binding consumes it (a borrow). Per-container merge
+        // keeps it live — only the scope root warns.
+        let partitions: [Partition: [DiscoveredBinding]] = [
+            Partition(container: nil, scope: nil): [singleton("Logger")],
+            Partition(container: nil, scope: ScopeKey(seed: "Req")): [
+                singleton("RequestLogger", deps: [(type: "Logger", key: nil)])
+            ],
+        ]
+        let files = Set(deadBindingDiagnostics(across: partitions).map(\.location.file))
+        #expect(files == ["RequestLogger.swift"])
+    }
+
+    @Test func crossContainerConsumptionDoesNotKeepBindingLive() {
+        // bannerA lives in container A but is "consumed" only in container
+        // B. Containers are atomic, so A's bannerA is genuinely dead.
+        let partitions: [Partition: [DiscoveredBinding]] = [
+            Partition(container: "A", scope: nil): [provider("bannerA", boundType: "Banner")],
+            Partition(container: "B", scope: nil): [
+                singleton("ConsumerB", deps: [(type: "Banner", key: nil)])
+            ],
+        ]
+        let files = Set(deadBindingDiagnostics(across: partitions).map(\.location.file))
+        #expect(files == ["bannerA.swift", "ConsumerB.swift"])
+    }
+
     // MARK: - Multibinding contributors (conservative skip for now)
 
     @Test func contributorIsLiveViaItsAggregate() {
