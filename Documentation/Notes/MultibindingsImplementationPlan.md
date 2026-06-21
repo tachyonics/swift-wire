@@ -265,12 +265,27 @@ declaration-too-private error was — so it had to be finished first):
   silent, public silent, `allowUnused` silent, two-container pattern
   silent) + `EmptyMultibindingExample` bootstrapping to `[]`.
 
-### Step 7 — validation gate
-- The `M1_PLAN.md` test app: 3 `CollectedKey<any Service>` contributors
-  (ordered + unordered), 2 `MappedKey<String, Strategy>` (incl. the
-  duplicate-`atKey:` error case), 2 `BuilderKey<MiddlewareBuilder>` with
-  real result-builder constraints + `withOrder:` sequencing, plus the
-  empty-multibinding visibility fixture.
+### Step 7 — validation gate ✅ **Done**
+The `M1_PLAN.md` gate, met by the integration fixtures collectively rather
+than one monolith (the incremental per-step fixtures already prove most of
+it end-to-end):
+- **Collected** `CollectedKey<any Service>`, 3 contributors, ordered +
+  unordered — `ServiceMultibindingExample`: Alpha/Bravo/Charlie fan into a
+  `ranked` key (`withOrder: 3/1/2` → `[bravo, charlie, alpha]`, a real
+  3-way sort) and a `sourceOrdered` key (no `withOrder:` → source order),
+  via repeated `@Contributes` (one set, two orderings). Asserted in
+  `BootstrapTests`.
+- **Mapped** `MappedKey<String, any Strategy>`, 2 contributors —
+  `MultibindingExample` (`StrategyRegistry`); the duplicate-`atKey:`
+  **compile-error** case is `MultibindingValidationTests.duplicateMapKeyIsError`
+  (a fixture that errors can't also bootstrap).
+- **Builder** `BuilderKey<…>`, 2 contributors + `withOrder:` —
+  `BuilderMultibindingExample` (over-covers: concrete / collection /
+  existential result shapes).
+- **Empty visibility policy** (internal warns, public silent, silenceable)
+  — `MultibindingValidationTests` (`emptyMultibindingWarns`,
+  `publicEmptyKeyIsSilent`, `allowUnusedKeyIsSilent`) + `EmptyMultibinding-
+  Example` bootstrapping to `[]`.
 - **Ships:** iteration 5β gate met.
 
 ## Open unknowns (resolve as the relevant step lands)
