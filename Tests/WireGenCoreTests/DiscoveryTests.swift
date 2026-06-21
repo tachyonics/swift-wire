@@ -28,6 +28,21 @@ struct DiscoveryTests {
         }
     }
 
+    /// Extract the `@Provides` bindings in a specific partition — scoped
+    /// providers route out of the default `.bindings` slice into their
+    /// `(container, seed)` cell.
+    private func discoverProviders(
+        in source: String,
+        sourcePath: String,
+        partition: Partition
+    ) -> [DiscoveredProvider] {
+        (discover(in: source, sourcePath: sourcePath).allBindings[partition] ?? [])
+            .compactMap { binding in
+                if case .provider(let provider) = binding { return provider }
+                return nil
+            }
+    }
+
     @Test func emptySourceFindsNoSingletons() {
         let result = discoverSingletons(in: "", sourcePath: "Empty.swift")
         #expect(result.isEmpty)
@@ -341,6 +356,74 @@ struct DiscoveryTests {
         #expect(result.count == 1)
         #expect(result[0].isAsync == false)
         #expect(result[0].isThrowing == false)
+    }
+
+    // MARK: - Scoped `@Provides` (Axis A)
+
+    @Test func plainProvidesHasNoScopeKey() {
+        let source = """
+            @Provides func makeFoo() -> Foo { Foo() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Source.swift")
+        #expect(result.count == 1)
+        #expect(result[0].scopeKey == nil)
+    }
+
+    @Test func scopedProvidesFunctionCapturesSeedScope() {
+        let source = """
+            @Provides @Scoped(seed: RequestSeed.self)
+            func makeFoo() -> Foo { Foo() }
+            """
+        let result = discoverProviders(
+            in: source,
+            sourcePath: "Source.swift",
+            partition: Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
+        )
+        #expect(result.count == 1)
+        #expect(result.first?.scopeKey == ScopeKey(seed: "RequestSeed"))
+    }
+
+    @Test func scopedProvidesPropertyCapturesSeedScope() {
+        let source = """
+            @Provides @Scoped(seed: RequestSeed.self)
+            let foo: Foo = Foo()
+            """
+        let result = discoverProviders(
+            in: source,
+            sourcePath: "Source.swift",
+            partition: Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
+        )
+        #expect(result.count == 1)
+        #expect(result.first?.scopeKey == ScopeKey(seed: "RequestSeed"))
+    }
+
+    @Test func scopedProvidesLandsInSeedPartitionNotDefault() {
+        // The scope axis routes the provider out of the default graph
+        // into the `(nil, RequestSeed)` partition — the same cell a
+        // `@Scoped(seed:)` *type* would occupy.
+        let source = """
+            @Provides @Scoped(seed: RequestSeed.self)
+            func makeFoo() -> Foo { Foo() }
+            """
+        let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
+        let seedPartition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
+        #expect(partitions[seedPartition]?.count == 1)
+        #expect(partitions[Partition(container: nil, scope: nil)] == nil)
+    }
+
+    @Test func scopedProvidesInContainerLandsInContainerSeedPartition() {
+        // Both axes engage: the `@Container` sets the container axis, the
+        // `@Scoped(seed:)` sets the scope axis.
+        let source = """
+            @Container
+            enum App {
+                @Provides @Scoped(seed: RequestSeed.self)
+                static func makeFoo() -> Foo { Foo() }
+            }
+            """
+        let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
+        let cell = Partition(container: "App", scope: ScopeKey(seed: "RequestSeed"))
+        #expect(partitions[cell]?.count == 1)
     }
 
     // MARK: - Member injection: `@Inject weak var` sugar + `@Inject func`

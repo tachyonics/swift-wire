@@ -529,7 +529,8 @@ private func specialiseBinding(
                 keyIdentifier: provider.keyIdentifier,
                 concreteGenericArguments: provider.form == .function
                     ? concreteArguments
-                    : []
+                    : [],
+                scopeKey: provider.scopeKey
             )
         )
     case .aggregate:

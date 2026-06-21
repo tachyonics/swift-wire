@@ -125,10 +125,12 @@ final class BindingDiscovery: SyntaxVisitor {
     /// the scope axis comes from the binding's own scope identity
     /// (non-nil for `@Scoped(seed:)`).
     private func record(_ binding: DiscoveredBinding) {
-        let scopeKey: ScopeKey? = {
-            if case .scopeBound(let scopeBound) = binding { return scopeBound.scopeKey }
-            return nil
-        }()
+        let scopeKey: ScopeKey? =
+            switch binding {
+            case .scopeBound(let scopeBound): scopeBound.scopeKey
+            case .provider(let provider): provider.scopeKey
+            case .aggregate: nil
+            }
         let partition = Partition(
             container: scopes.last?.containerName,
             scope: scopeKey
@@ -606,6 +608,7 @@ extension BindingDiscovery {
         let accessPath = (scopes.map(\.typeName) + [propertyName]).joined(separator: ".")
         let providesAttribute = attribute(in: node.attributes, named: "Provides")
         let key = providesAttribute.flatMap { keyIdentifier(from: $0) }
+        let scopeKey = providerScopeKey(in: node.attributes)
         let providerLocation = location(of: pattern.identifier)
         // Computed properties (`@Provides var x: T { get async throws { … } }`)
         // can carry effect specifiers on the `get` accessor. Stored
@@ -635,6 +638,7 @@ extension BindingDiscovery {
                     isAsync: propertyEffects.isAsync,
                     isThrowing: propertyEffects.isThrowing,
                     accessLevel: providerAccess,
+                    scopeKey: scopeKey,
                     contributions: contributions(
                         in: node.attributes,
                         sourcePath: sourcePath,
@@ -681,6 +685,7 @@ extension BindingDiscovery {
             node.genericParameterClause?.parameters.map { $0.name.text } ?? []
         let providesAttribute = attribute(in: node.attributes, named: "Provides")
         let key = providesAttribute.flatMap { keyIdentifier(from: $0) }
+        let scopeKey = providerScopeKey(in: node.attributes)
         let providerLocation = location(of: node.name)
         unannotatedExtensionProvides.append(
             contentsOf: unannotatedExtensionProvidesCandidates(
@@ -713,6 +718,7 @@ extension BindingDiscovery {
                     isAsync: effects.isAsync,
                     isThrowing: effects.isThrowing,
                     accessLevel: providerAccess,
+                    scopeKey: scopeKey,
                     contributions: contributions(
                         in: node.attributes,
                         sourcePath: sourcePath,
@@ -722,6 +728,15 @@ extension BindingDiscovery {
                 )
             )
         )
+    }
+
+    /// Scope identity for a `@Provides` declaration stacked with
+    /// `@Scoped(seed:)` — `nil` when there's no `@Scoped` or its seed
+    /// can't be read. Shared by the property and function paths.
+    fileprivate func providerScopeKey(in attributes: AttributeListSyntax) -> ScopeKey? {
+        attribute(in: attributes, named: "Scoped")
+            .flatMap { seedTypeExpression(from: $0) }
+            .map { ScopeKey(seed: $0) }
     }
 }
 
