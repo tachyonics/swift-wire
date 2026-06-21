@@ -384,6 +384,22 @@ struct BootstrapTests {
         #expect(graph.pluginHost.plugins.map { $0.label() } == ["logging", "metrics"])
     }
 
+    @Test func collectedMultibindingRankSortsThreeContributors() async throws {
+        // Alpha/Bravo/Charlie declared in source order contribute to
+        // ServiceGate.ranked with withOrder 3/1/2 — a 3-way sort, not a
+        // pair swap, so the aggregate is [bravo, charlie, alpha].
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.serviceGateHost.ranked.map { $0.name() } == ["bravo", "charlie", "alpha"])
+    }
+
+    @Test func collectedMultibindingPreservesSourceOrderWhenUnranked() async throws {
+        // The same three contributors fan into ServiceGate.sourceOrdered
+        // with no withOrder: anywhere, so the aggregate falls back to
+        // source-declaration order.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.serviceGateHost.sourceOrdered.map { $0.name() } == ["alpha", "bravo", "charlie"])
+    }
+
     @Test func mappedMultibindingKeysContributorsByAtKey() async throws {
         let graph = try await _WireGraph.bootstrap()
         let strategies = graph.strategyHost.strategies
