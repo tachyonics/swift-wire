@@ -17,18 +17,23 @@ import SwiftSyntaxMacros
 ///
 /// Validation parity with `@Singleton`: see that macro's doc comment.
 ///
-/// Two roles: as a `MemberMacro` on a type it synthesises `init`/`key`
-/// (delegating to `@Singleton`); as a `PeerMacro` on a `@Provides`
-/// var/func it emits nothing — the role exists only to make
-/// `@Provides @Scoped(seed:)` legal, with scope identity read from the
-/// attribute by the build plugin.
-public struct ScopedMacro: MemberMacro, PeerMacro {
+/// On a struct/class/actor it synthesises `init`/`key` (delegating to
+/// `@Singleton`). On a namespace `enum` it synthesises nothing — there
+/// `@Scoped(seed:)` is a scope-block marker the build plugin reads to
+/// route the block's `@Provides` into the seed scope (the scope-axis
+/// sibling of `@Container`). Any other declaration kind is unsupported.
+public struct ScopedMacro: MemberMacro {
     public static func expansion(
         of node: AttributeSyntax,
         providingMembersOf declaration: some DeclGroupSyntax,
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
+        // Scope-block form: `@Scoped(seed:)` on a namespace enum is an
+        // inert marker (like `@Container`); the plugin does the routing.
+        if declaration.is(EnumDeclSyntax.self) {
+            return []
+        }
         do {
             return try SingletonMacro.expansion(
                 of: node,
@@ -40,14 +45,6 @@ public struct ScopedMacro: MemberMacro, PeerMacro {
             throw ScopedMacroError.unsupportedDeclaration
         }
     }
-
-    public static func expansion(
-        of node: AttributeSyntax,
-        providingPeersOf declaration: some DeclSyntaxProtocol,
-        in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] {
-        []
-    }
 }
 
 enum ScopedMacroError: Error, CustomStringConvertible {
@@ -56,7 +53,7 @@ enum ScopedMacroError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .unsupportedDeclaration:
-            return "@Scoped can only be applied to a struct, class, or actor."
+            return "@Scoped can only be applied to a struct, class, or actor, or a namespace enum (as a scope block)."
         }
     }
 }

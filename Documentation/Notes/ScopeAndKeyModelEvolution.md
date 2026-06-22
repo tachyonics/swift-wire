@@ -43,20 +43,77 @@ art agrees that self-producing bindings are unkeyed: Dagger's
 explicit producers (`@Provides`/`@Binds`/`bind()`) can. So
 `@Singleton`/`@Scoped` unkeyed, `@Provides` keyed, is conventional.
 
-## Axis A — scopable `@Provides` (the cheap, obvious one)
+## Axis A — scoping `@Provides` via a scope block
 
 Wire can scope a *type* (`@Scoped`) but not a `@Provides`. Dagger keeps
 scope orthogonal — `@Provides @RequestScope @Named("x")` (scoped + keyed)
 is expressible; Wire can't express a scoped keyed binding at all.
 
-Extending `@Provides` to be scopable is **additive and rides the current
-seed model**: a `@Provides @Scoped(seed: X.self)` lands in the `X`-scope
-partition the way a `@Scoped` type does. The graph already keys partitions
-by `ScopeKey` and `orchestrateSeedScope` builds per-`(container, seed)`
-graphs, so the only new work is a peer-macro form of `@Scoped` (it's
-`@attached(member)` today, types only) and the plugin reading the seed off
-the `@Provides`. Note this is about scoped *producers*, orthogonal to
-scope *inputs* below.
+### The standard triangle, and Wire's missing corner
+
+DI scoping separates three things that Wire fuses into two annotations:
+
+- **Self-production** — "construct this from its `@Inject` members"
+  (Dagger: `@Inject constructor`).
+- **Scope membership** — which scope a binding lives in (Dagger: the
+  `@Scope` annotation, e.g. `@Singleton` / `@RequestScoped`).
+- **Scope definition** — declaring that a scope *exists*, with an extent
+  (Dagger: `@Component` / `@Subcomponent`).
+
+Wire fuses self-production + membership into `@Singleton` / `@Scoped(seed:)`
+and had **no** source-level scope-*definition* surface. `@Container` is the
+definition surface for the *container* axis; nothing existed for the
+*scope* axis.
+
+### The model: `@Scoped(seed:)` on a namespace enum
+
+A **scope block** is the scope-axis sibling of `@Container`:
+`@Scoped(seed: X.self)` on a caseless namespace enum routes the
+`@Provides` declarations inside it into the `X`-seed scope, without
+repeating the seed on each producer.
+
+```swift
+@Scoped(seed: RequestSeed.self)
+enum RequestProviders {
+    @Provides static func makeContext(seed: RequestSeed) -> Context { ... }
+    @Provides static let tag: Tag = Tag()
+}
+```
+
+Same spelling as the type form, because conceptually it's the same act
+(declaring a seed scope); on a type it scopes the instance, on a namespace
+enum it defines the scope for the block. It maps 1:1 onto the existing
+`Partition(container, scope)`: discovery tracks an enclosing `seedScope`
+on the visitor frame (mirroring `containerName`), `record()` reads it for
+providers, and `orchestrateSeedScope` consumes the partition unchanged.
+Composes with `@Container` for `(container, seed)` cells for free.
+
+### Why a block, not per-producer `@Provides @Scoped`
+
+The originally-sketched `@Provides @Scoped(seed:)` (scope stacked on each
+producer) is **mechanically infeasible**: a macro's `@attached` roles all
+apply to the target, so a single `@Scoped` can't be a `member` macro on
+types *and* a `peer` macro on producers — `@attached(member)` on a
+func/var is a hard compiler error. The block sidesteps this (the marker
+only ever sits on an enum, which bears members) *and* is less verbose
+*and* is the proper scope-definition surface. So it's the model, not a
+workaround.
+
+### Resolved sub-decisions
+
+- **Self-producers stay standalone.** Scopes are global identities (like
+  keys), so a `@Scoped(seed: X)` type already declares its scope from
+  anywhere — it never needed the block. The block exists only because
+  `@Provides` had no way to name a scope.
+- **`@Singleton` in a scope block is an error** — process lifetime can't
+  live in a seed scope; left unflagged it would silently stay
+  process-scoped.
+- **Deferred:** bare `@Scoped` (no `seed:`) *inside* a block, meaning
+  "self-produce, inherit the block's seed" — the ergonomic answer to
+  "self-produce with scope = enclosing." Explicit `@Scoped(seed:)` already
+  covers self-producers with only minor redundancy, so this waits until it
+  bites. The fuller self-production/scope separation (a scope-neutral
+  self-production marker) is the longer-range version of the same idea.
 
 **Decision: do Axis A right after iteration 5**, with the scope/lifecycle
 work. No dependency on anything else here.
