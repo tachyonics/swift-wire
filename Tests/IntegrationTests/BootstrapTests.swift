@@ -329,6 +329,19 @@ struct BootstrapTests {
         #expect(scope.requestHandler.handle("create") == "[log] [req-2] handling create")
     }
 
+    @Test func scopeBlockProvidesResolveWithinSeedScope() async throws {
+        // Axis A: a `@Scoped(seed: OrderSeed.self) enum` block of
+        // `@Provides` — a function reading the seed and borrowing the
+        // `Logger` singleton, and a property constant — both resolve
+        // inside the scope and feed the scope-bound `OrderProcessor`.
+        let graph = try await _WireGraph.bootstrap()
+        let scope = try await _OrderSeedWireScope.bootstrap(
+            seed: OrderSeed(orderID: "A-1"),
+            wireGraph: graph
+        )
+        #expect(scope.orderProcessor.summary() == "[log] order:A-1 | audit | A-1")
+    }
+
     @Test func containerScopeBootstrapBorrowsFromContainerWireGraph() async throws {
         // `TestContainer.JobRunner` is `@Scoped(seed: TestJobSeed.self)`
         // and lives inside `@Container TestContainer`. The generated

@@ -45,6 +45,12 @@ explicit producers (`@Provides`/`@Binds`/`bind()`) can. So
 
 ## Axis A — scoping `@Provides` via a scope block
 
+> **Status: implemented.** `@Scoped(seed:)` on a namespace enum is a scope
+> block; its `@Provides` route into the seed scope, consumed end-to-end by
+> `ScopedProvidesExample`. Discovery-only — no graph or codegen change.
+> `@Singleton` inside a block is a diagnosed error. The deferred items
+> below (bare `@Scoped`, the self-production/scope separation) remain open.
+
 Wire can scope a *type* (`@Scoped`) but not a `@Provides`. Dagger keeps
 scope orthogonal — `@Provides @RequestScope @Named("x")` (scoped + keyed)
 is expressible; Wire can't express a scoped keyed binding at all.
