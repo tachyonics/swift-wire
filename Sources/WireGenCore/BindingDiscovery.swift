@@ -411,11 +411,11 @@ final class BindingDiscovery: SyntaxVisitor {
         return .skipChildren
     }
 
-    /// Markers on a var/func that mean nothing without a co-located
-    /// `@Provides` producer: `@Contributes` (the contribution would be
-    /// dropped) and `@Scoped` (the scope would be ignored). Both return
-    /// empty unless their marker is present, so this is safe to run on
-    /// every declaration.
+    /// `@Contributes` on a var/func with no co-located `@Provides`
+    /// producer — the contribution would be silently dropped. Returns
+    /// empty unless `@Contributes` is present, so it's safe on every
+    /// declaration. (`@Scoped` on a var/func is now a compiler error —
+    /// the macro is member-only — so it needs no plugin check.)
     private func producerlessMarkerDiagnostics(in attributes: AttributeListSyntax) -> [Diagnostic] {
         strayContributesDiagnostics(
             in: attributes,
@@ -423,11 +423,6 @@ final class BindingDiscovery: SyntaxVisitor {
             sourcePath: sourcePath,
             converter: converter
         )
-            + strayScopedProviderDiagnostics(
-                in: attributes,
-                sourcePath: sourcePath,
-                converter: converter
-            )
     }
 
     // MARK: Typealiases — only module-scope captured.
@@ -547,6 +542,14 @@ extension BindingDiscovery {
         } else {
             return
         }
+        warnings.append(
+            contentsOf: singletonInScopeBlockDiagnostics(
+                typeName: nameToken.text,
+                ownScope: scopeKey,
+                blockSeed: scopes.last?.seedScope,
+                location: location(of: nameToken)
+            )
+        )
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
         let injectResult = extractInjectDependencies(
             from: members,
@@ -808,34 +811,6 @@ private func inferTypeFromConstructorCall(_ expr: ExprSyntax?) -> String? {
     let text = called.trimmedDescription
     guard let first = text.first, first.isUppercase else { return nil }
     return text
-}
-
-/// `@Container` plus a scope macro on the same type is almost always a
-/// user error: `@Container` routes the type's static members into a
-/// separate graph, while a scope macro makes the type a binding in the
-/// *default* graph — the two roles can't both happen on one type, and
-/// neither does what the user probably wants. Warn with a fix-it
-/// pointing at the split.
-private func containerWithScopeDiagnostics(
-    nameToken: TokenSyntax,
-    attributes: AttributeListSyntax,
-    sourcePath: String,
-    converter: SourceLocationConverter
-) -> [Diagnostic] {
-    guard hasAttribute(attributes, named: "Container") else { return [] }
-    guard let scope = scopeMacroNames.first(where: { hasAttribute(attributes, named: $0) })
-    else { return [] }
-    return [
-        Diagnostic(
-            location: makeSourceLocation(
-                of: nameToken,
-                sourcePath: sourcePath,
-                converter: converter
-            ),
-            message:
-                "'\(nameToken.text)' carries both @Container and @\(scope) — the two roles end up in separate graphs. Split into two declarations: a @\(scope) type for the binding, and a separate @Container type for the grouping."
-        )
-    ]
 }
 
 /// Build a candidate when the `@Provides` was found inside an
