@@ -426,6 +426,57 @@ struct DiscoveryTests {
         #expect(partitions[cell]?.count == 1)
     }
 
+    // MARK: - Bare `@Scoped` on a producer-less var/func (Axis A)
+
+    @Test func bareScopedFunctionWithoutProvidesIsError() {
+        // `@Scoped` without `@Provides` is inert on a function — the value
+        // never enters the graph, so flag it rather than silently drop it.
+        let source = """
+            @Scoped(seed: RequestSeed.self)
+            func makeFoo() -> Foo { Foo() }
+            """
+        let result = discover(in: source, sourcePath: "Source.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Scoped on a property or function requires") == true)
+        #expect(errors.first?.message.contains("@Provides") == true)
+    }
+
+    @Test func bareScopedPropertyWithoutProvidesIsError() {
+        let source = """
+            @Scoped(seed: RequestSeed.self)
+            let foo: Foo = Foo()
+            """
+        let result = discover(in: source, sourcePath: "Source.swift")
+        let errors = result.warnings.filter { $0.severity == .error }
+        #expect(errors.count == 1)
+        #expect(errors.first?.message.contains("@Scoped on a property or function requires") == true)
+    }
+
+    @Test func providesScopedFunctionHasNoStrayDiagnostic() {
+        // With `@Provides` co-located, `@Scoped` is the legitimate Axis A
+        // form — no stray diagnostic.
+        let source = """
+            @Provides @Scoped(seed: RequestSeed.self)
+            func makeFoo() -> Foo { Foo() }
+            """
+        let result = discover(in: source, sourcePath: "Source.swift")
+        #expect(result.warnings.contains { $0.message.contains("@Scoped on a property") } == false)
+    }
+
+    @Test func scopedTypeHasNoStrayProviderDiagnostic() {
+        // The type form routes through the type visits, not the var/func
+        // ones, so the producer-less check never fires on it.
+        let source = """
+            @Scoped(seed: RequestSeed.self)
+            struct Session {
+                @Inject var client: Client
+            }
+            """
+        let result = discover(in: source, sourcePath: "Source.swift")
+        #expect(result.warnings.contains { $0.message.contains("@Scoped on a property") } == false)
+    }
+
     // MARK: - Member injection: `@Inject weak var` sugar + `@Inject func`
 
     @Test func weakInjectVarBecomesPropertyAssignmentMemberInjection() {

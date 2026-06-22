@@ -387,14 +387,7 @@ final class BindingDiscovery: SyntaxVisitor {
                 )
             )
         }
-        warnings.append(
-            contentsOf: strayContributesDiagnostics(
-                in: node.attributes,
-                producerMacros: ["Provides"],
-                sourcePath: sourcePath,
-                converter: converter
-            )
-        )
+        warnings.append(contentsOf: producerlessMarkerDiagnostics(in: node.attributes))
         return .skipChildren
     }
 
@@ -404,15 +397,27 @@ final class BindingDiscovery: SyntaxVisitor {
         {
             extractProvidesFunction(node)
         }
-        warnings.append(
-            contentsOf: strayContributesDiagnostics(
-                in: node.attributes,
-                producerMacros: ["Provides"],
+        warnings.append(contentsOf: producerlessMarkerDiagnostics(in: node.attributes))
+        return .skipChildren
+    }
+
+    /// Markers on a var/func that mean nothing without a co-located
+    /// `@Provides` producer: `@Contributes` (the contribution would be
+    /// dropped) and `@Scoped` (the scope would be ignored). Both return
+    /// empty unless their marker is present, so this is safe to run on
+    /// every declaration.
+    private func producerlessMarkerDiagnostics(in attributes: AttributeListSyntax) -> [Diagnostic] {
+        strayContributesDiagnostics(
+            in: attributes,
+            producerMacros: ["Provides"],
+            sourcePath: sourcePath,
+            converter: converter
+        )
+            + strayScopedProviderDiagnostics(
+                in: attributes,
                 sourcePath: sourcePath,
                 converter: converter
             )
-        )
-        return .skipChildren
     }
 
     // MARK: Typealiases — only module-scope captured.
