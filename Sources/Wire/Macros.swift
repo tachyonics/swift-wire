@@ -35,16 +35,23 @@ public macro Singleton(allowUnused: Bool = false) =
 /// `@Singleton` is the special case for process-lifetime values that
 /// have no seed.
 ///
-/// Also stackable on a `@Provides` declaration to scope an explicit
-/// producer — `@Provides @Scoped(seed: X.self) static func makeFoo(...)`
-/// routes the produced binding into the `X`-seed scope the same way a
-/// `@Scoped` *type* is routed. On a producer the macro emits nothing
-/// (the `@Provides` marker already carries the value); it's a marker the
-/// build plugin reads for scope identity. The `member` role still drives
-/// type-level use; the `peer` role makes it legal — and inert — on a
-/// var/func.
+/// **Scope block (on a namespace `enum`).** Applied to a caseless enum,
+/// `@Scoped(seed: X.self)` *defines* the scope for the `@Provides`
+/// declarations inside it — the scope-axis sibling of `@Container`. Every
+/// `@Provides` in the block is routed into the `X`-seed scope without
+/// repeating the seed on each one:
+///
+///     @Scoped(seed: RequestSeed.self)
+///     enum RequestProviders {
+///         @Provides static func makeContext(seed: RequestSeed) -> Context { ... }
+///         @Provides static let tag: Tag = Tag()
+///     }
+///
+/// On an enum the macro synthesises nothing (it's a marker the build
+/// plugin reads); on a struct/class/actor it synthesises `init`/`key` as
+/// above. `@Singleton` self-producers can't live in a scope block (their
+/// lifetime is the process, not the scope) — the plugin diagnoses that.
 @attached(member, names: named(init), named(key))
-@attached(peer)
 public macro Scoped<Seed>(seed: Seed.Type, allowUnused: Bool = false) =
     #externalMacro(module: "WireMacrosImpl", type: "ScopedMacro")
 
