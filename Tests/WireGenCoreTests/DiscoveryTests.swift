@@ -358,9 +358,10 @@ struct DiscoveryTests {
         #expect(result[0].isThrowing == false)
     }
 
-    // MARK: - Scoped `@Provides` (Axis A)
+    // MARK: - Scope blocks: `@Scoped(seed:)` enum (Axis A)
 
     @Test func plainProvidesHasNoScopeKey() {
+        // A `@Provides` outside any scope block stays in the default graph.
         let source = """
             @Provides func makeFoo() -> Foo { Foo() }
             """
@@ -369,41 +370,33 @@ struct DiscoveryTests {
         #expect(result[0].scopeKey == nil)
     }
 
-    @Test func scopedProvidesFunctionCapturesSeedScope() {
+    @Test func providesInScopeBlockInheritsTheBlockSeed() {
+        // Both the function and property forms inherit the enclosing
+        // `@Scoped(seed:)` enum's seed — no per-producer annotation.
         let source = """
-            @Provides @Scoped(seed: RequestSeed.self)
-            func makeFoo() -> Foo { Foo() }
+            @Scoped(seed: RequestSeed.self)
+            enum RequestProviders {
+                @Provides static func makeFoo() -> Foo { Foo() }
+                @Provides static let bar: Bar = Bar()
+            }
             """
         let result = discoverProviders(
             in: source,
             sourcePath: "Source.swift",
             partition: Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
         )
-        #expect(result.count == 1)
-        #expect(result.first?.scopeKey == ScopeKey(seed: "RequestSeed"))
+        #expect(result.count == 2)
+        #expect(result.allSatisfy { $0.scopeKey == ScopeKey(seed: "RequestSeed") })
     }
 
-    @Test func scopedProvidesPropertyCapturesSeedScope() {
+    @Test func scopeBlockRoutesProvidersOutOfDefaultGraph() {
+        // The block's producers land in `(nil, RequestSeed)`, the same
+        // cell a `@Scoped(seed:)` *type* would occupy — not the default.
         let source = """
-            @Provides @Scoped(seed: RequestSeed.self)
-            let foo: Foo = Foo()
-            """
-        let result = discoverProviders(
-            in: source,
-            sourcePath: "Source.swift",
-            partition: Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
-        )
-        #expect(result.count == 1)
-        #expect(result.first?.scopeKey == ScopeKey(seed: "RequestSeed"))
-    }
-
-    @Test func scopedProvidesLandsInSeedPartitionNotDefault() {
-        // The scope axis routes the provider out of the default graph
-        // into the `(nil, RequestSeed)` partition — the same cell a
-        // `@Scoped(seed:)` *type* would occupy.
-        let source = """
-            @Provides @Scoped(seed: RequestSeed.self)
-            func makeFoo() -> Foo { Foo() }
+            @Scoped(seed: RequestSeed.self)
+            enum RequestProviders {
+                @Provides static func makeFoo() -> Foo { Foo() }
+            }
             """
         let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
         let seedPartition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
@@ -411,19 +404,39 @@ struct DiscoveryTests {
         #expect(partitions[Partition(container: nil, scope: nil)] == nil)
     }
 
-    @Test func scopedProvidesInContainerLandsInContainerSeedPartition() {
-        // Both axes engage: the `@Container` sets the container axis, the
-        // `@Scoped(seed:)` sets the scope axis.
+    @Test func scopeBlockInContainerLandsInContainerSeedPartition() {
+        // Both axes engage: the `@Container` enum sets the container axis,
+        // the nested `@Scoped(seed:)` enum sets the scope axis.
         let source = """
             @Container
             enum App {
-                @Provides @Scoped(seed: RequestSeed.self)
-                static func makeFoo() -> Foo { Foo() }
+                @Scoped(seed: RequestSeed.self)
+                enum Providers {
+                    @Provides static func makeFoo() -> Foo { Foo() }
+                }
             }
             """
         let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
         let cell = Partition(container: "App", scope: ScopeKey(seed: "RequestSeed"))
         #expect(partitions[cell]?.count == 1)
+    }
+
+    @Test func scopedTypeInsideBlockKeepsItsOwnSeed() {
+        // A self-producing `@Scoped(seed:)` type carries its own scope; it
+        // does not inherit a different enclosing block's seed.
+        let source = """
+            @Scoped(seed: OuterSeed.self)
+            enum Block {
+                @Scoped(seed: InnerSeed.self)
+                struct Worker {
+                    @Inject var dep: Dep
+                }
+            }
+            """
+        let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
+        let ownCell = Partition(container: nil, scope: ScopeKey(seed: "InnerSeed"))
+        #expect(partitions[ownCell]?.count == 1)
+        #expect(partitions[Partition(container: nil, scope: ScopeKey(seed: "OuterSeed"))] == nil)
     }
 
     // MARK: - Bare `@Scoped` on a producer-less var/func (Axis A)
