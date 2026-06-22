@@ -236,16 +236,21 @@ property constant, consumed by a scope-bound type; the generated per-seed
 scope bootstraps with the right values and ordering
 (`ScopedProvidesExample`).
 
-## Iteration 6 — `Lifecycle` and `Resource<T>` (types only)
+## Iteration 6 — `@Teardown` (annotation only, recorded but inert)
 
-The lifecycle types ship in M1 to lock the public API. Orchestration (when teardown actually fires) is M4.
+The teardown annotation ships in M1 to lock the public API. Orchestration (when teardown actually fires) is M4.
+
+**Design pivot from the original plan.** The plan originally specified a `Lifecycle` protocol and a `Resource<T>` wrapper the build plugin unwraps at the `@Provides` site. Both were dropped during this iteration: `Resource<T>` is a framework-recognised, silently-unwrapped wrapper — exactly the "magic type" Wire has refused elsewhere (`Lazy<T>` is just a type; dynamic `Any.Type` lookup is rejected; `Provider<T>` deferred) — and its stated rationale ("third-party types you can't add a conformance to") is a JVM constraint Swift doesn't have. A recognised `Lifecycle` conformance is milder magic but still magic (a runtime `as? Lifecycle` probe), can't distinguish two bindings of the same type with different teardown needs, and pushes a per-binding decision into the type system. Both are replaced by a single explicit annotation, `@Teardown`, declared at the binding's declaration site. See `README.md` ("Lifecycle and teardown") for the committed design; the producer-form ergonomics were validated in spike-5 (`../swift-wire-spikes/spike-5-teardown-closure-ergonomics`).
 
 **Scope:**
-- `Lifecycle` protocol
-- `Resource<T>` wrapper type (consumer-side `T` resolution; resolver unwraps from `Resource<T>` at the `@Provides` site)
-- Build plugin recognises `Lifecycle` conformance and `Resource<T>` wrappers but does *not* yet generate teardown calls
+- `@Teardown` macro (two inert peer-macro overloads), recognised by the build plugin but emitting no teardown calls yet:
+  - **Owned-type member form** — `@Teardown` (no argument) marking the teardown method on a `@Singleton`/`@Scoped` type. The method may be any name and `private`; effect specifiers (`async`/`throws`) are read off its declaration. Mechanically the marker-on-method pattern spike-2 already proved.
+  - **Producer form** — `@Teardown(<action>)` on a `@Provides func`/`@Provides var`, where `<action>` is an explicit-typed closure (`@Teardown({ (c: HTTPClient) in try await c.shutdown() })`) or a free/static function reference (`@Teardown(shutdownClient)`). The produced type stays honest (no wrapper, no unwrap); consumers inject it directly. Spike-5 confirmed: attributes take no trailing-closure sugar (parenthesise the closure), `$0`-inference doesn't reach across the attribute (explicit parameter type required), and sync actions coerce into the `async throws` contract.
+- Discovery records a `TeardownAction` on `DiscoveredScopeBoundType` (member form) and `DiscoveredProvider` (producer form). The build plugin extracts the action by source-parsing (spike-3's mechanism), not from an expanded peer.
+- Misuse diagnostics (iteration-appropriate; diagnostics are iterative): bare member-form `@Teardown` with no enclosing scope-bound binding; producer-form `@Teardown` on a non-`@Provides`; a member-form teardown method that is `static` or takes parameters; more than one `@Teardown` per binding.
+- No runtime types ship — only the annotation. Code emission is unchanged (no teardown calls).
 
-**Validation gate:** test app with a `Lifecycle`-conforming `@Singleton` and a `Resource<HTTPClient>`-style `@Provides`; bootstrap constructs them; consumers `@Inject` the unwrapped types; manual cleanup is the only way to teardown (M4 lands the orchestration).
+**Validation gate:** test app with a `@Singleton` carrying an `@Teardown` method *and* a `@Provides` returning a third-party-style type with an `@Teardown` closure; bootstrap constructs both; consumers `@Inject` the honest (un-wrapped) types; discovery records the teardown actions; the generated bootstrap contains no teardown calls. Manual cleanup is the only way to teardown (M4 lands the orchestration). Diagnostic-gallery cases cover the misuse shapes above.
 
 ## Iteration 7 — multi-module composition
 

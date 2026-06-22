@@ -1,7 +1,8 @@
 // Public-facing macro declarations.
 //
 // The currently shipping surface is `@Singleton`, `@Scoped`,
-// `@Inject`, `@Provides`, `@Container`, and `@Contributes`.
+// `@Inject`, `@Provides`, `@Container`, `@Contributes`, and
+// `@Teardown`.
 
 /// Declares a process-lifetime singleton. The macro generates:
 /// - A `static let key: BindingKey<Self>` for the auto-generated key.
@@ -213,3 +214,45 @@ public macro Contributes<Builder>(to: BuilderKey<Builder>) =
 @attached(peer)
 public macro Contributes<Builder>(to: BuilderKey<Builder>, withOrder: Int) =
     #externalMacro(module: "WireMacrosImpl", type: "ContributesMacro")
+
+/// Marks a binding's teardown action, so the scope's teardown phase can
+/// run it in reverse dependency order. Wire deliberately has no
+/// `Lifecycle` protocol or `Resource<T>` wrapper — teardown is declared
+/// explicitly here, per-binding, with nothing for the framework to
+/// discover by a conformance probe.
+///
+/// **Owned-type member form** — no argument; marks the teardown method
+/// on a `@Singleton`/`@Scoped` type. The method may be named anything
+/// and may be `private`; its effect specifiers (`async`/`throws`) are
+/// read off the declaration.
+///
+///     @Singleton
+///     struct DatabasePool {
+///         @Inject init(url: String) async throws { ... }
+///
+///         @Teardown
+///         func teardown() async throws { try await client.shutdown() }
+///     }
+///
+/// **Producer form** — on a `@Provides` declaration, carries the action
+/// for the value the producer returns. The produced type stays honest
+/// (no wrapper, no unwrap); consumers inject it directly. The action is
+/// an explicit-typed closure or a reference to a free/static function; a
+/// sync, non-throwing action coerces into the `async throws` contract.
+/// Note Swift attributes take no trailing-closure sugar, so the closure
+/// is parenthesised and its parameter is explicitly typed.
+///
+///     @Provides
+///     @Teardown({ (client: HTTPClient) in try await client.shutdown() })
+///     static func httpClient() -> HTTPClient { HTTPClient() }
+///
+/// `@Teardown` itself contributes no code — it's a marker the build
+/// plugin recognises during source scanning. In M1 the plugin records
+/// the action but emits no teardown calls; the reverse-dependency walk
+/// lands in M4.
+@attached(peer)
+public macro Teardown() = #externalMacro(module: "WireMacrosImpl", type: "TeardownMacro")
+
+@attached(peer)
+public macro Teardown<Value>(_ action: @Sendable (Value) async throws -> Void) =
+    #externalMacro(module: "WireMacrosImpl", type: "TeardownMacro")

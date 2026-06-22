@@ -26,6 +26,10 @@ struct InjectExtractionResult {
     /// form, `.methodCall` shape). Always collected regardless of
     /// which init-time path the type uses.
     var memberInjections: [MemberInjection] = []
+    /// Owned-type teardown action from a `@Teardown`-marked method on
+    /// this type (member form), or `nil` when none. Recorded in M1 but
+    /// inert. At most one per type; a second is a diagnostic.
+    var teardown: TeardownAction? = nil
     /// Source-pattern diagnostics raised while walking the type's
     /// members. Caller appends these to the file-level diagnostics
     /// list. Error-severity entries (e.g. `@Inject mutating func`
@@ -80,6 +84,20 @@ func extractInjectDependencies(
                 sourcePath: sourcePath,
                 converter: converter
             )
+            continue
+        }
+        if let funcDecl = member.decl.as(FunctionDeclSyntax.self),
+            let teardownAttribute = attribute(in: funcDecl.attributes, named: "Teardown")
+        {
+            let (action, diagnostics) = teardownMethodAction(
+                from: funcDecl,
+                attribute: teardownAttribute,
+                alreadyHasTeardown: result.teardown != nil,
+                sourcePath: sourcePath,
+                converter: converter
+            )
+            result.diagnostics.append(contentsOf: diagnostics)
+            if let action { result.teardown = action }
             continue
         }
         guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }

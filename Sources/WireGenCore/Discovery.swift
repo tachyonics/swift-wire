@@ -310,6 +310,11 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// `allowUnused: true` on the scope macro — silences the dead-binding
     /// warning for an intentionally-unconsumed binding (e.g. a graph root).
     package let allowUnused: Bool
+    /// The owned-type teardown action from a `@Teardown` method on this
+    /// type (member form), or `nil` when the type declares none. Recorded
+    /// in M1 but inert — code emission ignores it; M4 emits the call in
+    /// reverse dependency order. See `TeardownAction`.
+    package let teardown: TeardownAction?
 
     package var sourcePath: String { location.file }
 
@@ -326,7 +331,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         memberInjections: [MemberInjection] = [],
         accessLevel: AccessLevel = .internal,
         contributions: [Contribution] = [],
-        allowUnused: Bool = false
+        allowUnused: Bool = false,
+        teardown: TeardownAction? = nil
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -344,6 +350,37 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.accessLevel = accessLevel
         self.contributions = contributions
         self.allowUnused = allowUnused
+        self.teardown = teardown
+    }
+}
+
+/// A teardown action recorded from a `@Teardown` annotation. In M1 it is
+/// captured but inert — code emission ignores it; M4 emits the call in
+/// reverse dependency order at scope teardown. See the README's
+/// "Lifecycle and teardown" section and M1_PLAN iteration 6.
+package struct TeardownAction: Sendable, Equatable {
+    package enum Kind: Sendable, Equatable {
+        /// Owned-type member form — `@Teardown func teardown() async throws`
+        /// on a `@Singleton`/`@Scoped` type. The method is invoked on the
+        /// constructed instance; `isAsync`/`isThrowing` are read off the
+        /// method's effect specifiers so the (future) call site gets the
+        /// right `try`/`await` colour.
+        case member(methodName: String, isAsync: Bool, isThrowing: Bool)
+        /// Producer form — `@Teardown(<action>)` on a `@Provides`. The
+        /// action expression (a closure literal or a free/static function
+        /// reference), captured verbatim, is applied to the produced value.
+        /// Treated as `async throws` at the (future) call site: the macro's
+        /// parameter type pins the contract and sync actions coerce in.
+        case action(expression: String)
+    }
+    package let kind: Kind
+    /// The `@Teardown` declaration's source position — for misuse
+    /// diagnostics and (eventually) any teardown-ordering diagnostic.
+    package let location: SourceLocation
+
+    package init(kind: Kind, location: SourceLocation) {
+        self.kind = kind
+        self.location = location
     }
 }
 
@@ -504,6 +541,11 @@ package struct DiscoveredProvider: Sendable {
     /// `allowUnused: true` on `@Provides` — silences the dead-binding
     /// warning for an intentionally-unconsumed binding.
     package let allowUnused: Bool
+    /// The producer-form teardown action from a `@Teardown(<action>)`
+    /// attached to this `@Provides`, or `nil` when none. Recorded in M1
+    /// but inert — code emission ignores it; M4 applies it to the
+    /// produced value at scope teardown. See `TeardownAction`.
+    package let teardown: TeardownAction?
 
     package var sourcePath: String { location.file }
 
@@ -521,7 +563,8 @@ package struct DiscoveredProvider: Sendable {
         accessLevel: AccessLevel = .internal,
         scopeKey: ScopeKey? = nil,
         contributions: [Contribution] = [],
-        allowUnused: Bool = false
+        allowUnused: Bool = false,
+        teardown: TeardownAction? = nil
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -537,6 +580,7 @@ package struct DiscoveredProvider: Sendable {
         self.scopeKey = scopeKey
         self.contributions = contributions
         self.allowUnused = allowUnused
+        self.teardown = teardown
     }
 
     /// Whether the binding source is a property (read its value directly)
