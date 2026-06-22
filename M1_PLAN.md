@@ -179,13 +179,62 @@ All four key flavours plus the unified `@Contributes(to:)` annotation. Inherits 
 - `BuilderKey<B>` with return-type derivation from the builder's `buildBlock` / `buildFinalResult` signature; `withOrder:` on `@Contributes` for ordering the fold-function parameters (often type-relevant for order-sensitive builders like middleware chains). The parameterized-opaque case is deferred to when `OpaqueTypesSupport.md` lands; see the design note for the split.
 - Build plugin parameter validity checks (`withOrder:` valid on `CollectedKey` and `BuilderKey` contributions only, `atKey:` required on `MappedKey` contributions only, no mixing).
 - Empty-contributor warning piggy-backing on 5α's diagnostic infrastructure: non-public multibinding key with consumer but zero contributors → warn. Public keys stay silent. Silenceable via the same silencer mechanism 5α establishes.
-- Cross-container contribution rejected with a diagnostic (composition relaxation deferred).
+- Keys are global identities, not container-owned: any partition (default graph, container, or seed scope) may contribute to a declared key, and each partition builds its own aggregate. This enables the production/test-container pattern — a module-scope key with a `Prod` and a `Test` container each supplying their own contributors, selected at the entry point. A stray contributor (no consumer in its partition) becomes a dead binding (the visibility-gated warning), not a hard error. (An earlier cross-container *rejection* was tried and reverted — it wrongly treated keys as owned by their declaring container.)
 - `@Contributes(to: X)` referencing a key `X` that isn't a discovered key declaration → missing-key diagnostic. "Discovered" means *within the plugin's parse set* — one module today; under multi-module/package composition the key may live in any parsed package, gated by visibility (see `Documentation/Notes/MultiModuleComposition.md`). The check is "no such key in the parse set," which widens automatically as the parse set does.
 - `@Contributes` requires a co-located producer macro (`@Singleton`/`@Scoped`/`@Provides`) to give the contributor a lifetime; bare `@Contributes` → diagnostic. Argument-shape validity (`atKey:` required on `MappedKey`, `withOrder:` mapped-disallowed, key-type of `atKey:`) is carried by the `@Contributes` overload set at the type level; the plugin only enforces the cross-contributor rules overloads can't see (no-mixing `withOrder:`, duplicate `atKey:`).
 
 **Implementation plan:** the sequenced build order (de-risk spikes → surface → discovery → graph → codegen → diagnostics → gate, each a shippable commit) lives in `Documentation/Notes/MultibindingsImplementationPlan.md`.
 
 **Validation gate:** test app with three contributors to a `CollectedKey<any Service>` (with `withOrder:` covering ordered + unordered cases), two contributors to a `MappedKey<String, Strategy>` (including the duplicate-key compile error case), two to a `BuilderKey<MiddlewareBuilder>` exercising real result-builder constraints and `withOrder:`-driven contributor sequencing. Each consumer gets the right shape with the right ordering and the right type. Plus an empty-multibinding fixture demonstrating the visibility-driven warning policy (`internal` empty key warns; `public` empty key stays silent).
+
+## Scopable `@Provides` — scope blocks (post-iteration-5 addition)
+
+> Added after iteration 5, slotted here with the scope/lifecycle work (it
+> extends iteration 4's seed scopes). Kept outside the 6–9 numbering to
+> avoid renumbering the cross-references throughout this plan.
+> **Status: implemented.** Design depth — including the
+> self-production / membership / definition framing and the deferred items
+> — lives in `Documentation/Notes/ScopeAndKeyModelEvolution.md` (Axis A).
+
+Extends seed scopes to explicit producers. A `@Scoped(seed: X.self)`
+namespace enum is a **scope block** — the scope-axis sibling of
+`@Container` — and routes the `@Provides` declarations inside it into the
+`X`-seed scope. The seed is declared once on the block, not per producer.
+
+**Why a block, not per-producer `@Provides @Scoped`.** A macro's
+`@attached` roles all apply to its target, so one `@Scoped` can't be a
+member macro on types *and* a peer macro on producers — `@attached(member)`
+on a func/var is a hard compiler error (and `assertMacroExpansion` doesn't
+catch it; the real compile did). The block sidesteps this (the marker only
+ever sits on an enum, which bears members), is less verbose, *and* is the
+scope-*definition* surface Wire previously lacked — the `@Container`
+analog for the scope axis.
+
+**Scope:**
+- `@Scoped(seed:)` on a namespace enum as a scope-block marker. The macro's
+  member role emits nothing on an enum (inert marker, like `@Container`);
+  it still synthesises `init`/`key` on struct/class/actor. `@Scoped` on a
+  var/func is now a plain compiler error, so no plugin check is needed.
+- Discovery tracks an enclosing `seedScope` on the visitor frame
+  (mirroring `containerName`); `@Provides` inside a block inherit it.
+  Maps 1:1 onto the existing `Partition(container, scope)`, so **no graph
+  or codegen change** — a scoped provider flows through
+  `orchestrateSeedScope` as an ordinary scope binding, and composes with
+  `@Container` into `(container, seed)` cells.
+- `@Singleton` inside a scope block is a diagnosed error — process
+  lifetime can't live in a seed scope, and left unflagged it would
+  silently route to the process graph. Self-producing `@Scoped(seed:)`
+  types are unaffected; they carry their own seed.
+- **Deferred** (recorded in the design note): bare `@Scoped` inside a block
+  meaning "self-produce, inherit the block's seed"; the fuller
+  self-production / scope separation (a scope-neutral self-production
+  marker); and keyed-and-scoped `@Provides`.
+
+**Validation gate:** a `@Scoped(seed:) enum` block with a `@Provides`
+function that reads the seed *and* borrows a singleton, plus a `@Provides`
+property constant, consumed by a scope-bound type; the generated per-seed
+scope bootstraps with the right values and ordering
+(`ScopedProvidesExample`).
 
 ## Iteration 6 — `Lifecycle` and `Resource<T>` (types only)
 
