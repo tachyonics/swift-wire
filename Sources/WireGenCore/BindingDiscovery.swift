@@ -45,6 +45,11 @@ private struct VisitorScope {
     /// the extension-of-foreign-type warnings. `nil` for primary type
     /// declarations and `@Container`-annotated extensions.
     let unannotatedExtensionTarget: String?
+    /// Seed scope the enclosing `@Scoped(seed:)` namespace enum defines
+    /// for its `@Provides` (the scope-axis sibling of `@Container`); `nil`
+    /// outside any scope block, and inherited by nested frames.
+    /// Self-producing `@Scoped` *types* carry their own scope, not this.
+    let seedScope: ScopeKey?
 }
 
 final class BindingDiscovery: SyntaxVisitor {
@@ -294,7 +299,12 @@ final class BindingDiscovery: SyntaxVisitor {
                 converter: converter
             )
         )
-        enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
+        enterTypeDecl(
+            name: node.name.text,
+            attributes: node.attributes,
+            modifiers: node.modifiers,
+            seedScopeBlock: scopeBlockKey(in: node.attributes)
+        )
         return .visitChildren
     }
     override func visitPost(_ node: EnumDeclSyntax) {
@@ -450,7 +460,8 @@ final class BindingDiscovery: SyntaxVisitor {
         name: String,
         attributes: AttributeListSyntax,
         modifiers: DeclModifierListSyntax,
-        unannotatedExtensionTarget: String? = nil
+        unannotatedExtensionTarget: String? = nil,
+        seedScopeBlock: ScopeKey? = nil
     ) {
         // `@Contributes` on a type/extension requires a `@Singleton`/
         // `@Scoped` producer; flag the bare form before it's silently
@@ -469,7 +480,8 @@ final class BindingDiscovery: SyntaxVisitor {
                 typeName: name,
                 containerName: isContainer ? name : scopes.last?.containerName,
                 access: accessLevel(from: modifiers),
-                unannotatedExtensionTarget: unannotatedExtensionTarget
+                unannotatedExtensionTarget: unannotatedExtensionTarget,
+                seedScope: seedScopeBlock ?? scopes.last?.seedScope
             )
         )
     }
@@ -613,7 +625,7 @@ extension BindingDiscovery {
         let accessPath = (scopes.map(\.typeName) + [propertyName]).joined(separator: ".")
         let providesAttribute = attribute(in: node.attributes, named: "Provides")
         let key = providesAttribute.flatMap { keyIdentifier(from: $0) }
-        let scopeKey = providerScopeKey(in: node.attributes)
+        let scopeKey = scopes.last?.seedScope
         let providerLocation = location(of: pattern.identifier)
         // Computed properties (`@Provides var x: T { get async throws { … } }`)
         // can carry effect specifiers on the `get` accessor. Stored
@@ -690,7 +702,7 @@ extension BindingDiscovery {
             node.genericParameterClause?.parameters.map { $0.name.text } ?? []
         let providesAttribute = attribute(in: node.attributes, named: "Provides")
         let key = providesAttribute.flatMap { keyIdentifier(from: $0) }
-        let scopeKey = providerScopeKey(in: node.attributes)
+        let scopeKey = scopes.last?.seedScope
         let providerLocation = location(of: node.name)
         unannotatedExtensionProvides.append(
             contentsOf: unannotatedExtensionProvidesCandidates(
@@ -735,10 +747,9 @@ extension BindingDiscovery {
         )
     }
 
-    /// Scope identity for a `@Provides` declaration stacked with
-    /// `@Scoped(seed:)` — `nil` when there's no `@Scoped` or its seed
-    /// can't be read. Shared by the property and function paths.
-    fileprivate func providerScopeKey(in attributes: AttributeListSyntax) -> ScopeKey? {
+    /// Seed a `@Scoped(seed:)` namespace enum defines for its `@Provides`
+    /// — `nil` when there's no `@Scoped` or its seed can't be read.
+    fileprivate func scopeBlockKey(in attributes: AttributeListSyntax) -> ScopeKey? {
         attribute(in: attributes, named: "Scoped")
             .flatMap { seedTypeExpression(from: $0) }
             .map { ScopeKey(seed: $0) }
