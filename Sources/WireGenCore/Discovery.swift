@@ -490,6 +490,13 @@ package struct DiscoveredProvider: Sendable {
     /// dead-binding warning. See
     /// `Documentation/Notes/VisibilityModel.md`.
     package let accessLevel: AccessLevel
+    /// The seed scope this producer belongs to — non-nil when the
+    /// `@Provides` is stacked with `@Scoped(seed:)` (Axis A). `nil` for an
+    /// ordinary singleton-scope provider. Read by discovery's `record` to
+    /// route the binding into the `(container, seed)` partition, the same
+    /// axis a `@Scoped` *type* uses; the graph and codegen then treat it
+    /// as any other scope binding.
+    package let scopeKey: ScopeKey?
     /// `@Contributes(to:)` annotations on this provider — empty for a
     /// plain `@Provides`. Captured but unused until the Step 4 fan-in
     /// pass.
@@ -512,6 +519,7 @@ package struct DiscoveredProvider: Sendable {
         isAsync: Bool = false,
         isThrowing: Bool = false,
         accessLevel: AccessLevel = .internal,
+        scopeKey: ScopeKey? = nil,
         contributions: [Contribution] = [],
         allowUnused: Bool = false
     ) {
@@ -526,6 +534,7 @@ package struct DiscoveredProvider: Sendable {
         self.isAsync = isAsync
         self.isThrowing = isThrowing
         self.accessLevel = accessLevel
+        self.scopeKey = scopeKey
         self.contributions = contributions
         self.allowUnused = allowUnused
     }
