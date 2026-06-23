@@ -550,6 +550,13 @@ extension BindingDiscovery {
                 location: location(of: nameToken)
             )
         )
+        warnings.append(
+            contentsOf: scopeBoundTypeTeardownMisuse(
+                in: attributes,
+                sourcePath: sourcePath,
+                converter: converter
+            )
+        )
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
         let injectResult = extractInjectDependencies(
             from: members,
@@ -592,7 +599,8 @@ extension BindingDiscovery {
                         sourcePath: sourcePath,
                         converter: converter
                     ),
-                    allowUnused: allowUnused
+                    allowUnused: allowUnused,
+                    teardown: injectResult.teardown
                 )
             )
         )
@@ -645,6 +653,12 @@ extension BindingDiscovery {
         ) {
             warnings.append(diagnostic)
         }
+        let teardown = providerTeardownAction(
+            in: node.attributes,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+        warnings.append(contentsOf: teardown.diagnostics)
         record(
             .provider(
                 DiscoveredProvider(
@@ -664,7 +678,8 @@ extension BindingDiscovery {
                         sourcePath: sourcePath,
                         converter: converter
                     ),
-                    allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false
+                    allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
+                    teardown: teardown.action
                 )
             )
         )
@@ -725,6 +740,12 @@ extension BindingDiscovery {
         ) {
             warnings.append(diagnostic)
         }
+        let teardown = providerTeardownAction(
+            in: node.attributes,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+        warnings.append(contentsOf: teardown.diagnostics)
         record(
             .provider(
                 DiscoveredProvider(
@@ -744,7 +765,8 @@ extension BindingDiscovery {
                         sourcePath: sourcePath,
                         converter: converter
                     ),
-                    allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false
+                    allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
+                    teardown: teardown.action
                 )
             )
         )

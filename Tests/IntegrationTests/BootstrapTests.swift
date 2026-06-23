@@ -191,6 +191,20 @@ struct BootstrapTests {
         #expect(await graph.lazyResourceCallCount.value == 1)
     }
 
+    // MARK: - `@Teardown` (recorded, inert in M1)
+
+    @Test func teardownAnnotatedBindingsBootstrapAndInjectUnwrapped() async throws {
+        // Both teardown forms are present in the graph: the owned
+        // `@Teardown` method on TeardownDatabasePool and the producer
+        // `@Teardown({...})` on makeTeardownClient. M1 records the
+        // actions but emits no teardown calls — so the only observable
+        // behaviour is that bootstrap constructs everything and the
+        // consumer injects the honest (un-wrapped) types directly.
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.teardownConsumer.pool.dsn == "memory://pool")
+        #expect(graph.teardownConsumer.client.label == "live")
+    }
+
     // MARK: - `@Inject func` member injection
 
     @Test func injectFuncRunsAfterConstructionAndWiresState() async throws {

@@ -310,6 +310,11 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// `allowUnused: true` on the scope macro — silences the dead-binding
     /// warning for an intentionally-unconsumed binding (e.g. a graph root).
     package let allowUnused: Bool
+    /// The owned-type teardown action from a `@Teardown` method on this
+    /// type (member form), or `nil` when the type declares none. Recorded
+    /// in M1 but inert — code emission ignores it; M4 emits the call in
+    /// reverse dependency order. See `TeardownAction`.
+    package let teardown: TeardownAction?
 
     package var sourcePath: String { location.file }
 
@@ -326,7 +331,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         memberInjections: [MemberInjection] = [],
         accessLevel: AccessLevel = .internal,
         contributions: [Contribution] = [],
-        allowUnused: Bool = false
+        allowUnused: Bool = false,
+        teardown: TeardownAction? = nil
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -344,6 +350,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.accessLevel = accessLevel
         self.contributions = contributions
         self.allowUnused = allowUnused
+        self.teardown = teardown
     }
 }
 
@@ -504,6 +511,11 @@ package struct DiscoveredProvider: Sendable {
     /// `allowUnused: true` on `@Provides` — silences the dead-binding
     /// warning for an intentionally-unconsumed binding.
     package let allowUnused: Bool
+    /// The producer-form teardown action from a `@Teardown(<action>)`
+    /// attached to this `@Provides`, or `nil` when none. Recorded in M1
+    /// but inert — code emission ignores it; M4 applies it to the
+    /// produced value at scope teardown. See `TeardownAction`.
+    package let teardown: TeardownAction?
 
     package var sourcePath: String { location.file }
 
@@ -521,7 +533,8 @@ package struct DiscoveredProvider: Sendable {
         accessLevel: AccessLevel = .internal,
         scopeKey: ScopeKey? = nil,
         contributions: [Contribution] = [],
-        allowUnused: Bool = false
+        allowUnused: Bool = false,
+        teardown: TeardownAction? = nil
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -537,6 +550,7 @@ package struct DiscoveredProvider: Sendable {
         self.scopeKey = scopeKey
         self.contributions = contributions
         self.allowUnused = allowUnused
+        self.teardown = teardown
     }
 
     /// Whether the binding source is a property (read its value directly)
@@ -849,27 +863,6 @@ package struct NonInjectExtensionInit: Sendable {
 
     package init(extendedType: String, location: SourceLocation) {
         self.extendedType = extendedType
-        self.location = location
-    }
-}
-
-/// One `@Provides` site found inside an unannotated extension.
-/// Carried through discovery as a candidate; the build plugin
-/// resolves it into a `Diagnostic` after the module-wide
-/// `@Container`-name set is available.
-package struct UnannotatedExtensionProvides: Sendable {
-    /// The extension's extended type name — what the warning checks
-    /// against the container set.
-    package let extendedType: String
-    /// Display name of the offending `@Provides` declaration, for
-    /// the warning message (e.g. property/function source name).
-    package let providerName: String
-    /// Anchor for the warning's `file:line:col:` prefix.
-    package let location: SourceLocation
-
-    package init(extendedType: String, providerName: String, location: SourceLocation) {
-        self.extendedType = extendedType
-        self.providerName = providerName
         self.location = location
     }
 }

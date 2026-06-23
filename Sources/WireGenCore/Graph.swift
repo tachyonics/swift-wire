@@ -508,7 +508,8 @@ private func specialiseBinding(
                 typeKind: scopeBound.typeKind,
                 genericParameterNames: [],
                 dependencies: substitutedDependencies,
-                location: scopeBound.location
+                location: scopeBound.location,
+                teardown: scopeBound.teardown
             )
         )
     case .provider(let provider):
@@ -530,7 +531,8 @@ private func specialiseBinding(
                 concreteGenericArguments: provider.form == .function
                     ? concreteArguments
                     : [],
-                scopeKey: provider.scopeKey
+                scopeKey: provider.scopeKey,
+                teardown: provider.teardown
             )
         )
     case .aggregate:

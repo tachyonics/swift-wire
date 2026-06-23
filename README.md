@@ -268,7 +268,7 @@ A general `Provider<T>` for cross-scope on-demand resolution is deferred; if a r
 
 ### Adapter annotations (the extension mechanism)
 
-The Wire core defines exactly: scope macros (`@Singleton`, `@Scoped`), `@Inject`, `@Container`, `@Provides`, `@Contributes`, `Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`, `Lifecycle`, `Resource<T>`. Everything else — every framework integration — is an *adapter annotation*: a macro published by an adapter package that the build plugin recognizes by name and that emits registration code into the generated bootstrap.
+The Wire core defines exactly: scope macros (`@Singleton`, `@Scoped`), `@Inject`, `@Container`, `@Provides`, `@Contributes`, `@Teardown`, `Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`. Everything else — every framework integration — is an *adapter annotation*: a macro published by an adapter package that the build plugin recognizes by name and that emits registration code into the generated bootstrap.
 
 Adapter annotations come in three forms, all supported by the contract:
 
@@ -351,7 +351,7 @@ The contract is versioned from M1. Adapters declare a target version in their ma
 
 The contract distinguishes two stability tiers:
 
-- **Public API** (stable, breaking change requires a major version of Wire): `Resolver` protocol, the `_wireRegister` direct-injection convention, manifest format, phase taxonomy, runtime types (`BindingKey`, `CollectedKey`, `MappedKey`, `BuilderKey`, `Provider`, `Lifecycle`, `Resource`), introspection types (`ResolverIntrospection`, `BindingDescription`, etc.), build-time graph JSON format.
+- **Public API** (stable, breaking change requires a major version of Wire): `Resolver` protocol, the `_wireRegister` direct-injection convention, manifest format, phase taxonomy, the `@Teardown` annotation, runtime types (`BindingKey`, `CollectedKey`, `MappedKey`, `BuilderKey`, `Provider`), introspection types (`ResolverIntrospection`, `BindingDescription`, etc.), build-time graph JSON format.
 - **SPI** (adapter authors only, can evolve within a major version): registry internals, phase ordering implementation, build-plugin internals, generated bootstrap structure.
 
 Adapter authors building against public API are insulated from Wire's internal evolution.
@@ -611,7 +611,7 @@ Spring's "any `List<T>` is autowired" looks convenient and is the source of the 
 - **Empty collections.** Zero contributors resolves to `[]` (or `[:]` for a map), with a build-plugin warning. Silenceable when zero is genuinely valid.
 - **Relative ordering.** As noted above, `before:` / `after:` constraints aren't in scope. Defer until integer priority demonstrably can't express a real case.
 
-### Lifecycle (`Lifecycle` and `Resource<T>`)
+### Lifecycle and teardown (`@Teardown`)
 
 Async/throwing initialization is handled by the constructor — Swift's `init(...) async throws` covers it directly:
 
@@ -629,19 +629,13 @@ struct DatabasePool {
 
 The macro propagates `await` and `try` through the resolution chain; the bootstrap becomes `try await Wire.hummingbird()...run()`. There is no `@PostConstruct`-style separate init step — Swift constructors don't need one.
 
-Teardown is the asymmetric case (Swift has no async `deinit`), so Wire defines a `Lifecycle` protocol for resources that own a teardown step:
+Teardown is the asymmetric case (Swift has no async `deinit`). Rather than a framework-recognised protocol or a wrapper type the framework knows to unwrap, Wire marks teardown **explicitly at the binding's declaration** with `@Teardown`. There is no `Lifecycle` protocol and no `Resource<T>` — nothing for the framework to discover by a conformance probe. The graph already knows construction order; `@Teardown` just annotates which nodes have a teardown action and what it is. Two forms, for the two cases:
 
-```swift
-public protocol Lifecycle: Sendable {
-    func teardown() async throws
-}
-```
-
-Owned types conform directly:
+**Owned types — mark the teardown method:**
 
 ```swift
 @Singleton
-struct DatabasePool: Lifecycle {
+struct DatabasePool {
     let client: PostgresClient
 
     @Inject
@@ -649,56 +643,49 @@ struct DatabasePool: Lifecycle {
         self.client = try await PostgresClient.connect(to: url)
     }
 
+    @Teardown
     func teardown() async throws {
         try await client.shutdown()
     }
 }
 ```
 
-For third-party types — `HTTPClient`, an SDK client, anything you can't add a conformance to — wrap in `Resource<T>` at the `@Provides` site:
+The method may be named anything and takes no parameters, but it must be at least `internal` — Wire's generated bootstrap calls it at scope teardown from a separate file, the same post-construct visibility rule as `@Inject func`. Wire reads its effect specifiers (`async`/`throws`) off the declaration, so the generated teardown call gets the right colour.
+
+**Third-party or produced values — attach the action to the `@Provides`:**
 
 ```swift
-public struct Resource<Value>: Lifecycle {
-    public let value: Value
-    private let onTeardown: @Sendable () async throws -> Void
-
-    public init(_ value: Value, teardown: @Sendable @escaping () async throws -> Void) {
-        self.value = value
-        self.onTeardown = teardown
-    }
-
-    public func teardown() async throws {
-        try await onTeardown()
-    }
-}
-
 @Provides
-static func httpClient() -> Resource<HTTPClient> {
-    let client = HTTPClient()
-    return Resource(client) { try await client.shutdown() }
+@Teardown({ (client: HTTPClient) in try await client.shutdown() })
+static func httpClient() -> HTTPClient {
+    HTTPClient()
 }
 ```
 
-Consumers `@Inject var client: HTTPClient` directly — the resolver recognises `Resource<T>` as a marker at the `@Provides` site, registers the unwrapped `T` as the lookup type, and records the teardown closure with the scope. `Resource<T>` is a wrapper for declaration, not for consumption.
+The producer's return type stays the honest `HTTPClient`, so consumers `@Inject var client: HTTPClient` directly — no wrapper, no unwrap step. The teardown action is either an explicit-typed closure (as above) or a reference to a free or static function (`@Teardown(shutdownClient)`); a sync, non-throwing action is fine — it coerces into the `async throws` teardown contract. (Swift attributes take no trailing-closure sugar, so the closure is parenthesised: `@Teardown({ … })`, not `@Teardown { … }`. The closure parameter needs an explicit type — `$0`-inference doesn't reach across the attribute.)
+
+Why explicit annotation over retroactive `Lifecycle` conformance: a recognised conformance is still framework magic (the container probes `as? Lifecycle` at runtime), it can't distinguish two bindings of the same type with different teardown needs, and it pushes a per-binding decision off the declaration and into the type system. `@Teardown` keeps teardown local, per-binding, and statically known — consistent with Wire treating `Lazy<T>` as just a type and refusing dynamic `Any.Type` lookup.
 
 #### Scope semantics
 
-Each scope has a teardown phase. Resources within the scope are torn down in reverse dependency order — dependents before dependencies — so a `TaskRepository` that depends on `DatabasePool` tears down first, letting in-flight queries complete before the pool drains.
+Each scope has a teardown phase. `@Teardown`-annotated bindings within the scope are torn down in reverse dependency order — dependents before dependencies — so a `TaskRepository` that depends on `DatabasePool` tears down first, letting in-flight queries complete before the pool drains.
 
 - **App-scope teardown** runs at process exit, plumbed through `WireHummingbird` into swift-service-lifecycle's shutdown sequence. App-scope teardown happens *after* all `Service`s have stopped, so a `DatabasePool` is torn down only after the HTTP server has finished serving the last request.
 - **Request-scope teardown** runs at end of request handling, including the cancelled case. A request-scoped `RequestTransaction` that auto-rollbacks on teardown if not committed is the canonical example.
 - **Job-scope teardown** runs at end of job, same scope-guard semantics.
 
-If init throws partway through bootstrap, already-initialized resources are torn down in reverse order before the bootstrap rethrows. If a `teardown()` throws, the error is collected and logged; teardown continues with the next resource. The bootstrap's final result includes any collected teardown errors.
+If init throws partway through bootstrap, already-initialized teardown-annotated bindings are torn down in reverse order before the bootstrap rethrows. If a teardown action throws, the error is collected and logged; teardown continues with the next binding. The bootstrap's final result includes any collected teardown errors.
 
-#### Service vs Lifecycle
+> **M1 status.** Iteration 6 ships the `@Teardown` annotation, and the build plugin *recognises and records* teardown actions, but it does **not** emit teardown calls yet — bootstrap constructs the binding and consumers inject it; nothing invokes the action. The reverse-dependency walk, scope-guarded teardown, and the failure semantics above land in M4. Until then, manual cleanup is the only teardown.
+
+#### Service vs teardown
 
 Two distinct mechanisms for two distinct concerns:
 
 - **`Service`** (from swift-service-lifecycle, contributed via `@Contributes(to: Service.lifecycle)`) — types with a `run()` loop that the service group orchestrates. HTTP server, queue consumer worker, scheduled task runner.
-- **`Lifecycle`** (Wire's protocol) — types with a `teardown()` step but no main loop. `DatabasePool`, `HTTPClient`, JWT verifier, anything that's a *resource* rather than a *service*.
+- **`@Teardown`** — a resource cleanup step (no main loop) marked on a `@Singleton`/`@Scoped` type's method or on a `@Provides`-produced value. `DatabasePool`, `HTTPClient`, JWT verifier, anything that's a *resource* rather than a *service*.
 
-A type can implement both if it has both responsibilities, but most are one or the other. The build plugin warns at compile time if a `@Singleton` conforms to `Service` but isn't contributed to a service collection (silent "service that's never run" is a common bug).
+A type can have both if it has both responsibilities, but most are one or the other. The build plugin warns at compile time if a `@Singleton` conforms to `Service` but isn't contributed to a service collection (silent "service that's never run" is a common bug).
 
 ### Multi-module composition
 
@@ -707,8 +694,10 @@ Wire-aware library packages — `WireSQS`, `WireOpenAPI`, internal company packa
 ```swift
 // In WireSQS package
 @Singleton
-public struct SQSClient: Lifecycle {
+public struct SQSClient {
     @Inject public init(url: URL) async throws { ... }
+
+    @Teardown
     public func teardown() async throws { ... }
 }
 
@@ -932,10 +921,10 @@ Library milestones are tied to what task-cluster needs next, not to a fixed cale
   - Spike 2 (type-level macro walking method-level annotations): PASS. M5's `WireMVC` design is mechanically viable.
   - Spike 3 (annotation argument extraction): PASS. SwiftSyntax preserves type-expression structure verbatim, including nested- and multi-argument generics. M1 must normalise interior whitespace before binding lookup so `Router<X, Y>` and `Router<X,Y>` resolve to the same binding.
   - Spike 4 (swift-syntax pinning): PASS. `from: "601.0.0"` resolves to swift-syntax 601.0.1 identically on both platforms. Bumps to 602.x are deliberate per-Swift-release maintenance events.
-- **M1: core graph.** Macros (`@Singleton`, `@Scoped`, `@Inject`, `@Container`, `@Provides`, `@Contributes`), runtime types (`Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`, `Lifecycle`, `Resource<T>`), build plugin, graph validation (including cross-scope storage checks), the adapter-annotation contract v1 (designed for all three annotation forms, versioned for future evolution), multi-module composition (full cross-target validation by re-parsing dependency sources at build time; the manifest-based optimization is deferred to M6), build-time graph JSON dump (`_WireGraph.json` for tooling/CI/IDE consumption), Linux CI. task-cluster's manual wiring switches to Wire-driven construction; framework integration stays manual at this point. No public 0.x tag yet.
+- **M1: core graph.** Macros (`@Singleton`, `@Scoped`, `@Inject`, `@Container`, `@Provides`, `@Contributes`, `@Teardown`), runtime types (`Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`), build plugin, graph validation (including cross-scope storage checks), the adapter-annotation contract v1 (designed for all three annotation forms, versioned for future evolution), multi-module composition (full cross-target validation by re-parsing dependency sources at build time; the manifest-based optimization is deferred to M6), build-time graph JSON dump (`_WireGraph.json` for tooling/CI/IDE consumption), Linux CI. task-cluster's manual wiring switches to Wire-driven construction; framework integration stays manual at this point. No public 0.x tag yet.
 - **M2: `WireHummingbird` adapter.** Lands when task-cluster needs first-class request-scoped observability — likely a request-id-tagged logger or the equivalent for tracing. Includes the per-request resolver, `@WebSocketRoute` as the first ship-worthy adapter annotation (type-level form), the first concrete consumer of `CollectedKey` (the application's `[any Service]` lifecycle list), and the runtime `Resolver.introspect()` API plus an `/admin/wiring` example endpoint demonstrating it.
 - **M3: `WireOpenAPI` adapter (`@RoutedBy`).** Lands when task-cluster's existing `TaskController.registerHandlers(on:)` call moves into the adapter-annotation system. Auto-wires generated `APIProtocol` conformances. The headline differentiator.
-- **M4: lifecycle orchestration.** Lands when task-cluster gets a resource needing orderly shutdown — most likely the first time `AsyncHTTPClient` or a real DynamoDB client (vs the in-memory one) ships in the example. The `Lifecycle` protocol and `Resource<T>` wrapper exist from M1; M4 is when the build plugin starts walking them in reverse dependency order at scope teardown, integrating with swift-service-lifecycle for app-scope signal handling and Hummingbird's request lifecycle for request-scope teardown. Defines failure semantics (init failure tears down already-initialized resources in reverse order; teardown failures are collected and logged).
+- **M4: lifecycle orchestration.** Lands when task-cluster gets a resource needing orderly shutdown — most likely the first time `AsyncHTTPClient` or a real DynamoDB client (vs the in-memory one) ships in the example. The `@Teardown` annotation exists from M1 (recognised and recorded, but inert); M4 is when the build plugin starts emitting teardown calls in reverse dependency order at scope teardown, integrating with swift-service-lifecycle for app-scope signal handling and Hummingbird's request lifecycle for request-scope teardown. Defines failure semantics (init failure tears down already-initialized bindings in reverse order; teardown failures are collected and logged).
 - **M5: `WireMVC` adapter.** Lands when task-cluster has an actual use case for inline route declarations — likely an internal admin endpoint, or as a deliberate content piece contrasting `@RoutedBy`. The first type-level-with-member-recognition adapter; if the contract holds up here, it'll hold up for almost anything.
 - **M6: multi-module composition optimization.** Lands when re-parsing dependency sources at build time becomes a performance problem (typically once the dependency graph is large enough that build-time cost is felt). Each library's build plugin generates a per-library compile-time manifest of its bindings; the consumer reads manifests instead of re-parsing source. Surface contract unchanged; optimization invisible to users. Multi-module composition itself ships in M1 — this milestone is purely the perf optimization.
 - **Post-1.0:** custom scopes, container composition / fine-grained overrides, `WireVapor` if a Vapor variant of task-cluster materialises, anything else that came out of real use.
