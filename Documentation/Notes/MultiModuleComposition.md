@@ -8,6 +8,11 @@
 > module selectors) and cross-module **visibility** — aren't relitigated
 > when composition is taken on. Nothing here is built yet, and nothing
 > needs building until there's a composition feature to consume it.
+>
+> **Now being taken on:** M1_PLAN iteration 7 implements this note across
+> sittings 7a–7g. The two foundations it calls out land first — single-
+> `BindingKey` tracking (7a) and origin-module metadata per binding (7b) —
+> before the cross-target reading, activation, and naming/visibility work.
 
 ## What composition is
 

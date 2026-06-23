@@ -171,10 +171,15 @@ declared, type-carrying reference Wire tracks," and diagnostics, scope
 inputs, and qualifiers read uniformly off that.
 
 But it's a **behavioral change** (Wire would start diagnosing single
-keys). **Decision: bundle it with multi-module composition** —
-composition needs Wire to discover keys across the parse set anyway (see
-[`MultiModuleComposition.md`](MultiModuleComposition.md)), and doing it
-there lands the change *before library behaviour expectations lock in*.
+keys). **Decision: land it as an early foundation sitting of multi-module
+composition (iteration 7, sitting 7a)** — composition needs Wire to
+discover keys across the parse set anyway (see
+[`MultiModuleComposition.md`](MultiModuleComposition.md)), key tracking is
+additive and single-module-testable, and doing it first lands the change
+*before library behaviour expectations lock in*. It is distinct from — and
+a prerequisite of — the value-level scope key (Axis B proper): the linchpin
+ships in 7a; the scope-key feature it unlocks follows as a later sitting or
+slips past iteration 7 (see the sequencing summary).
 
 ### Open syntax wrinkles (for whoever builds it)
 
@@ -187,13 +192,21 @@ there lands the change *before library behaviour expectations lock in*.
 ## Sequencing summary
 
 1. **Finish iteration 5** (multibindings) — Step 7 validation gate. Don't
-   derail it.
+   derail it. *(Done.)*
 2. **Axis A — scopable `@Provides`** — right after iteration 5, on the
-   current seed model.
-3. **`BindingKey` tracking + value-level scope key** — with **multi-module
-   composition**, before library expectations solidify. The key-tracking
-   unification, the value-level scope inputs, and concern-1 consistency
-   all fall out together there.
+   current seed model. *(Done.)*
+3. **`BindingKey` tracking** — an early foundation sitting of multi-module
+   composition (iteration 7, sitting 7a), before library expectations
+   solidify. The key-tracking unification and concern-1 consistency land
+   here; it's the linchpin both composition's cross-module key references
+   and Axis B build on.
+4. **Axis B — value-level scope key** — built on 3, but *not* a
+   prerequisite for composition's mechanics, so it lands as a later
+   iteration-7 sitting or slips past it. Composition is deliberately built
+   **agnostic to scope-input shape** (each scope an opaque
+   `Partition(container, scope)` identity, scope-bootstrap rendering left
+   to the iteration-4 scope codegen), so Axis B later just extends that
+   codegen without forcing composition rework.
 
 Building on the current seed model now forecloses nothing: the
 multibinding-key tracking already shipped is the same pattern this would
