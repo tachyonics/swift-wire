@@ -57,16 +57,17 @@ private func teardownAttributes(in attributes: AttributeListSyntax) -> [Attribut
 
 /// Build the owned-type teardown action from a `@Teardown`-marked method
 /// on a `@Singleton`/`@Scoped` type, with the iteration-6 misuse
-/// diagnostics. `alreadyHasTeardown` is `true` when an earlier member of
-/// the same type already supplied a teardown — a binding declares at most
-/// one. Returns `nil` (and a diagnostic) for the malformed shapes whose
-/// recorded action would be meaningless; a too-private method is still
-/// recorded (mirroring `@Inject func`), since the action is well-formed
-/// and only its visibility is wrong.
+/// diagnostics. `existing` is the teardown an earlier member of the same
+/// type already supplied (a binding declares at most one); its location
+/// anchors the duplicate diagnostic's note. Returns `nil` (and a
+/// diagnostic) for the malformed shapes whose recorded action would be
+/// meaningless; a too-private method is still recorded (mirroring
+/// `@Inject func`), since the action is well-formed and only its
+/// visibility is wrong.
 func teardownMethodAction(
     from funcDecl: FunctionDeclSyntax,
     attribute teardownAttribute: AttributeSyntax,
-    alreadyHasTeardown: Bool,
+    existing: TeardownAction?,
     sourcePath: String,
     converter: SourceLocationConverter
 ) -> (action: TeardownAction?, diagnostics: [Diagnostic]) {
@@ -78,7 +79,7 @@ func teardownMethodAction(
     if let blocking = blockingMemberTeardownMisuse(
         funcDecl: funcDecl,
         attribute: teardownAttribute,
-        alreadyHasTeardown: alreadyHasTeardown,
+        existing: existing,
         methodName: methodName,
         location: location
     ) {
@@ -112,15 +113,18 @@ func teardownMethodAction(
 private func blockingMemberTeardownMisuse(
     funcDecl: FunctionDeclSyntax,
     attribute teardownAttribute: AttributeSyntax,
-    alreadyHasTeardown: Bool,
+    existing: TeardownAction?,
     methodName: String,
     location: SourceLocation
 ) -> Diagnostic? {
-    if alreadyHasTeardown {
+    if let existing {
         return Diagnostic(
             location: location,
             message:
                 "more than one @Teardown on this type — a binding may declare at most one teardown method.",
+            notes: [
+                Diagnostic.Note(location: existing.location, message: "first @Teardown declared here")
+            ],
             severity: .error
         )
     }

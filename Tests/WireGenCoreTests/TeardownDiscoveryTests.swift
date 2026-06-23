@@ -186,7 +186,17 @@ struct TeardownDiscoveryTests {
                 @Teardown func second() {}
             }
             """
-        #expect(errors(in: source).contains { $0.message.contains("more than one @Teardown") })
+        guard let duplicate = errors(in: source).first(where: {
+            $0.message.contains("more than one @Teardown")
+        }) else {
+            Issue.record("expected a 'more than one @Teardown' error")
+            return
+        }
+        // The error points at the second declaration (line 5); its note
+        // points back at the first (line 4) — consistent with the
+        // duplicate-key diagnostics' "first used here" notes.
+        #expect(duplicate.location.line == 5)
+        #expect(duplicate.notes.contains { $0.location.line == 4 })
         // The first well-formed one is still recorded.
         guard case .member(let name, _, _)? = singletons(in: source).first?.teardown?.kind else {
             Issue.record("expected the first teardown to be recorded")

@@ -92,7 +92,7 @@ func extractInjectDependencies(
             let (action, diagnostics) = teardownMethodAction(
                 from: funcDecl,
                 attribute: teardownAttribute,
-                alreadyHasTeardown: result.teardown != nil,
+                existing: result.teardown,
                 sourcePath: sourcePath,
                 converter: converter
             )
