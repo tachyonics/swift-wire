@@ -254,18 +254,24 @@ The teardown annotation ships in M1 to lock the public API. Orchestration (when 
 
 ## Iteration 7 — multi-module composition
 
-Cross-target binding aggregation, the activation model, transitive-activation diagnostics. Needs all of iterations 1–6 to be solid because it exercises them across module boundaries.
+Cross-target binding aggregation, the activation model, transitive-activation diagnostics. Needs all of iterations 1–6 to be solid because it exercises them across module boundaries. The design depth lives in `Documentation/Notes/MultiModuleComposition.md` (the naming and visibility halves) and `Documentation/Notes/ScopeAndKeyModelEvolution.md` (the `BindingKey`-tracking linchpin and Axis B).
 
-**Scope:**
-- `_WireExports.swift` marker file as the discovery mechanism (M0 finding from Spike 1)
-- Build plugin reads dependency target source via the SPM plugin context (Spike 1's pattern)
-- `.activating(LibraryName.self)` at the consumer's entry point
-- Same-package targets auto-activate; external-package targets require explicit `.activating(...)`
-- Cross-library validation (every `@Inject` satisfied somewhere in the activated set)
-- Missing-direct-binding diagnostic across libraries
-- Missing-transitive-activation diagnostic with fix-it (e.g., "WireOpenAPI references `Router<...>` declared in WireHummingbird; activate WireHummingbird")
+**Two discovery-model foundations land first**, before any cross-module wiring. Both are additive and single-module-testable, and one (`BindingKey` tracking) is a behavioural change best landed before adopters exist:
 
-**Validation gate:** two-package test setup mirroring task-cluster's structure (consumer + library); the consumer activates the library; bindings from both compose; deactivating the library produces a clear error at the relevant `@Inject` with the suggested fix.
+- **7a — single-`BindingKey` tracking.** Wire tracks *multibinding* keys today (the element type lives on the key) but not single `BindingKey`s (the type lives producer-side, enforced by generated `_check`s). Add a key-declaration scanner for `static let X = BindingKey<T>("…")`, so every key becomes "a declared, type-carrying reference Wire tracks." Resolves the single/multi diagnostic inconsistency (concern 1 in the design note) and is the same key-discovery machinery the cross-module key references (7f) ride on. It is a **behavioural change** — Wire begins diagnosing single keys — so it lands here, before library behaviour expectations lock in, and it is the linchpin for Axis B (below), making that a cheap later addition. Single-module; no composition needed to build or test it.
+- **7b — origin-module metadata per binding.** Thread an origin-module field through discovery onto every binding. A single module doesn't need it; composition does — it's load-bearing for both SE-0491 qualification and the context-dependent visibility threshold (7f). Additive and single-module-testable (the field is own-module until composition consumes it). Per the design note, the `::` emission is mechanical once this metadata exists.
+
+**Composition mechanics:**
+
+- **7c — cross-target source reading.** `_WireExports.swift` marker file as the discovery mechanism (M0 finding from Spike 1); the build plugin reads dependency target source via the SPM plugin context (Spike 1's pattern).
+- **7d — activation model.** `.activating(LibraryName.self)` at the consumer's entry point. Same-package targets auto-activate; external-package targets require explicit `.activating(...)`.
+- **7e — cross-library validation + diagnostics.** Every `@Inject` satisfied somewhere in the activated set; missing-direct-binding diagnostic across libraries; missing-transitive-activation diagnostic with fix-it (e.g., "WireOpenAPI references `Router<...>` declared in WireHummingbird; activate WireHummingbird").
+- **7f — cross-module naming, visibility, and key references.** Emit SE-0491 module selectors (`A::Logger`) from 7b's origin-module metadata to resolve genuine cross-module name clashes (module selectors disambiguate, they don't normalize — `A::Logger` and `Logger` stay distinct identities). Make the declaration-too-private threshold context-dependent: `internal` for in-module consumption, `public`/`package` for cross-module-consumed bindings. Cross-module multibinding/single-key references widen the parse set, not the rule — the missing-key check stays "no such key *in the parse set*" and loosens automatically. Revisit `withOrder:` global-uniqueness for independently-authored modules contributing to a shared key (either relax to a documented tiebreak — origin module, then source location — or scope rank-uniqueness per module; decide against the real case).
+- **7g — two-package integration gate.**
+
+**Deferred within iteration 7 (or a clean slip to later): Axis B — value-level scope key.** Separating scope *identity* from scope *input* (`SeedKey(request: RequestSeed.self, userId: Request.userId)`), subsuming today's `@Scoped(seed: X.self)` as the single-input case. It builds *on* 7a's key tracking but is **not a prerequisite** for the composition mechanics, and it still has unresolved syntax (the design note's "open wrinkles": arbitrary argument labels need a positional/variadic/builder form; mixing a bare metatype with a key reference needs a common `ScopeInput` type). **The discipline that keeps it a clean later addition:** composition stays *agnostic to scope-input shape* — it treats each scope as an opaque `Partition(container, scope)` identity and delegates scope-bootstrap rendering to the existing iteration-4 scope codegen, never re-implementing or special-casing the single-seed `withScope(seeding:)` entry shape. Held to that, Axis B later just extends the scope codegen and composition inherits it for free; the only way it forces composition rework is if the single-seed entry shape is allowed to leak into composition-specific logic.
+
+**Validation gate:** two-package test setup mirroring task-cluster's structure (consumer + library); the consumer activates the library; bindings from both compose — including a genuine cross-module name clash resolved via `::` and a cross-module key reference; deactivating the library produces a clear error at the relevant `@Inject` with the suggested fix. A binding consumed across the module boundary at less than `public`/`package` produces the context-dependent visibility error. Single-`BindingKey` tracking diagnostics (7a) are covered by their own single-module fixtures.
 
 ## Iteration 8 — adapter-annotation contract
 
