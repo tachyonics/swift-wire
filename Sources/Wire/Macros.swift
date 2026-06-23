@@ -219,9 +219,11 @@ public macro Contributes<Builder>(to: BuilderKey<Builder>, withOrder: Int) =
 /// run it in reverse dependency order.
 ///
 /// **Owned-type member form** — no argument; marks the teardown method
-/// on a `@Singleton`/`@Scoped` type. The method may be named anything
-/// and may be `private`; its effect specifiers (`async`/`throws`) are
-/// read off the declaration.
+/// on a `@Singleton`/`@Scoped` type. The method may be named anything,
+/// takes no parameters, and must be at least `internal` — Wire's
+/// generated bootstrap calls it at scope teardown from a separate file
+/// (the same post-construct visibility rule as `@Inject func`). Its
+/// effect specifiers (`async`/`throws`) are read off the declaration.
 ///
 ///     @Singleton
 ///     struct DatabasePool {

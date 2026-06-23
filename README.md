@@ -650,7 +650,7 @@ struct DatabasePool {
 }
 ```
 
-The method may be named anything and may be `private`; Wire reads its effect specifiers (`async`/`throws`) off the declaration, so the generated teardown call gets the right colour.
+The method may be named anything and takes no parameters, but it must be at least `internal` — Wire's generated bootstrap calls it at scope teardown from a separate file, the same post-construct visibility rule as `@Inject func`. Wire reads its effect specifiers (`async`/`throws`) off the declaration, so the generated teardown call gets the right colour.
 
 **Third-party or produced values — attach the action to the `@Provides`:**
 

@@ -29,7 +29,7 @@ struct InjectExtractionResult {
     /// Owned-type teardown action from a `@Teardown`-marked method on
     /// this type (member form), or `nil` when none. Recorded in M1 but
     /// inert. At most one per type; a second is a diagnostic.
-    var teardown: TeardownAction? = nil
+    var teardown: TeardownAction?
     /// Source-pattern diagnostics raised while walking the type's
     /// members. Caller appends these to the file-level diagnostics
     /// list. Error-severity entries (e.g. `@Inject mutating func`
@@ -89,15 +89,13 @@ func extractInjectDependencies(
         if let funcDecl = member.decl.as(FunctionDeclSyntax.self),
             let teardownAttribute = attribute(in: funcDecl.attributes, named: "Teardown")
         {
-            let (action, diagnostics) = teardownMethodAction(
-                from: funcDecl,
+            applyTeardown(
+                funcDecl,
                 attribute: teardownAttribute,
-                existing: result.teardown,
+                into: &result,
                 sourcePath: sourcePath,
                 converter: converter
             )
-            result.diagnostics.append(contentsOf: diagnostics)
-            if let action { result.teardown = action }
             continue
         }
         guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
@@ -228,16 +226,40 @@ private func applyInjectFunc(
     )
 }
 
-/// Note explaining why `@Inject weak var` and `@Inject func`
-/// declarations must be at least `internal` while constructor-
-/// injected `@Inject var` / `@Inject let` can be `private`. The
-/// asymmetry is easy to miss; the note pre-empts the inevitable
-/// "but my @Inject private var works fine!" reaction.
-private func postConstructAsymmetryNote(at location: SourceLocation) -> Diagnostic.Note {
+/// Record a `@Teardown`-marked method as the type's owned-type teardown
+/// action (member form), appending any misuse diagnostics. At most one
+/// per type; a second is diagnosed and ignored. The recording and
+/// diagnostic logic lives in `teardownMethodAction` (TeardownDiscovery);
+/// this dispatch helper just threads it into the walk's result.
+private func applyTeardown(
+    _ funcDecl: FunctionDeclSyntax,
+    attribute teardownAttribute: AttributeSyntax,
+    into result: inout InjectExtractionResult,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) {
+    let (action, diagnostics) = teardownMethodAction(
+        from: funcDecl,
+        attribute: teardownAttribute,
+        existing: result.teardown,
+        sourcePath: sourcePath,
+        converter: converter
+    )
+    result.diagnostics.append(contentsOf: diagnostics)
+    if let action { result.teardown = action }
+}
+
+/// Note explaining why post-construct delivery patterns
+/// (`@Inject weak var`, `@Inject func`, `@Teardown`) must be at least
+/// `internal` while constructor-injected `@Inject var` / `@Inject let`
+/// can be `private`. The asymmetry is easy to miss; the note pre-empts
+/// the inevitable "but my @Inject private var works fine!" reaction.
+/// Shared with `TeardownDiscovery`'s too-private teardown diagnostic.
+func postConstructAsymmetryNote(at location: SourceLocation) -> Diagnostic.Note {
     Diagnostic.Note(
         location: location,
         message:
-            "'@Inject var' / '@Inject let' (non-weak) can be 'private' because the macro generates the init within the host type's scope; only post-construct delivery patterns (weak, @Inject func) need broader visibility because the bootstrap references them from a separate file."
+            "'@Inject var' / '@Inject let' (non-weak) can be 'private' because the macro generates the init within the host type's scope; only post-construct delivery patterns (weak, @Inject func, @Teardown) need broader visibility because the bootstrap references them from a separate file."
     )
 }
 

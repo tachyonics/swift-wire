@@ -125,10 +125,12 @@ struct TeardownDiscoveryTests {
             @Teardown({ (c: HTTPClient) in c.close() })
             var client: HTTPClient { HTTPClient() }
             """
-        guard case .action? = providers(in: source).first?.teardown?.kind else {
+        guard case .action(let expression)? = providers(in: source).first?.teardown?.kind else {
             Issue.record("expected a producer teardown action on the property provider")
             return
         }
+        #expect(expression.contains("c.close()"))
+        #expect(errors(in: source).isEmpty)
     }
 
     @Test func providesWithoutTeardownRecordsNoAction() {
@@ -186,9 +188,11 @@ struct TeardownDiscoveryTests {
                 @Teardown func second() {}
             }
             """
-        guard let duplicate = errors(in: source).first(where: {
-            $0.message.contains("more than one @Teardown")
-        }) else {
+        guard
+            let duplicate = errors(in: source).first(where: {
+                $0.message.contains("more than one @Teardown")
+            })
+        else {
             Issue.record("expected a 'more than one @Teardown' error")
             return
         }
@@ -213,7 +217,17 @@ struct TeardownDiscoveryTests {
                 @Teardown private func teardown() async {}
             }
             """
-        #expect(errors(in: source).contains { $0.message.contains("must be at least 'internal'") })
+        guard
+            let tooPrivate = errors(in: source).first(where: {
+                $0.message.contains("must be at least 'internal'")
+            })
+        else {
+            Issue.record("expected a too-private teardown error")
+            return
+        }
+        // Carries the shared post-construct asymmetry note (same as
+        // @Inject func / @Inject weak var) explaining the private rule.
+        #expect(tooPrivate.notes.contains { $0.message.contains("post-construct delivery") })
         // Mirrors @Inject func: the action is well-formed, only its
         // visibility is wrong, so it's recorded for the eventual error.
         #expect(singletons(in: source).first?.teardown != nil)

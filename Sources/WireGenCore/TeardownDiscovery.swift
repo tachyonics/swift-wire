@@ -96,6 +96,7 @@ func teardownMethodAction(
                 location: location,
                 message:
                     "@Teardown method '\(methodName)' is '\(access.keyword)' but must be at least 'internal' — Wire's generated bootstrap calls it at scope teardown and lives in a separate file. Change to 'internal', 'package', or 'public'.",
+                notes: [postConstructAsymmetryNote(at: location)],
                 severity: .error
             )
         )
