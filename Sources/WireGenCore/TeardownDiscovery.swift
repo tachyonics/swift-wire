@@ -1,7 +1,6 @@
 import SwiftSyntax
 
-// Discovery for `@Teardown` — the explicit teardown annotation that
-// replaces a `Lifecycle` protocol / `Resource<T>` wrapper. Two forms:
+// Discovery for `@Teardown` — the explicit teardown annotation. Two forms:
 //
 // - **Owned-type member form** — bare `@Teardown` on a method of a
 //   `@Singleton`/`@Scoped` type (`teardownMethodAction`). The method is
@@ -109,8 +108,7 @@ func teardownMethodAction(
 }
 
 /// The first blocking misuse of an owned-type `@Teardown` method, or
-/// `nil` when the method's shape is well-formed. Split out of
-/// `teardownMethodAction` so each stays within the body-length budget.
+/// `nil` when the method's shape is well-formed.
 private func blockingMemberTeardownMisuse(
     funcDecl: FunctionDeclSyntax,
     attribute teardownAttribute: AttributeSyntax,
