@@ -216,10 +216,7 @@ public macro Contributes<Builder>(to: BuilderKey<Builder>, withOrder: Int) =
     #externalMacro(module: "WireMacrosImpl", type: "ContributesMacro")
 
 /// Marks a binding's teardown action, so the scope's teardown phase can
-/// run it in reverse dependency order. Wire deliberately has no
-/// `Lifecycle` protocol or `Resource<T>` wrapper — teardown is declared
-/// explicitly here, per-binding, with nothing for the framework to
-/// discover by a conformance probe.
+/// run it in reverse dependency order.
 ///
 /// **Owned-type member form** — no argument; marks the teardown method
 /// on a `@Singleton`/`@Scoped` type. The method may be named anything
