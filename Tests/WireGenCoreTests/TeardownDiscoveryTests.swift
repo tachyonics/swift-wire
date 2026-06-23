@@ -243,6 +243,22 @@ struct TeardownDiscoveryTests {
         #expect(providers(in: source).first?.teardown == nil)
     }
 
+    @Test func twoProducerTeardownsIsAnError() {
+        let source = """
+            @Provides
+            @Teardown({ (c: HTTPClient) in c.close() })
+            @Teardown({ (c: HTTPClient) in try await c.shutdown() })
+            func makeClient() -> HTTPClient { HTTPClient() }
+            """
+        #expect(errors(in: source).contains { $0.message.contains("more than one @Teardown") })
+        // The first action is still recorded.
+        guard case .action(let expression)? = providers(in: source).first?.teardown?.kind else {
+            Issue.record("expected the first producer teardown to be recorded")
+            return
+        }
+        #expect(expression.contains("c.close()"))
+    }
+
     @Test func teardownOnTheTypeItselfIsAnError() {
         let source = """
             @Singleton
