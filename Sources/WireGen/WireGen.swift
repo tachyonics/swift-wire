@@ -296,8 +296,6 @@ struct WireGen {
         in aggregate: DiscoveryAggregate,
         containerNames: Set<String>
     ) -> [Diagnostic] {
-        // Built incrementally rather than as one `+` chain — the chain
-        // tipped the type-checker into its slow path as terms accrued.
         var diagnostics: [Diagnostic] = []
         diagnostics += unannotatedExtensionContainerDiagnostics(
             candidates: aggregate.unannotatedExtensionProvides,
