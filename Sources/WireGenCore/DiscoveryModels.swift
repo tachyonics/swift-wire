@@ -1,5 +1,4 @@
-// Small standalone discovery-result models, split out of Discovery.swift
-// to keep that file under the length cap. Each is a plain value type
+// Small standalone discovery-result models. Each is a plain value type
 // captured during the parse and consumed at validation time.
 
 /// One module-scope `typealias` declaration captured during discovery.
