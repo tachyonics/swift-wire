@@ -107,6 +107,7 @@ struct WireGen {
         var declaredTypeNames: Set<String> = []
         var nonInjectExtensionInits: [NonInjectExtensionInit] = []
         var multibindingKeys: [DiscoveredMultibindingKey] = []
+        var bindingKeys: [DiscoveredBindingKey] = []
         var resultBuilders: [DiscoveredResultBuilder] = []
     }
 
@@ -145,6 +146,7 @@ struct WireGen {
                 contentsOf: result.nonInjectExtensionInits
             )
             aggregate.multibindingKeys.append(contentsOf: result.multibindingKeys)
+            aggregate.bindingKeys.append(contentsOf: result.bindingKeys)
             aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
         }
         return aggregate
@@ -294,30 +296,37 @@ struct WireGen {
         in aggregate: DiscoveryAggregate,
         containerNames: Set<String>
     ) -> [Diagnostic] {
-        unannotatedExtensionContainerDiagnostics(
+        var diagnostics: [Diagnostic] = []
+        diagnostics += unannotatedExtensionContainerDiagnostics(
             candidates: aggregate.unannotatedExtensionProvides,
             containerNames: containerNames
         )
-            + crossModuleExtensionDiagnostics(
-                candidates: aggregate.unannotatedExtensionProvides,
-                containerNames: containerNames,
-                declaredTypeNames: aggregate.declaredTypeNames
-            )
-            + extensionInitConflictDiagnostics(
-                candidates: aggregate.nonInjectExtensionInits,
-                singletonTypeNames: singletonTypeNames(in: aggregate)
-            )
-            + multibindingContributionDiagnostics(
-                declaredKeyReferences: Set(aggregate.multibindingKeys.map(\.keyReference)),
-                contributionsByPartition: aggregate.allBindings.mapValues { bindings in
-                    bindings.flatMap { $0.contributions }
-                }
-            )
-            + deadBindingDiagnostics(across: aggregate.allBindings)
-            + multibindingLivenessDiagnostics(
-                multibindingKeys: aggregate.multibindingKeys,
-                bindingsByPartition: aggregate.allBindings
-            )
+        diagnostics += crossModuleExtensionDiagnostics(
+            candidates: aggregate.unannotatedExtensionProvides,
+            containerNames: containerNames,
+            declaredTypeNames: aggregate.declaredTypeNames
+        )
+        diagnostics += extensionInitConflictDiagnostics(
+            candidates: aggregate.nonInjectExtensionInits,
+            singletonTypeNames: singletonTypeNames(in: aggregate)
+        )
+        diagnostics += multibindingContributionDiagnostics(
+            declaredKeyReferences: Set(aggregate.multibindingKeys.map(\.keyReference)),
+            contributionsByPartition: aggregate.allBindings.mapValues { bindings in
+                bindings.flatMap { $0.contributions }
+            }
+        )
+        diagnostics += deadBindingDiagnostics(across: aggregate.allBindings)
+        diagnostics += multibindingLivenessDiagnostics(
+            multibindingKeys: aggregate.multibindingKeys,
+            bindingsByPartition: aggregate.allBindings
+        )
+        diagnostics += unknownBindingKeyDiagnostics(
+            bindingsByPartition: aggregate.allBindings,
+            declaredKeyReferences: Set(aggregate.bindingKeys.map(\.keyReference))
+                .union(aggregate.multibindingKeys.map(\.keyReference))
+        )
+        return diagnostics
     }
 
     /// Collect type names of `@Singleton` bindings across every graph

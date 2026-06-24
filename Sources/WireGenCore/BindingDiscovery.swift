@@ -96,6 +96,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// The aggregate's element/value/result type is read producer-side
     /// from these.
     var multibindingKeys: [DiscoveredMultibindingKey] = []
+    /// Single-binding key declarations (`BindingKey<T>` `static let`s)
+    /// found in this file. Aggregated across the module by `WireGen` and
+    /// matched against `@Inject(K)` / `@Provides(K)` references (unified
+    /// with `multibindingKeys`) to diagnose references to undeclared keys.
+    var bindingKeys: [DiscoveredBindingKey] = []
     /// `@resultBuilder` types found in this file, with their fold result
     /// type — the producer-side result type a `BuilderKey` aggregate has.
     var resultBuilders: [DiscoveredResultBuilder] = []
@@ -382,6 +387,17 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         {
             multibindingKeys.append(key)
+        }
+        if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
+            let key = bindingKey(
+                from: node,
+                enclosingTypeNames: scopes.map(\.typeName),
+                enclosingAccessLevels: scopes.map(\.access),
+                sourcePath: sourcePath,
+                converter: converter
+            )
+        {
+            bindingKeys.append(key)
         }
         if hasAttribute(node.attributes, named: "Provides"),
             isAtRecognisedProvidesPosition(modifiers: node.modifiers)
@@ -790,50 +806,6 @@ extension BindingDiscovery {
 /// the type is both a node in one graph and a grouping for
 /// another — almost always a user error.
 let scopeMacroNames = ["Singleton", "Scoped"]
-
-/// Extract the seed type expression from a `@Scoped(seed: SomeType.self)`
-/// attribute. Returns the base of the `.self` member access — `"SomeType"`
-/// for `SomeType.self`, `"Foo<Bar>"` for `Foo<Bar>.self`. Returns `nil`
-/// if the attribute is malformed in a way Swift would catch later
-/// (missing argument, non-`.self` expression).
-///
-/// Generic seed expressions are kept verbatim — `Foo<Bar>` and `Foo<Bar>`
-/// are the same scope, `Foo<Baz>` is a different scope. The build
-/// plugin's canonical-type-name whitespace normalisation kicks in
-/// during graph identity comparisons separately.
-private func seedTypeExpression(from attribute: AttributeSyntax) -> String? {
-    guard case let .argumentList(args) = attribute.arguments else { return nil }
-    guard let seedArg = args.first(where: { $0.label?.text == "seed" }) else { return nil }
-    guard let memberAccess = seedArg.expression.as(MemberAccessExprSyntax.self),
-        memberAccess.declName.baseName.text == "self",
-        let base = memberAccess.base
-    else { return nil }
-    return base.trimmedDescription
-}
-
-/// Recover the bound type from a `Foo(...)` or `Foo<Bar>(...)`
-/// initializer when the user omitted the type annotation. Returns
-/// `nil` for any other expression shape — member access
-/// (`Foo.shared`), function calls returning unspecified types
-/// (`makeFoo()`), literals, etc. — so the caller falls back to
-/// skipping the declaration. The first-character-uppercase check
-/// filters out lowercase function calls that would otherwise be
-/// misidentified as type references.
-private func inferTypeFromConstructorCall(_ expr: ExprSyntax?) -> String? {
-    guard let call = expr?.as(FunctionCallExprSyntax.self) else { return nil }
-    let called = call.calledExpression
-    // Plain `Foo` or generic-specialised `Foo<Bar>`. Member access
-    // (`Foo.shared` or `Module.Foo`) is rejected — for a plain
-    // type-construction call the called expression is a single
-    // identifier or a generic specialization of one.
-    guard
-        called.is(DeclReferenceExprSyntax.self)
-            || called.is(GenericSpecializationExprSyntax.self)
-    else { return nil }
-    let text = called.trimmedDescription
-    guard let first = text.first, first.isUppercase else { return nil }
-    return text
-}
 
 /// Build a candidate when the `@Provides` was found inside an
 /// unannotated extension (i.e. the immediate enclosing scope's

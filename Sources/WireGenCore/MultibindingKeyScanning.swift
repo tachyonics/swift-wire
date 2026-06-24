@@ -92,7 +92,8 @@ private func multibindingFlavour(named name: String) -> MultibindingKeyFlavour? 
 
 /// The verbatim generic arguments of a clause, each with its trailing
 /// comma stripped — `["any Service"]`, `["String", "any Strategy"]`.
-private func genericArgumentList(_ clause: GenericArgumentClauseSyntax?) -> [String] {
+/// Shared with `BindingKeyScanning`.
+func genericArgumentList(_ clause: GenericArgumentClauseSyntax?) -> [String] {
     guard let clause else { return [] }
     return clause.arguments.map { $0.with(\.trailingComma, nil).trimmedDescription }
 }
