@@ -11,7 +11,7 @@ import Testing
 @Suite("BindingKey discovery")
 struct BindingKeyDiscoveryTests {
     private func keys(in source: String) -> [DiscoveredBindingKey] {
-        discover(in: source, sourcePath: "Keys.swift").bindingKeys
+        discover(in: source, sourcePath: "Keys.swift", module: testModule).bindingKeys
     }
 
     // MARK: - Scanner
@@ -91,7 +91,8 @@ struct BindingKeyDiscoveryTests {
                 dependencies: [],
                 genericParameterNames: [],
                 location: mockLocation("Keys.swift"),
-                keyIdentifier: key
+                keyIdentifier: key,
+                originModule: testModule
             )
         )
     }
@@ -111,7 +112,8 @@ struct BindingKeyDiscoveryTests {
                         keyIdentifier: dependencyKey
                     )
                 ],
-                location: mockLocation("Keys.swift")
+                location: mockLocation("Keys.swift"),
+                originModule: testModule
             )
         )
     }
@@ -172,7 +174,7 @@ struct BindingKeyDiscoveryTests {
     /// source, union the declared single + multibinding keys, then run the
     /// missing-key check over the discovered bindings.
     private func missingKeyDiagnostics(in source: String) -> [Diagnostic] {
-        let discovery = discover(in: source, sourcePath: "Keys.swift")
+        let discovery = discover(in: source, sourcePath: "Keys.swift", module: testModule)
         let declared = Set(discovery.bindingKeys.map(\.keyReference))
             .union(discovery.multibindingKeys.map(\.keyReference))
         return unknownBindingKeyDiagnostics(

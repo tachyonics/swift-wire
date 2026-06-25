@@ -33,7 +33,8 @@ struct EffectAwareEmissionTests {
                 dependencies: deps,
                 location: mockLocation("\(name).swift"),
                 initIsAsync: initIsAsync,
-                initIsThrowing: initIsThrowing
+                initIsThrowing: initIsThrowing,
+                originModule: testModule
             )
         )
     }
@@ -62,7 +63,8 @@ struct EffectAwareEmissionTests {
                 genericParameterNames: [],
                 location: mockLocation("\(accessPath).swift"),
                 isAsync: isAsync,
-                isThrowing: isThrowing
+                isThrowing: isThrowing,
+                originModule: testModule
             )
         )
     }
@@ -82,7 +84,8 @@ struct EffectAwareEmissionTests {
                 genericParameterNames: [],
                 location: mockLocation("\(accessPath).swift"),
                 isAsync: isAsync,
-                isThrowing: isThrowing
+                isThrowing: isThrowing,
+                originModule: testModule
             )
         )
     }

@@ -44,16 +44,16 @@ package struct DiscoveredBindingKey: Sendable, Equatable {
     /// every enclosing type's access. Drives the cross-module visibility
     /// threshold (7f); not consumed single-module in 7a.
     package let accessLevel: AccessLevel
-    /// The module this key was discovered in (stamped during discovery),
-    /// or `nil` when unknown. Used for cross-module key references (7f).
-    package var originModule: String?
+    /// The module this key was discovered in. Used for cross-module key
+    /// references (7f).
+    package let originModule: String
 
     package init(
         keyReference: String,
         typeArgument: String?,
         location: SourceLocation,
         accessLevel: AccessLevel,
-        originModule: String? = nil
+        originModule: String
     ) {
         self.keyReference = keyReference
         self.typeArgument = typeArgument
@@ -74,7 +74,8 @@ func bindingKey(
     enclosingTypeNames: [String],
     enclosingAccessLevels: [AccessLevel],
     sourcePath: String,
-    converter: SourceLocationConverter
+    converter: SourceLocationConverter,
+    module: String
 ) -> DiscoveredBindingKey? {
     guard node.bindings.count == 1, let binding = node.bindings.first else { return nil }
     guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { return nil }
@@ -94,7 +95,8 @@ func bindingKey(
         keyReference: keyReference,
         typeArgument: typeArguments.first,
         location: makeSourceLocation(of: pattern.identifier, sourcePath: sourcePath, converter: converter),
-        accessLevel: effectiveAccess
+        accessLevel: effectiveAccess,
+        originModule: module
     )
 }
 

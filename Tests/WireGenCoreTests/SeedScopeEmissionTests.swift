@@ -13,7 +13,8 @@ struct SeedScopeEmissionTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [],
-                location: mockLocation("\(name).swift")
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
             )
         )
     }
@@ -38,7 +39,8 @@ struct SeedScopeEmissionTests {
                 genericParameterNames: [],
                 dependencies: deps,
                 location: mockLocation("\(name).swift"),
-                scopeKey: ScopeKey(seed: seed)
+                scopeKey: ScopeKey(seed: seed),
+                originModule: testModule
             )
         )
     }
@@ -51,7 +53,8 @@ struct SeedScopeEmissionTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                location: mockLocation("<synthetic>")
+                location: mockLocation("<synthetic>"),
+                originModule: testModule
             )
         )
     }

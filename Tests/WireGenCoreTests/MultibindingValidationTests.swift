@@ -14,7 +14,7 @@ struct MultibindingValidationTests {
     /// visitor warnings with the module-wide cross-contributor checks —
     /// the same composition WireGen performs.
     private func diagnostics(in source: String) -> [Diagnostic] {
-        let discovery = discover(in: source, sourcePath: "M.swift")
+        let discovery = discover(in: source, sourcePath: "M.swift", module: testModule)
         return discovery.warnings
             + multibindingContributionDiagnostics(
                 declaredKeyReferences: Set(discovery.multibindingKeys.map(\.keyReference)),
@@ -29,7 +29,7 @@ struct MultibindingValidationTests {
     }
 
     private func livenessDiagnostics(in source: String) -> [Diagnostic] {
-        let discovery = discover(in: source, sourcePath: "M.swift")
+        let discovery = discover(in: source, sourcePath: "M.swift", module: testModule)
         return multibindingLivenessDiagnostics(
             multibindingKeys: discovery.multibindingKeys,
             bindingsByPartition: discovery.allBindings

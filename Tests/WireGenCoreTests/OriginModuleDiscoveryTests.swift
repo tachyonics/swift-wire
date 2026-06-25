@@ -61,42 +61,35 @@ struct OriginModuleDiscoveryTests {
         #expect(keys.first?.originModule == "MyModule")
     }
 
-    @Test func defaultModuleIsNil() {
-        // discover() without a module (the common unit-test path) leaves
-        // origin unstamped — the single-module "own module" default.
+    @Test func distinctModulesStampDistinctly() {
+        // Two discovery passes with different module names stamp their
+        // bindings independently — the seam 7c uses when it reads each
+        // dependency target's sources under its own module name.
         let source = """
             @Singleton
             struct A {
                 @Inject init() {}
             }
             """
-        let bindings = discover(in: source, sourcePath: "A.swift").bindings
-        #expect(bindings.first?.originModule == nil)
+        let consumer = discover(in: source, sourcePath: "A.swift", module: "Consumer").bindings
+        let library = discover(in: source, sourcePath: "A.swift", module: "Library").bindings
+        #expect(consumer.first?.originModule == "Consumer")
+        #expect(library.first?.originModule == "Library")
     }
 
-    @Test func settingOriginModuleStampsEachBindingKind() {
-        let scopeBound = DiscoveredBinding.scopeBound(
+    @Test func bindingAccessorReflectsConstructionModule() {
+        // The enum-level accessor reads the module set at construction —
+        // origin is non-optional and set once, not stamped after the fact.
+        let binding = DiscoveredBinding.scopeBound(
             DiscoveredScopeBoundType(
                 typeName: "A",
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [],
-                location: mockLocation("A.swift")
+                location: mockLocation("A.swift"),
+                originModule: "Library"
             )
         )
-        let provider = DiscoveredBinding.provider(
-            DiscoveredProvider(
-                boundType: "B",
-                accessPath: "makeB",
-                form: .function,
-                dependencies: [],
-                genericParameterNames: [],
-                location: mockLocation("B.swift")
-            )
-        )
-        #expect(scopeBound.settingOriginModule("M").originModule == "M")
-        #expect(provider.settingOriginModule("M").originModule == "M")
-        // Re-stamping overwrites (composition re-stamps dependency sources).
-        #expect(scopeBound.settingOriginModule("M").settingOriginModule("N").originModule == "N")
+        #expect(binding.originModule == "Library")
     }
 }

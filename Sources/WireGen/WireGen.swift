@@ -103,6 +103,9 @@ struct WireGen {
     /// (default, named container) are derived from `allBindings` at
     /// the point of use via the helpers below.
     private struct DiscoveryAggregate {
+        /// The consumer module these sources belong to — carried so the
+        /// graph-building pass can stamp synthetic seed bindings with it.
+        var module: String
         var perFile: [(path: String, items: [DiscoveredBinding])] = []
         var allBindings: [Partition: [DiscoveredBinding]] = [:]
         var imports: [String] = []
@@ -118,9 +121,9 @@ struct WireGen {
 
     private static func discoverAllSources(
         at sourcePaths: [String],
-        module: String?
+        module: String
     ) -> DiscoveryAggregate {
-        var aggregate = DiscoveryAggregate()
+        var aggregate = DiscoveryAggregate(module: module)
         for path in sourcePaths {
             let source = readSource(at: path)
             let result = discover(in: source, sourcePath: path, module: module)
@@ -243,7 +246,8 @@ struct WireGen {
                     parentGraphType: parentGraphType,
                     typealiases: aggregate.typealiases,
                     multibindingKeys: aggregate.multibindingKeys,
-                    resultBuilders: aggregate.resultBuilders
+                    resultBuilders: aggregate.resultBuilders,
+                    module: aggregate.module
                 )
                 let enrichedResult = enrichMissingBindingsWithCrossScopeHints(
                     orchestration.result,

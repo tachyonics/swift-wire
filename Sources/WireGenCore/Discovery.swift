@@ -315,9 +315,10 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// in M1 but inert — code emission ignores it; M4 emits the call in
     /// reverse dependency order. See `TeardownAction`.
     package let teardown: TeardownAction?
-    /// The module this binding was discovered in (stamped during
-    /// discovery), or `nil` when unknown. See `DiscoveredBinding.originModule`.
-    package var originModule: String?
+    /// The module this binding was discovered in (the consumer target
+    /// name, or a dependency's name under composition). See
+    /// `DiscoveredBinding.originModule`.
+    package let originModule: String
 
     package var sourcePath: String { location.file }
 
@@ -336,7 +337,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         contributions: [Contribution] = [],
         allowUnused: Bool = false,
         teardown: TeardownAction? = nil,
-        originModule: String? = nil
+        originModule: String
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -521,9 +522,10 @@ package struct DiscoveredProvider: Sendable {
     /// but inert — code emission ignores it; M4 applies it to the
     /// produced value at scope teardown. See `TeardownAction`.
     package let teardown: TeardownAction?
-    /// The module this binding was discovered in (stamped during
-    /// discovery), or `nil` when unknown. See `DiscoveredBinding.originModule`.
-    package var originModule: String?
+    /// The module this binding was discovered in (the consumer target
+    /// name, or a dependency's name under composition). See
+    /// `DiscoveredBinding.originModule`.
+    package let originModule: String
 
     package var sourcePath: String { location.file }
 
@@ -543,7 +545,7 @@ package struct DiscoveredProvider: Sendable {
         contributions: [Contribution] = [],
         allowUnused: Bool = false,
         teardown: TeardownAction? = nil,
-        originModule: String? = nil
+        originModule: String
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -858,7 +860,7 @@ extension SourceFileDiscovery {
 package func discover(
     in source: String,
     sourcePath: String,
-    module: String? = nil
+    module: String
 ) -> SourceFileDiscovery {
     let syntaxTree = Parser.parse(source: source)
     let converter = SourceLocationConverter(fileName: sourcePath, tree: syntaxTree)

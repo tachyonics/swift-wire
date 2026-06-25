@@ -47,9 +47,9 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
     /// `allowUnused: true` on the key declaration — silences the
     /// dead-/empty-multibinding warning.
     package let allowUnused: Bool
-    /// The module this key was discovered in (stamped during discovery),
-    /// or `nil` when unknown. Used for cross-module key references (7f).
-    package var originModule: String?
+    /// The module this key was discovered in. Used for cross-module key
+    /// references (7f).
+    package let originModule: String
 
     package init(
         keyReference: String,
@@ -58,7 +58,7 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
         location: SourceLocation,
         accessLevel: AccessLevel,
         allowUnused: Bool = false,
-        originModule: String? = nil
+        originModule: String
     ) {
         self.keyReference = keyReference
         self.flavour = flavour
@@ -94,10 +94,10 @@ package struct DiscoveredAggregate: Sendable {
     /// The key declaration's location — what aggregate-level diagnostics
     /// point at.
     package let location: SourceLocation
-    /// The module the aggregate logically lives in — the key's origin.
-    /// Synthesised post-discovery, so not stamped by the visitor;
-    /// populated when cross-module aggregates land (7f). `nil` today.
-    package var originModule: String?
+    /// The module the aggregate logically lives in — inherited from the
+    /// key declaration it's built from (the fan-in pass passes
+    /// `key.originModule`).
+    package let originModule: String
 
     package init(
         keyReference: String,
@@ -106,7 +106,7 @@ package struct DiscoveredAggregate: Sendable {
         builderTypeName: String? = nil,
         contributors: [AggregateContributor],
         location: SourceLocation,
-        originModule: String? = nil
+        originModule: String
     ) {
         self.keyReference = keyReference
         self.collectionType = collectionType

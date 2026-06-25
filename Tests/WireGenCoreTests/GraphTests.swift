@@ -25,7 +25,8 @@ struct GraphTests {
                 typeKind: "struct",
                 genericParameterNames: generics,
                 dependencies: deps,
-                location: mockLocation("\(name).swift")
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
             )
         )
     }
@@ -60,7 +61,8 @@ struct GraphTests {
                         ],
                         location: mockLocation("\(name).swift")
                     )
-                ]
+                ],
+                originModule: testModule
             )
         )
     }
@@ -89,7 +91,8 @@ struct GraphTests {
                         keyIdentifier: depKey
                     )
                 ],
-                location: mockLocation("\(name).swift")
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
             )
         )
     }
@@ -108,7 +111,8 @@ struct GraphTests {
                 dependencies: [],
                 genericParameterNames: [],
                 location: mockLocation(sourcePath ?? "\(accessPath).swift"),
-                keyIdentifier: key
+                keyIdentifier: key,
+                originModule: testModule
             )
         )
     }
@@ -135,7 +139,8 @@ struct GraphTests {
                 form: .function,
                 dependencies: deps,
                 genericParameterNames: generics,
-                location: mockLocation(sourcePath ?? "\(accessPath).swift")
+                location: mockLocation(sourcePath ?? "\(accessPath).swift"),
+                originModule: testModule
             )
         )
     }
@@ -484,7 +489,8 @@ struct GraphTests {
                         form: .property,
                         dependencies: [],
                         genericParameterNames: [],
-                        location: mockLocation("UUID.swift")
+                        location: mockLocation("UUID.swift"),
+                        originModule: testModule
                     )
                 ),
             ],
@@ -1214,7 +1220,8 @@ struct GraphTests {
                     dependencies: [],
                     genericParameterNames: [],
                     location: mockLocation("specialRepo.swift"),
-                    keyIdentifier: "Repository.special"
+                    keyIdentifier: "Repository.special",
+                    originModule: testModule
                 )
             ),
             singletonWithKeyedDep(

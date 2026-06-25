@@ -34,7 +34,8 @@ struct DeadBindingDiagnosticsTests {
                 contributions: keyReference.map {
                     [Contribution(keyReference: $0, location: mockLocation("\(name).swift"))]
                 } ?? [],
-                allowUnused: allowUnused
+                allowUnused: allowUnused,
+                originModule: testModule
             )
         )
     }
@@ -54,7 +55,8 @@ struct DeadBindingDiagnosticsTests {
                 genericParameterNames: [],
                 location: mockLocation("\(name).swift"),
                 keyIdentifier: key,
-                accessLevel: access
+                accessLevel: access,
+                originModule: testModule
             )
         )
     }

@@ -18,7 +18,8 @@ func multibindingKey(
     enclosingTypeNames: [String],
     enclosingAccessLevels: [AccessLevel],
     sourcePath: String,
-    converter: SourceLocationConverter
+    converter: SourceLocationConverter,
+    module: String
 ) -> DiscoveredMultibindingKey? {
     guard node.bindings.count == 1, let binding = node.bindings.first else { return nil }
     guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { return nil }
@@ -40,7 +41,8 @@ func multibindingKey(
         typeArguments: info.typeArguments,
         location: makeSourceLocation(of: pattern.identifier, sourcePath: sourcePath, converter: converter),
         accessLevel: effectiveAccess,
-        allowUnused: keyAllowUnused(from: binding.initializer?.value)
+        allowUnused: keyAllowUnused(from: binding.initializer?.value),
+        originModule: module
     )
 }
 

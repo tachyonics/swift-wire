@@ -107,9 +107,9 @@ final class BindingDiscovery: SyntaxVisitor {
     private let sourcePath: String
     private let converter: SourceLocationConverter
     /// The module these sources belong to, stamped onto every discovered
-    /// binding and key. `nil` when discovery runs without a module
-    /// (most unit tests); the single-module build passes the target name.
-    private let module: String?
+    /// binding and key at construction. The build passes the consumer
+    /// target name; tests pass a stand-in.
+    private let module: String
     /// One frame per enclosing type the visitor has entered, in
     /// outermost-to-innermost order. `scopes.last` is the immediate
     /// enclosing declaration; an empty stack means module scope.
@@ -117,7 +117,7 @@ final class BindingDiscovery: SyntaxVisitor {
     /// atomic — there's no way to forget to update one on the way out.
     private var scopes: [VisitorScope] = []
 
-    init(sourcePath: String, converter: SourceLocationConverter, module: String? = nil) {
+    init(sourcePath: String, converter: SourceLocationConverter, module: String) {
         self.sourcePath = sourcePath
         self.converter = converter
         self.module = module
@@ -359,11 +359,10 @@ final class BindingDiscovery: SyntaxVisitor {
                 enclosingTypeNames: scopes.map(\.typeName),
                 enclosingAccessLevels: scopes.map(\.access),
                 sourcePath: sourcePath,
-                converter: converter
+                converter: converter,
+                module: module
             )
         {
-            var key = key
-            key.originModule = module
             multibindingKeys.append(key)
         }
         if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
@@ -372,11 +371,10 @@ final class BindingDiscovery: SyntaxVisitor {
                 enclosingTypeNames: scopes.map(\.typeName),
                 enclosingAccessLevels: scopes.map(\.access),
                 sourcePath: sourcePath,
-                converter: converter
+                converter: converter,
+                module: module
             )
         {
-            var key = key
-            key.originModule = module
             bindingKeys.append(key)
         }
         if hasAttribute(node.attributes, named: "Provides"),
@@ -525,10 +523,11 @@ extension BindingDiscovery {
         )
     }
 
-    /// Append a binding to its `(container, scope)` partition, stamped
-    /// with the discovery module. The container axis comes from the
-    /// visitor's enclosing-scope stack; the scope axis comes from the
-    /// binding's own scope identity (non-nil for `@Scoped(seed:)`).
+    /// Append a binding to its `(container, scope)` partition. The
+    /// container axis comes from the visitor's enclosing-scope stack; the
+    /// scope axis comes from the binding's own scope identity (non-nil for
+    /// `@Scoped(seed:)`). Bindings are already stamped with the discovery
+    /// module at construction.
     private func record(_ binding: DiscoveredBinding) {
         let scopeKey: ScopeKey? =
             switch binding {
@@ -540,7 +539,7 @@ extension BindingDiscovery {
             container: scopes.last?.containerName,
             scope: scopeKey
         )
-        allBindings[partition, default: []].append(binding.settingOriginModule(module))
+        allBindings[partition, default: []].append(binding)
     }
 
     /// Process a primary type declaration for `@Singleton` or
@@ -628,7 +627,8 @@ extension BindingDiscovery {
                         converter: converter
                     ),
                     allowUnused: allowUnused,
-                    teardown: injectResult.teardown
+                    teardown: injectResult.teardown,
+                    originModule: module
                 )
             )
         )
@@ -707,7 +707,8 @@ extension BindingDiscovery {
                         converter: converter
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
-                    teardown: teardown.action
+                    teardown: teardown.action,
+                    originModule: module
                 )
             )
         )
@@ -794,7 +795,8 @@ extension BindingDiscovery {
                         converter: converter
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
-                    teardown: teardown.action
+                    teardown: teardown.action,
+                    originModule: module
                 )
             )
         )
