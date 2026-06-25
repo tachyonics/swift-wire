@@ -66,7 +66,10 @@ struct WireBuildPlugin: BuildToolPlugin {
             .buildCommand(
                 displayName: "WireGen \(target.name)",
                 executable: wireGen.url,
-                arguments: [graphURL.path, keyChecksURL.path]
+                // `target.name` is the consumer module — WireGen stamps it
+                // onto every binding as its origin module (load-bearing for
+                // cross-module composition; see MultiModuleComposition.md).
+                arguments: [graphURL.path, keyChecksURL.path, target.name]
                     + swiftSources.map { $0.path },
                 inputFiles: swiftSources,
                 outputFiles: [graphURL, keyChecksURL]

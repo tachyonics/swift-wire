@@ -21,17 +21,22 @@ import WireGenCore
 ///
 /// CLI shape:
 ///
-///     WireGen <graph-output-path> <key-checks-output-path> [source-files...]
+///     WireGen <graph-output-path> <key-checks-output-path> <module> [source-files...]
+///
+/// `<module>` is the consumer target's name — stamped onto every
+/// discovered binding as its origin module (load-bearing for cross-module
+/// composition; see `MultiModuleComposition.md`).
 @main
 struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
-        guard arguments.count >= 3 else { printUsageAndExit() }
+        guard arguments.count >= 4 else { printUsageAndExit() }
         let graphOutputPath = arguments[1]
         let keyChecksOutputPath = arguments[2]
-        let sourcePaths = Array(arguments.dropFirst(3))
+        let moduleName = arguments[3]
+        let sourcePaths = Array(arguments.dropFirst(4))
 
-        let aggregate = discoverAllSources(at: sourcePaths)
+        let aggregate = discoverAllSources(at: sourcePaths, module: moduleName)
         print(renderDiscoveryReport(perFile: aggregate.perFile))
 
         // One graph per scope — default, per-`@Container`, and per-seed.
@@ -111,11 +116,14 @@ struct WireGen {
         var resultBuilders: [DiscoveredResultBuilder] = []
     }
 
-    private static func discoverAllSources(at sourcePaths: [String]) -> DiscoveryAggregate {
+    private static func discoverAllSources(
+        at sourcePaths: [String],
+        module: String?
+    ) -> DiscoveryAggregate {
         var aggregate = DiscoveryAggregate()
         for path in sourcePaths {
             let source = readSource(at: path)
-            let result = discover(in: source, sourcePath: path)
+            let result = discover(in: source, sourcePath: path, module: module)
 
             // For the discovery report, show all of the file's bindings
             // together regardless of partition — the access path on
@@ -466,13 +474,13 @@ struct WireGen {
     private static func printUsageAndExit() -> Never {
         FileHandle.standardError.write(
             Data(
-                "error: WireGen requires two output path arguments (graph + key checks).\n"
+                "error: WireGen requires two output paths (graph + key checks) and a module name.\n"
                     .utf8
             )
         )
         FileHandle.standardError.write(
             Data(
-                "usage: WireGen <graph-output-path> <key-checks-output-path> [source-files...]\n"
+                "usage: WireGen <graph-output-path> <key-checks-output-path> <module> [source-files...]\n"
                     .utf8
             )
         )

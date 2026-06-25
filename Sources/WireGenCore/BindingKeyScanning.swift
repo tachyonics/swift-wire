@@ -44,17 +44,22 @@ package struct DiscoveredBindingKey: Sendable, Equatable {
     /// every enclosing type's access. Drives the cross-module visibility
     /// threshold (7f); not consumed single-module in 7a.
     package let accessLevel: AccessLevel
+    /// The module this key was discovered in (stamped during discovery),
+    /// or `nil` when unknown. Used for cross-module key references (7f).
+    package var originModule: String?
 
     package init(
         keyReference: String,
         typeArgument: String?,
         location: SourceLocation,
-        accessLevel: AccessLevel
+        accessLevel: AccessLevel,
+        originModule: String? = nil
     ) {
         self.keyReference = keyReference
         self.typeArgument = typeArgument
         self.location = location
         self.accessLevel = accessLevel
+        self.originModule = originModule
     }
 }
 

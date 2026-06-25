@@ -315,6 +315,9 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// in M1 but inert — code emission ignores it; M4 emits the call in
     /// reverse dependency order. See `TeardownAction`.
     package let teardown: TeardownAction?
+    /// The module this binding was discovered in (stamped during
+    /// discovery), or `nil` when unknown. See `DiscoveredBinding.originModule`.
+    package var originModule: String?
 
     package var sourcePath: String { location.file }
 
@@ -332,7 +335,8 @@ package struct DiscoveredScopeBoundType: Sendable {
         accessLevel: AccessLevel = .internal,
         contributions: [Contribution] = [],
         allowUnused: Bool = false,
-        teardown: TeardownAction? = nil
+        teardown: TeardownAction? = nil,
+        originModule: String? = nil
     ) {
         self.typeName = typeName
         // Default to the simple name so existing call sites that pass
@@ -351,6 +355,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.contributions = contributions
         self.allowUnused = allowUnused
         self.teardown = teardown
+        self.originModule = originModule
     }
 }
 
@@ -516,6 +521,9 @@ package struct DiscoveredProvider: Sendable {
     /// but inert — code emission ignores it; M4 applies it to the
     /// produced value at scope teardown. See `TeardownAction`.
     package let teardown: TeardownAction?
+    /// The module this binding was discovered in (stamped during
+    /// discovery), or `nil` when unknown. See `DiscoveredBinding.originModule`.
+    package var originModule: String?
 
     package var sourcePath: String { location.file }
 
@@ -534,7 +542,8 @@ package struct DiscoveredProvider: Sendable {
         scopeKey: ScopeKey? = nil,
         contributions: [Contribution] = [],
         allowUnused: Bool = false,
-        teardown: TeardownAction? = nil
+        teardown: TeardownAction? = nil,
+        originModule: String? = nil
     ) {
         self.boundType = boundType
         self.accessPath = accessPath
@@ -551,6 +560,7 @@ package struct DiscoveredProvider: Sendable {
         self.contributions = contributions
         self.allowUnused = allowUnused
         self.teardown = teardown
+        self.originModule = originModule
     }
 
     /// Whether the binding source is a property (read its value directly)
@@ -847,11 +857,12 @@ extension SourceFileDiscovery {
 /// `_WireGraph.swift`.
 package func discover(
     in source: String,
-    sourcePath: String
+    sourcePath: String,
+    module: String? = nil
 ) -> SourceFileDiscovery {
     let syntaxTree = Parser.parse(source: source)
     let converter = SourceLocationConverter(fileName: sourcePath, tree: syntaxTree)
-    let visitor = BindingDiscovery(sourcePath: sourcePath, converter: converter)
+    let visitor = BindingDiscovery(sourcePath: sourcePath, converter: converter, module: module)
     visitor.walk(syntaxTree)
     return SourceFileDiscovery(
         allBindings: visitor.allBindings,
