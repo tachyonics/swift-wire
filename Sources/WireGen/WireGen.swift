@@ -23,20 +23,25 @@ import WireGenCore
 ///
 ///     WireGen <graph-output-path> <key-checks-output-path> <module> [source-files...]
 ///
-/// `<module>` is the consumer target's name — stamped onto every
-/// discovered binding as its origin module (load-bearing for cross-module
-/// composition; see `MultiModuleComposition.md`).
+/// Sources are grouped by module via repeated `--module <name> <files…>`
+/// segments. The **first** group is the consumer target being built; any
+/// further groups are Wire-aware dependencies whose sources the plugin
+/// read for cross-module composition (7c). Every binding is stamped with
+/// its group's module (load-bearing for cross-module composition; see
+/// `MultiModuleComposition.md`).
+///
+///     WireGen <graph> <keychecks> --module App a.swift b.swift --module LibA c.swift
 @main
 struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
-        guard arguments.count >= 4 else { printUsageAndExit() }
+        guard arguments.count >= 3 else { printUsageAndExit() }
         let graphOutputPath = arguments[1]
         let keyChecksOutputPath = arguments[2]
-        let moduleName = arguments[3]
-        let sourcePaths = Array(arguments.dropFirst(4))
+        let groups = parseModuleGroups(Array(arguments.dropFirst(3)))
+        guard let consumerModule = groups.first?.module else { printUsageAndExit() }
 
-        let aggregate = discoverAllSources(at: sourcePaths, module: moduleName)
+        let aggregate = discoverAllSources(groups: groups, consumerModule: consumerModule)
         print(renderDiscoveryReport(perFile: aggregate.perFile))
 
         // One graph per scope — default, per-`@Container`, and per-seed.
@@ -70,9 +75,17 @@ struct WireGen {
             seedScopes: seedScopeOrchestrations
         )
 
+        // Bindings composed from a dependency module are referenced by
+        // the generated file, which lives in the consumer module — so it
+        // needs an `import <dependency>` for each foreign origin module.
+        let allBindingsFlat = aggregate.allBindings.values.flatMap { $0 }
+        let imports =
+            aggregate.imports
+            + foreignImports(in: allBindingsFlat, consumerModule: consumerModule)
+
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
         let generated = renderWireGraph(
-            imports: aggregate.imports,
+            imports: imports,
             topologicalOrder: defaultOrder,
             containerTopologicalOrders: containerOrders,
             seedScopeOrders: seedScopeOrders
@@ -85,9 +98,8 @@ struct WireGen {
         // of the graph's topological ordering — it's pure type
         // assertion scaffolding the Swift compiler runs through when
         // building the consumer.
-        let allBindingsFlat = aggregate.allBindings.values.flatMap { $0 }
         let keyChecks = renderWireKeyChecks(
-            imports: aggregate.imports,
+            imports: imports,
             allBindings: allBindingsFlat,
             multibindingKeyReferences: Set(aggregate.multibindingKeys.map(\.keyReference))
         )
@@ -120,11 +132,12 @@ struct WireGen {
     }
 
     private static func discoverAllSources(
-        at sourcePaths: [String],
-        module: String
+        groups: [(module: String, sources: [String])],
+        consumerModule: String
     ) -> DiscoveryAggregate {
-        var aggregate = DiscoveryAggregate(module: module)
-        for path in sourcePaths {
+        var aggregate = DiscoveryAggregate(module: consumerModule)
+        let modulePaths = groups.flatMap { group in group.sources.map { (group.module, $0) } }
+        for (module, path) in modulePaths {
             let source = readSource(at: path)
             let result = discover(in: source, sourcePath: path, module: module)
 
@@ -475,16 +488,46 @@ struct WireGen {
         return containerOrders
     }
 
-    private static func printUsageAndExit() -> Never {
+}
+
+/// CLI argument parsing and usage, split into an extension so it doesn't
+/// count toward the main struct's `type_body_length`.
+extension WireGen {
+    /// Parse the `--module <name> <files…>` segments (everything after the
+    /// two output paths) into ordered `(module, sources)` groups. The
+    /// first group is the consumer target; later groups are Wire-aware
+    /// dependencies the plugin read for cross-module composition (7c).
+    static func parseModuleGroups(
+        _ args: [String]
+    ) -> [(module: String, sources: [String])] {
+        var groups: [(module: String, sources: [String])] = []
+        var index = 0
+        while index < args.count {
+            guard args[index] == "--module", index + 1 < args.count else {
+                printUsageAndExit()
+            }
+            let module = args[index + 1]
+            index += 2
+            var sources: [String] = []
+            while index < args.count, args[index] != "--module" {
+                sources.append(args[index])
+                index += 1
+            }
+            groups.append((module, sources))
+        }
+        return groups
+    }
+
+    static func printUsageAndExit() -> Never {
         FileHandle.standardError.write(
             Data(
-                "error: WireGen requires two output paths (graph + key checks) and a module name.\n"
+                "error: WireGen requires two output paths (graph + key checks) and at least one --module group.\n"
                     .utf8
             )
         )
         FileHandle.standardError.write(
             Data(
-                "usage: WireGen <graph-output-path> <key-checks-output-path> <module> [source-files...]\n"
+                "usage: WireGen <graph-output-path> <key-checks-output-path> --module <name> <source-files...> [--module <name> <source-files...>]\n"
                     .utf8
             )
         )

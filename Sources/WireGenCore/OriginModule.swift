@@ -17,3 +17,15 @@ extension DiscoveredBinding {
         }
     }
 }
+
+/// `import <module>` lines for every distinct origin module among
+/// `bindings` other than the consumer's own. A binding composed from a
+/// dependency is referenced by the generated file (which lives in the
+/// consumer module), so the file needs an import to reach the
+/// dependency's public types. Sorted for deterministic output.
+package func foreignImports(in bindings: [DiscoveredBinding], consumerModule: String) -> [String] {
+    Set(bindings.map(\.originModule))
+        .subtracting([consumerModule])
+        .sorted()
+        .map { "import \($0)" }
+}

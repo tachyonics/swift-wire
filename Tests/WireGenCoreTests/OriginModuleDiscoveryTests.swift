@@ -92,4 +92,38 @@ struct OriginModuleDiscoveryTests {
         )
         #expect(binding.originModule == "Library")
     }
+
+    // MARK: - Foreign imports (7c codegen)
+
+    private func binding(_ name: String, module: String) -> DiscoveredBinding {
+        .scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: name,
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [],
+                location: mockLocation("\(name).swift"),
+                originModule: module
+            )
+        )
+    }
+
+    @Test func foreignImportsEmitsSortedDedupedImportsExcludingConsumer() {
+        let bindings = [
+            binding("Own", module: "Consumer"),
+            binding("LibB", module: "Beta"),
+            binding("LibA", module: "Alpha"),
+            binding("LibA2", module: "Alpha"),  // same module → one import
+        ]
+        let imports = foreignImports(in: bindings, consumerModule: "Consumer")
+        #expect(imports == ["import Alpha", "import Beta"])
+    }
+
+    @Test func foreignImportsIsEmptyWhenAllBindingsAreConsumerLocal() {
+        let bindings = [
+            binding("A", module: "Consumer"),
+            binding("B", module: "Consumer"),
+        ]
+        #expect(foreignImports(in: bindings, consumerModule: "Consumer").isEmpty)
+    }
 }

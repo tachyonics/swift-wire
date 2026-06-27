@@ -68,9 +68,18 @@ let package = Package(
             name: "WireGenCoreTests",
             dependencies: ["WireGenCore"]
         ),
+        // A same-package, Wire-aware library the IntegrationTests target
+        // composes via cross-target source reading (iteration 7c). It opts
+        // in with a `_WireExports.swift` marker and exposes a public
+        // `@Singleton`; it has no plugin of its own — the consumer's plugin
+        // re-parses its sources.
+        .target(
+            name: "WireTestLibrary",
+            dependencies: ["Wire"]
+        ),
         .testTarget(
             name: "IntegrationTests",
-            dependencies: ["Wire"],
+            dependencies: ["Wire", "WireTestLibrary"],
             plugins: [.plugin(name: "WireBuildPlugin")]
         ),
     ]
