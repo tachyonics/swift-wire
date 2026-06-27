@@ -49,6 +49,29 @@ struct WireBuildPlugin: BuildToolPlugin {
         )
         let wireGen = try context.tool(named: "WireGen")
 
+        // Cross-module composition (7c): re-parse the sources of every
+        // same-package, Wire-aware dependency so their bindings compose
+        // into this target's graph. A dependency opts in by including a
+        // `_WireExports.swift` marker file. External-package dependencies
+        // and the explicit `.activating(...)` selection land in 7d —
+        // same-package siblings auto-activate.
+        let samePackageTargetIDs = Set(context.package.targets.map(\.id))
+        var dependencyGroups: [(module: String, sources: [URL])] = []
+        for dependency in target.recursiveTargetDependencies {
+            guard
+                samePackageTargetIDs.contains(dependency.id),
+                let dependencyModule = dependency.sourceModule
+            else { continue }
+            let dependencySources = dependencyModule.sourceFiles(withSuffix: "swift").map(\.url)
+            let isWireAware = dependencySources.contains {
+                $0.lastPathComponent == "_WireExports.swift"
+            }
+            guard isWireAware else { continue }
+            dependencyGroups.append((dependencyModule.moduleName, dependencySources))
+        }
+
+        let allInputFiles = swiftSources + dependencyGroups.flatMap(\.sources)
+
         // Soft warning for very large targets. SPM passes these as argv
         // to WireGen; macOS/Linux `ARG_MAX` is ~1MB combined args+env,
         // so paths × ~200 chars start to bite around 5,000+ files.
@@ -56,22 +79,29 @@ struct WireBuildPlugin: BuildToolPlugin {
         // failure (`E2BIG` from exec) is opaque without context — the
         // fix is to teach WireGen a `@filelist.txt` response-file form
         // and have the plugin write that instead of stuffing argv.
-        if swiftSources.count > 5000 {
+        if allInputFiles.count > 5000 {
             Diagnostics.warning(
-                "WireBuildPlugin: target has \(swiftSources.count) Swift sources, approaching argv limits. If WireGen exec fails with E2BIG, file an issue."
+                "WireBuildPlugin: \(allInputFiles.count) Swift sources (target + Wire-aware dependencies), approaching argv limits. If WireGen exec fails with E2BIG, file an issue."
             )
+        }
+
+        // Sources are grouped by `--module`: the consumer first, then each
+        // Wire-aware dependency. WireGen stamps every binding with its
+        // group's module (origin module — load-bearing for cross-module
+        // composition; see MultiModuleComposition.md).
+        var arguments =
+            [graphURL.path, keyChecksURL.path, "--module", sourceModule.moduleName]
+            + swiftSources.map(\.path)
+        for group in dependencyGroups {
+            arguments += ["--module", group.module] + group.sources.map(\.path)
         }
 
         return [
             .buildCommand(
                 displayName: "WireGen \(target.name)",
                 executable: wireGen.url,
-                // `target.name` is the consumer module — WireGen stamps it
-                // onto every binding as its origin module (load-bearing for
-                // cross-module composition; see MultiModuleComposition.md).
-                arguments: [graphURL.path, keyChecksURL.path, target.name]
-                    + swiftSources.map { $0.path },
-                inputFiles: swiftSources,
+                arguments: arguments,
+                inputFiles: allInputFiles,
                 outputFiles: [graphURL, keyChecksURL]
             )
         ]
