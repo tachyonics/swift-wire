@@ -50,7 +50,8 @@ func synthesizeAggregates(
                 flavour: key.flavour,
                 builderTypeName: shape.builderTypeName,
                 contributors: contributors,
-                location: key.location
+                location: key.location,
+                originModule: key.originModule
             )
         )
     }

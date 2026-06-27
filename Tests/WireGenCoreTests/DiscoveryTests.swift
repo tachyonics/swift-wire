@@ -11,7 +11,7 @@ struct DiscoveryTests {
         in source: String,
         sourcePath: String
     ) -> [DiscoveredScopeBoundType] {
-        discover(in: source, sourcePath: sourcePath).bindings.compactMap { binding in
+        discover(in: source, sourcePath: sourcePath, module: testModule).bindings.compactMap { binding in
             if case .scopeBound(let scopeBound) = binding { return scopeBound }
             return nil
         }
@@ -22,7 +22,7 @@ struct DiscoveryTests {
         in source: String,
         sourcePath: String
     ) -> [DiscoveredProvider] {
-        discover(in: source, sourcePath: sourcePath).bindings.compactMap { binding in
+        discover(in: source, sourcePath: sourcePath, module: testModule).bindings.compactMap { binding in
             if case .provider(let provider) = binding { return provider }
             return nil
         }
@@ -36,7 +36,7 @@ struct DiscoveryTests {
         sourcePath: String,
         partition: Partition
     ) -> [DiscoveredProvider] {
-        (discover(in: source, sourcePath: sourcePath).allBindings[partition] ?? [])
+        (discover(in: source, sourcePath: sourcePath, module: testModule).allBindings[partition] ?? [])
             .compactMap { binding in
                 if case .provider(let provider) = binding { return provider }
                 return nil
@@ -398,7 +398,7 @@ struct DiscoveryTests {
                 @Provides static func makeFoo() -> Foo { Foo() }
             }
             """
-        let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
+        let partitions = discover(in: source, sourcePath: "Source.swift", module: testModule).allBindings
         let seedPartition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
         #expect(partitions[seedPartition]?.count == 1)
         #expect(partitions[Partition(container: nil, scope: nil)] == nil)
@@ -416,7 +416,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
+        let partitions = discover(in: source, sourcePath: "Source.swift", module: testModule).allBindings
         let cell = Partition(container: "App", scope: ScopeKey(seed: "RequestSeed"))
         #expect(partitions[cell]?.count == 1)
     }
@@ -433,7 +433,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let partitions = discover(in: source, sourcePath: "Source.swift").allBindings
+        let partitions = discover(in: source, sourcePath: "Source.swift", module: testModule).allBindings
         let ownCell = Partition(container: nil, scope: ScopeKey(seed: "InnerSeed"))
         #expect(partitions[ownCell]?.count == 1)
         #expect(partitions[Partition(container: nil, scope: ScopeKey(seed: "OuterSeed"))] == nil)
@@ -450,7 +450,7 @@ struct DiscoveryTests {
                 @Singleton struct Worker {}
             }
             """
-        let result = discover(in: source, sourcePath: "Source.swift")
+        let result = discover(in: source, sourcePath: "Source.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Singleton 'Worker' can't live in") == true)
@@ -466,7 +466,7 @@ struct DiscoveryTests {
                 struct Worker { @Inject var dep: Dep }
             }
             """
-        let result = discover(in: source, sourcePath: "Source.swift")
+        let result = discover(in: source, sourcePath: "Source.swift", module: testModule)
         #expect(result.warnings.contains { $0.message.contains("can't live in") } == false)
     }
 
@@ -474,7 +474,7 @@ struct DiscoveryTests {
         let source = """
             @Singleton struct Worker {}
             """
-        let result = discover(in: source, sourcePath: "Source.swift")
+        let result = discover(in: source, sourcePath: "Source.swift", module: testModule)
         #expect(result.warnings.contains { $0.message.contains("can't live in") } == false)
     }
 
@@ -566,7 +566,7 @@ struct DiscoveryTests {
                 @Inject weak let coordinator: Coordinator?
             }
             """
-        let result = discover(in: source, sourcePath: "View.swift")
+        let result = discover(in: source, sourcePath: "View.swift", module: testModule)
         #expect(result.warnings.isEmpty)
     }
 
@@ -603,7 +603,7 @@ struct DiscoveryTests {
                 @Inject private weak let coordinator: Coordinator?
             }
             """
-        let result = discover(in: source, sourcePath: "View.swift")
+        let result = discover(in: source, sourcePath: "View.swift", module: testModule)
         #expect(result.warnings.isEmpty)
     }
 
@@ -626,7 +626,7 @@ struct DiscoveryTests {
         #expect(result[0].dependencies[0].type == "Coordinator")
         #expect(result[0].dependencies[0].nonOwningInitForm == .unowned)
         // No blanket diagnostic for an acyclic unowned reference.
-        #expect(discover(in: source, sourcePath: "View.swift").warnings.isEmpty)
+        #expect(discover(in: source, sourcePath: "View.swift", module: testModule).warnings.isEmpty)
     }
 
     // MARK: - SE-0491 module selectors
@@ -777,7 +777,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors[0].message.contains("'@Inject mutating func' on a struct"))
@@ -808,7 +808,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.isEmpty)
     }
@@ -829,7 +829,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "Cache.swift")
+        let result = discover(in: source, sourcePath: "Cache.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.isEmpty)
     }
@@ -1060,7 +1060,7 @@ struct DiscoveryTests {
             private struct Hidden {
             }
             """
-        let result = discover(in: source, sourcePath: "Hidden.swift")
+        let result = discover(in: source, sourcePath: "Hidden.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Singleton type 'Hidden'") == true)
@@ -1074,7 +1074,7 @@ struct DiscoveryTests {
             fileprivate struct Hidden {
             }
             """
-        let result = discover(in: source, sourcePath: "Hidden.swift")
+        let result = discover(in: source, sourcePath: "Hidden.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("'fileprivate'") == true)
@@ -1086,7 +1086,7 @@ struct DiscoveryTests {
             private struct Hidden {
             }
             """
-        let result = discover(in: source, sourcePath: "Hidden.swift")
+        let result = discover(in: source, sourcePath: "Hidden.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Scoped type 'Hidden'") == true)
@@ -1100,7 +1100,7 @@ struct DiscoveryTests {
             struct Visible {
             }
             """
-        let result = discover(in: source, sourcePath: "Visible.swift")
+        let result = discover(in: source, sourcePath: "Visible.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.isEmpty)
     }
@@ -1109,7 +1109,7 @@ struct DiscoveryTests {
         let source = """
             @Provides private let logger: Logger = Logger()
             """
-        let result = discover(in: source, sourcePath: "Logger.swift")
+        let result = discover(in: source, sourcePath: "Logger.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Provides declaration 'logger'") == true)
@@ -1120,7 +1120,7 @@ struct DiscoveryTests {
         let source = """
             @Provides fileprivate func makeLogger() -> Logger { Logger() }
             """
-        let result = discover(in: source, sourcePath: "Logger.swift")
+        let result = discover(in: source, sourcePath: "Logger.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Provides function 'makeLogger'") == true)
@@ -1134,7 +1134,7 @@ struct DiscoveryTests {
                 @Inject private init(logger: Logger) {}
             }
             """
-        let result = discover(in: source, sourcePath: "Service.swift")
+        let result = discover(in: source, sourcePath: "Service.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Inject init") == true)
@@ -1148,7 +1148,7 @@ struct DiscoveryTests {
                 @Inject private weak var coordinator: Coordinator?
             }
             """
-        let result = discover(in: source, sourcePath: "View.swift")
+        let result = discover(in: source, sourcePath: "View.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Inject weak var 'coordinator'") == true)
@@ -1164,7 +1164,7 @@ struct DiscoveryTests {
                 @Inject public private(set) weak var coordinator: Coordinator?
             }
             """
-        let result = discover(in: source, sourcePath: "View.swift")
+        let result = discover(in: source, sourcePath: "View.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("setter is 'private(set)'") == true)
@@ -1178,7 +1178,7 @@ struct DiscoveryTests {
                 @Inject private func receive(data: Data) {}
             }
             """
-        let result = discover(in: source, sourcePath: "View.swift")
+        let result = discover(in: source, sourcePath: "View.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Inject func 'receive'") == true)
@@ -1225,7 +1225,7 @@ struct DiscoveryTests {
                 @Provides static let baseURL: URL = URL(string: "...")!
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Provides declaration 'baseURL'") == true)
@@ -1240,7 +1240,7 @@ struct DiscoveryTests {
                 @Provides static func makeLogger() -> Logger { Logger() }
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Provides function 'makeLogger'") == true)
@@ -1260,7 +1260,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "Outer.swift")
+        let result = discover(in: source, sourcePath: "Outer.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Singleton type 'Inner'") == true)
@@ -1276,7 +1276,7 @@ struct DiscoveryTests {
                 @Provides static let baseURL: URL = URL(string: "...")!
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.isEmpty)
     }
@@ -1287,7 +1287,7 @@ struct DiscoveryTests {
                 @Provides static let baseURL: URL = URL(string: "...")!
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.isEmpty)
     }
@@ -1304,7 +1304,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("enclosing scope 'Outer' is 'private'") == true)
@@ -1320,7 +1320,7 @@ struct DiscoveryTests {
                 @Provides private static let baseURL: URL = URL(string: "...")!
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let errors = result.warnings.filter { $0.severity == .error }
         #expect(errors.count == 1)
         #expect(errors.first?.message.contains("@Provides declaration 'baseURL' is 'private'") == true)
@@ -1625,7 +1625,7 @@ struct DiscoveryTests {
                 @Provides static let baseURL: URL = URL(string: "...")!
             }
             """
-        let bindings = discover(in: source, sourcePath: "Mixed.swift").bindings
+        let bindings = discover(in: source, sourcePath: "Mixed.swift", module: testModule).bindings
         #expect(bindings.count == 3)
         let singletons = bindings.compactMap { binding -> DiscoveredScopeBoundType? in
             if case .scopeBound(let s) = binding { return s }
@@ -1652,7 +1652,7 @@ struct DiscoveryTests {
                 @Provides static let logger: Logger = Logger()
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         #expect(result.bindings.isEmpty)
         #expect(result.containerBindings.keys.sorted() == ["TestContainer"])
         let testContainerBindings = result.containerBindings["TestContainer"] ?? []
@@ -1679,7 +1679,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         #expect(result.bindings.isEmpty)
         let testContainerBindings = result.containerBindings["TestContainer"] ?? []
         #expect(testContainerBindings.count == 1)
@@ -1714,7 +1714,7 @@ struct DiscoveryTests {
                 @Provides static let baseURL: URL = URL(string: "...")!
             }
             """
-        let result = discover(in: source, sourcePath: "Config.swift")
+        let result = discover(in: source, sourcePath: "Config.swift", module: testModule)
         #expect(result.bindings.count == 1)
         #expect(result.containerBindings.isEmpty)
     }
@@ -1731,7 +1731,7 @@ struct DiscoveryTests {
                 @Provides static let logger: Logger = MockLogger()
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         #expect(result.bindings.isEmpty)
         #expect(result.containerBindings.keys.sorted() == ["ProdContainer", "TestContainer"])
         #expect(result.containerBindings["ProdContainer"]?.count == 1)
@@ -1752,7 +1752,7 @@ struct DiscoveryTests {
                 @Provides static let appName: AppName = AppName(value: "test")
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         // Default graph: module-scope @Provides + module-scope @Singleton
         #expect(result.bindings.count == 2)
         // Container: just its @Provides
@@ -1781,7 +1781,7 @@ struct DiscoveryTests {
                 @Provides static let extra: Extra = Extra()
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         // The container's primary `@Provides` lands in the container.
         let testBindings = result.containerBindings["TestContainer"] ?? []
         #expect(testBindings.count == 1)
@@ -1818,7 +1818,7 @@ struct DiscoveryTests {
                 @Provides static let extra: Extra = Extra()
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         #expect(result.bindings.isEmpty)
         let testBindings = result.containerBindings["TestContainer"] ?? []
         #expect(testBindings.count == 2)
@@ -1844,7 +1844,7 @@ struct DiscoveryTests {
                 @Provides static let logger: Logger = Logger()
             }
             """
-        let result = discover(in: source, sourcePath: "AppConfig.swift")
+        let result = discover(in: source, sourcePath: "AppConfig.swift", module: testModule)
         #expect(result.bindings.isEmpty)
         let bindings = result.containerBindings["AppConfig"] ?? []
         #expect(bindings.count == 1)
@@ -1862,7 +1862,7 @@ struct DiscoveryTests {
                 @Provides static let mockLogger: Logger = MockLogger()
             }
             """
-        let result = discover(in: source, sourcePath: "TestContainer.swift")
+        let result = discover(in: source, sourcePath: "TestContainer.swift", module: testModule)
         let bindings = result.containerBindings["TestContainer"] ?? []
         #expect(bindings.count == 1)
     }
@@ -1874,7 +1874,7 @@ struct DiscoveryTests {
                 @Provides static let buildNumber: Int = 42
             }
             """
-        let result = discover(in: source, sourcePath: "RuntimeConfig.swift")
+        let result = discover(in: source, sourcePath: "RuntimeConfig.swift", module: testModule)
         let bindings = result.containerBindings["RuntimeConfig"] ?? []
         #expect(bindings.count == 1)
     }
@@ -1891,7 +1891,7 @@ struct DiscoveryTests {
                 @Provides static let value: Value = Value()
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         #expect(result.bindings.isEmpty)
         let bindings = result.containerBindings["SomeType"] ?? []
         #expect(bindings.count == 1)
@@ -1909,7 +1909,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         #expect(result.bindings.isEmpty)
         let testBindings = result.containerBindings["TestContainer"] ?? []
         #expect(testBindings.count == 1)
@@ -1929,7 +1929,7 @@ struct DiscoveryTests {
 
             @Provides let logger: Logger = Logger()
             """
-        let imports = discover(in: source, sourcePath: "").imports
+        let imports = discover(in: source, sourcePath: "", module: testModule).imports
         #expect(imports == ["import Foundation", "import OSLog"])
     }
 
@@ -1942,7 +1942,7 @@ struct DiscoveryTests {
             @testable import Internals
             @_implementationOnly import OSLog
             """
-        let imports = discover(in: source, sourcePath: "").imports
+        let imports = discover(in: source, sourcePath: "", module: testModule).imports
         #expect(imports.contains("import Foundation"))
         #expect(imports.contains("@testable import Internals"))
         #expect(imports.contains("@_implementationOnly import OSLog"))
@@ -1955,7 +1955,7 @@ struct DiscoveryTests {
             import struct Foundation.URL
             import func Foundation.exit
             """
-        let imports = discover(in: source, sourcePath: "").imports
+        let imports = discover(in: source, sourcePath: "", module: testModule).imports
         #expect(imports.contains("import struct Foundation.URL"))
         #expect(imports.contains("import func Foundation.exit"))
     }
@@ -1966,7 +1966,7 @@ struct DiscoveryTests {
             struct A {
             }
             """
-        let imports = discover(in: source, sourcePath: "").imports
+        let imports = discover(in: source, sourcePath: "", module: testModule).imports
         #expect(imports.isEmpty)
     }
 
@@ -1987,7 +1987,8 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [],
-                location: WireGenCore.SourceLocation(file: "Found.swift", line: 1, column: 1)
+                location: WireGenCore.SourceLocation(file: "Found.swift", line: 1, column: 1),
+                originModule: testModule
             )
         )
         let report = renderDiscoveryReport(perFile: [
@@ -2006,7 +2007,8 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: ["Model"],
                 dependencies: [],
-                location: WireGenCore.SourceLocation(file: "R.swift", line: 1, column: 1)
+                location: WireGenCore.SourceLocation(file: "R.swift", line: 1, column: 1),
+                originModule: testModule
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "R.swift", items: [item])])
@@ -2027,7 +2029,8 @@ struct DiscoveryTests {
                         location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
                     )
                 ],
-                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
+                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1),
+                originModule: testModule
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
@@ -2049,7 +2052,8 @@ struct DiscoveryTests {
                         location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
                     )
                 ],
-                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
+                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1),
+                originModule: testModule
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
@@ -2064,7 +2068,8 @@ struct DiscoveryTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                location: WireGenCore.SourceLocation(file: "App.swift", line: 1, column: 1)
+                location: WireGenCore.SourceLocation(file: "App.swift", line: 1, column: 1),
+                originModule: testModule
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "App.swift", items: [item])])
@@ -2086,7 +2091,8 @@ struct DiscoveryTests {
                     )
                 ],
                 genericParameterNames: [],
-                location: WireGenCore.SourceLocation(file: "App.swift", line: 1, column: 1)
+                location: WireGenCore.SourceLocation(file: "App.swift", line: 1, column: 1),
+                originModule: testModule
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "App.swift", items: [item])])
@@ -2102,7 +2108,8 @@ struct DiscoveryTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: [],
-                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1)
+                location: WireGenCore.SourceLocation(file: "A.swift", line: 1, column: 1),
+                originModule: testModule
             )
         )
         let report = renderDiscoveryReport(perFile: [(path: "A.swift", items: [item])])
@@ -2236,7 +2243,7 @@ struct DiscoveryTests {
                 @Inject var x: X
             }
             """
-        let result = discover(in: source, sourcePath: "Mixed.swift")
+        let result = discover(in: source, sourcePath: "Mixed.swift", module: testModule)
         #expect(result.warnings.count == 1)
         #expect(result.warnings[0].message.contains("@Container and @Singleton"))
         #expect(result.warnings[0].location.file == "Mixed.swift")
@@ -2251,7 +2258,7 @@ struct DiscoveryTests {
                 @Inject var bar: Bar
             }
             """
-        let result = discover(in: source, sourcePath: "Foo.swift")
+        let result = discover(in: source, sourcePath: "Foo.swift", module: testModule)
         #expect(result.warnings.isEmpty)
     }
 
@@ -2270,7 +2277,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "Foo.swift")
+        let result = discover(in: source, sourcePath: "Foo.swift", module: testModule)
         #expect(result.warnings.count == 1)
         #expect(result.warnings[0].message.contains("@Inject on an extension init"))
         #expect(result.warnings[0].message.contains("'Foo'"))
@@ -2286,7 +2293,7 @@ struct DiscoveryTests {
                 @Provides static let logLevel: String = "info"
             }
             """
-        let result = discover(in: source, sourcePath: "AppConfig.swift")
+        let result = discover(in: source, sourcePath: "AppConfig.swift", module: testModule)
         #expect(result.unannotatedExtensionProvides.count == 1)
         let candidate = result.unannotatedExtensionProvides[0]
         #expect(candidate.extendedType == "AppConfig")
@@ -2303,7 +2310,7 @@ struct DiscoveryTests {
                 @Inject var logger: Logger
             }
             """
-        let result = discover(in: source, sourcePath: "Plain.swift")
+        let result = discover(in: source, sourcePath: "Plain.swift", module: testModule)
         #expect(result.warnings.count == 1)
         #expect(result.warnings[0].message.contains("@Inject on 'logger' has no effect"))
         #expect(result.warnings[0].message.contains("'Plain'"))
@@ -2319,7 +2326,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "Plain.swift")
+        let result = discover(in: source, sourcePath: "Plain.swift", module: testModule)
         #expect(result.warnings.count == 1)
         #expect(
             result.warnings[0].message.contains(
@@ -2339,7 +2346,7 @@ struct DiscoveryTests {
                 @Inject var logger: Logger
             }
             """
-        let result = discover(in: source, sourcePath: "UserRepo.swift")
+        let result = discover(in: source, sourcePath: "UserRepo.swift", module: testModule)
         #expect(result.warnings.isEmpty)
     }
 
@@ -2350,7 +2357,7 @@ struct DiscoveryTests {
         let source = """
             @Inject let logger: Logger = Logger()
             """
-        let result = discover(in: source, sourcePath: "Logger.swift")
+        let result = discover(in: source, sourcePath: "Logger.swift", module: testModule)
         #expect(result.warnings.count == 1)
         #expect(
             result.warnings[0].message.contains(
@@ -2372,7 +2379,7 @@ struct DiscoveryTests {
                 Repository(db: db)
             }
             """
-        let result = discover(in: source, sourcePath: "Repos.swift")
+        let result = discover(in: source, sourcePath: "Repos.swift", module: testModule)
         #expect(result.warnings.isEmpty)
     }
 
@@ -2386,7 +2393,7 @@ struct DiscoveryTests {
                 @Provides static let logLevel: String = "info"
             }
             """
-        let result = discover(in: source, sourcePath: "AppConfig.swift")
+        let result = discover(in: source, sourcePath: "AppConfig.swift", module: testModule)
         #expect(result.unannotatedExtensionProvides.isEmpty)
     }
 
@@ -2394,7 +2401,7 @@ struct DiscoveryTests {
         let source = """
             typealias UserID = UUID
             """
-        let result = discover(in: source, sourcePath: "Types.swift")
+        let result = discover(in: source, sourcePath: "Types.swift", module: testModule)
         #expect(result.typealiases.count == 1)
         #expect(result.typealiases[0].name == "UserID")
         #expect(result.typealiases[0].underlyingType == "UUID")
@@ -2408,7 +2415,7 @@ struct DiscoveryTests {
                 typealias UserID = UUID
             }
             """
-        let result = discover(in: source, sourcePath: "Names.swift")
+        let result = discover(in: source, sourcePath: "Names.swift", module: testModule)
         #expect(result.typealiases.isEmpty)
     }
 
@@ -2418,7 +2425,7 @@ struct DiscoveryTests {
         let source = """
             typealias Repo<T> = Repository<T>
             """
-        let result = discover(in: source, sourcePath: "Repo.swift")
+        let result = discover(in: source, sourcePath: "Repo.swift", module: testModule)
         #expect(result.typealiases.isEmpty)
     }
 
@@ -2430,7 +2437,7 @@ struct DiscoveryTests {
             enum Delta {}
             protocol Epsilon {}
             """
-        let result = discover(in: source, sourcePath: "Types.swift")
+        let result = discover(in: source, sourcePath: "Types.swift", module: testModule)
         #expect(Set(result.declaredTypeNames) == ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"])
     }
 
@@ -2443,7 +2450,7 @@ struct DiscoveryTests {
                 @Provides static let value: Int = 42
             }
             """
-        let result = discover(in: source, sourcePath: "Ext.swift")
+        let result = discover(in: source, sourcePath: "Ext.swift", module: testModule)
         #expect(result.declaredTypeNames.isEmpty)
     }
 
@@ -2456,7 +2463,7 @@ struct DiscoveryTests {
                 @Provides static let appLogger: Logger = Logger()
             }
             """
-        let discovery = discover(in: source, sourcePath: "LoggerExt.swift")
+        let discovery = discover(in: source, sourcePath: "LoggerExt.swift", module: testModule)
         let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
@@ -2478,7 +2485,7 @@ struct DiscoveryTests {
                 @Provides static let value: Int = 42
             }
             """
-        let discovery = discover(in: source, sourcePath: "Local.swift")
+        let discovery = discover(in: source, sourcePath: "Local.swift", module: testModule)
         let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
@@ -2499,7 +2506,7 @@ struct DiscoveryTests {
                 @Provides static let logLevel: String = "info"
             }
             """
-        let discovery = discover(in: source, sourcePath: "AppConfig.swift")
+        let discovery = discover(in: source, sourcePath: "AppConfig.swift", module: testModule)
         let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: ["AppConfig"],
@@ -2518,7 +2525,7 @@ struct DiscoveryTests {
                 @Provides static let value: Int = 42
             }
             """
-        let discovery = discover(in: source, sourcePath: "Complex.swift")
+        let discovery = discover(in: source, sourcePath: "Complex.swift", module: testModule)
         let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
@@ -2537,7 +2544,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "FooExt.swift")
+        let result = discover(in: source, sourcePath: "FooExt.swift", module: testModule)
         #expect(result.nonInjectExtensionInits.count == 1)
         #expect(result.nonInjectExtensionInits[0].extendedType == "Foo")
     }
@@ -2551,7 +2558,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "FooExt.swift")
+        let result = discover(in: source, sourcePath: "FooExt.swift", module: testModule)
         #expect(result.nonInjectExtensionInits.isEmpty)
     }
 
@@ -2598,7 +2605,7 @@ struct DiscoveryTests {
                 @Provides static let empty: [Int] = []
             }
             """
-        let discovery = discover(in: source, sourcePath: "ArrayExt.swift")
+        let discovery = discover(in: source, sourcePath: "ArrayExt.swift", module: testModule)
         let warnings = crossModuleExtensionDiagnostics(
             candidates: discovery.unannotatedExtensionProvides,
             containerNames: [],
@@ -2616,7 +2623,7 @@ struct DiscoveryTests {
             struct RequestLogger {
             }
             """
-        let result = discover(in: source, sourcePath: "RequestLogger.swift")
+        let result = discover(in: source, sourcePath: "RequestLogger.swift", module: testModule)
         // Scoped types DON'T appear in the default-graph slice...
         #expect(result.bindings.isEmpty)
         // ...they're routed into `allBindings` under a Partition
@@ -2642,7 +2649,7 @@ struct DiscoveryTests {
             struct RequestMetrics {
             }
             """
-        let result = discover(in: source, sourcePath: "Request.swift")
+        let result = discover(in: source, sourcePath: "Request.swift", module: testModule)
         let partition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
         #expect(result.allBindings[partition]?.count == 2)
     }
@@ -2657,7 +2664,7 @@ struct DiscoveryTests {
             struct SQSWorker {
             }
             """
-        let result = discover(in: source, sourcePath: "Mixed.swift")
+        let result = discover(in: source, sourcePath: "Mixed.swift", module: testModule)
         let requestPartition = Partition(container: nil, scope: ScopeKey(seed: "RequestSeed"))
         let sqsPartition = Partition(container: nil, scope: ScopeKey(seed: "SQSMessage"))
         #expect(result.allBindings[requestPartition]?.count == 1)
@@ -2676,7 +2683,7 @@ struct DiscoveryTests {
             struct TenantCache {
             }
             """
-        let result = discover(in: source, sourcePath: "TenantCache.swift")
+        let result = discover(in: source, sourcePath: "TenantCache.swift", module: testModule)
         let partition = Partition(
             container: nil,
             scope: ScopeKey(seed: "TenantSeed<String>")
@@ -2694,7 +2701,7 @@ struct DiscoveryTests {
             struct RequestLogger {
             }
             """
-        let result = discover(in: source, sourcePath: "App.swift")
+        let result = discover(in: source, sourcePath: "App.swift", module: testModule)
         // @Singleton lands in the default partition (container nil,
         // scope nil); @Scoped lands in a per-seed partition. They
         // share the dictionary but stay separate keys.
@@ -2724,7 +2731,7 @@ struct DiscoveryTests {
                 }
             }
             """
-        let result = discover(in: source, sourcePath: "TestContainer.swift")
+        let result = discover(in: source, sourcePath: "TestContainer.swift", module: testModule)
         let partition = Partition(
             container: "TestContainer",
             scope: ScopeKey(seed: "RequestSeed")
@@ -2748,7 +2755,7 @@ struct DiscoveryTests {
             struct Mixed {
             }
             """
-        let result = discover(in: source, sourcePath: "Mixed.swift")
+        let result = discover(in: source, sourcePath: "Mixed.swift", module: testModule)
         #expect(result.warnings.count == 1)
         #expect(
             result.warnings[0].message.contains(

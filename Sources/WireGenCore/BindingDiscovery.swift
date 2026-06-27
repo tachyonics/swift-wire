@@ -106,6 +106,10 @@ final class BindingDiscovery: SyntaxVisitor {
     var resultBuilders: [DiscoveredResultBuilder] = []
     private let sourcePath: String
     private let converter: SourceLocationConverter
+    /// The module these sources belong to, stamped onto every discovered
+    /// binding and key at construction. The build passes the consumer
+    /// target name; tests pass a stand-in.
+    private let module: String
     /// One frame per enclosing type the visitor has entered, in
     /// outermost-to-innermost order. `scopes.last` is the immediate
     /// enclosing declaration; an empty stack means module scope.
@@ -113,39 +117,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// atomic — there's no way to forget to update one on the way out.
     private var scopes: [VisitorScope] = []
 
-    init(sourcePath: String, converter: SourceLocationConverter) {
+    init(sourcePath: String, converter: SourceLocationConverter, module: String) {
         self.sourcePath = sourcePath
         self.converter = converter
+        self.module = module
         super.init(viewMode: .sourceAccurate)
-    }
-
-    /// Resolve the 1-based file/line/col of a syntax node's start
-    /// position. Used by everything that needs a `SourceLocation`.
-    private func location(of node: some SyntaxProtocol) -> SourceLocation {
-        let position = node.startLocation(converter: converter)
-        return SourceLocation(
-            file: sourcePath,
-            line: position.line,
-            column: position.column
-        )
-    }
-
-    /// Append a binding to its `(container, scope)` partition. The
-    /// container axis comes from the visitor's enclosing-scope stack;
-    /// the scope axis comes from the binding's own scope identity
-    /// (non-nil for `@Scoped(seed:)`).
-    private func record(_ binding: DiscoveredBinding) {
-        let scopeKey: ScopeKey? =
-            switch binding {
-            case .scopeBound(let scopeBound): scopeBound.scopeKey
-            case .provider(let provider): provider.scopeKey
-            case .aggregate: nil
-            }
-        let partition = Partition(
-            container: scopes.last?.containerName,
-            scope: scopeKey
-        )
-        allBindings[partition, default: []].append(binding)
     }
 
     // MARK: Import collection — verbatim text, no semantic analysis.
@@ -383,7 +359,8 @@ final class BindingDiscovery: SyntaxVisitor {
                 enclosingTypeNames: scopes.map(\.typeName),
                 enclosingAccessLevels: scopes.map(\.access),
                 sourcePath: sourcePath,
-                converter: converter
+                converter: converter,
+                module: module
             )
         {
             multibindingKeys.append(key)
@@ -394,7 +371,8 @@ final class BindingDiscovery: SyntaxVisitor {
                 enclosingTypeNames: scopes.map(\.typeName),
                 enclosingAccessLevels: scopes.map(\.access),
                 sourcePath: sourcePath,
-                converter: converter
+                converter: converter,
+                module: module
             )
         {
             bindingKeys.append(key)
@@ -531,6 +509,36 @@ final class BindingDiscovery: SyntaxVisitor {
 }
 
 extension BindingDiscovery {
+    /// Resolve the 1-based file/line/col of a syntax node's start
+    /// position. Used by everything that needs a `SourceLocation`.
+    private func location(of node: some SyntaxProtocol) -> SourceLocation {
+        let position = node.startLocation(converter: converter)
+        return SourceLocation(
+            file: sourcePath,
+            line: position.line,
+            column: position.column
+        )
+    }
+
+    /// Append a binding to its `(container, scope)` partition. The
+    /// container axis comes from the visitor's enclosing-scope stack; the
+    /// scope axis comes from the binding's own scope identity (non-nil for
+    /// `@Scoped(seed:)`). Bindings are already stamped with the discovery
+    /// module at construction.
+    private func record(_ binding: DiscoveredBinding) {
+        let scopeKey: ScopeKey? =
+            switch binding {
+            case .scopeBound(let scopeBound): scopeBound.scopeKey
+            case .provider(let provider): provider.scopeKey
+            case .aggregate: nil
+            }
+        let partition = Partition(
+            container: scopes.last?.containerName,
+            scope: scopeKey
+        )
+        allBindings[partition, default: []].append(binding)
+    }
+
     /// Process a primary type declaration for `@Singleton` or
     /// `@Scoped(seed:)` annotations. The two are alternatives — a
     /// type can't sensibly carry both (Swift catches it as a
@@ -616,7 +624,8 @@ extension BindingDiscovery {
                         converter: converter
                     ),
                     allowUnused: allowUnused,
-                    teardown: injectResult.teardown
+                    teardown: injectResult.teardown,
+                    originModule: module
                 )
             )
         )
@@ -695,7 +704,8 @@ extension BindingDiscovery {
                         converter: converter
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
-                    teardown: teardown.action
+                    teardown: teardown.action,
+                    originModule: module
                 )
             )
         )
@@ -782,7 +792,8 @@ extension BindingDiscovery {
                         converter: converter
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
-                    teardown: teardown.action
+                    teardown: teardown.action,
+                    originModule: module
                 )
             )
         )

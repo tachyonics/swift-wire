@@ -33,7 +33,8 @@ struct MultibindingFanInTests {
                         mapKeyExpression: atKey,
                         location: mockLocation("\(name).swift")
                     )
-                ]
+                ],
+                originModule: testModule
             )
         )
     }
@@ -57,7 +58,8 @@ struct MultibindingFanInTests {
                         keyIdentifier: key
                     )
                 ],
-                location: mockLocation("\(name).swift")
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
             )
         )
     }
@@ -68,7 +70,8 @@ struct MultibindingFanInTests {
             flavour: .collected,
             typeArguments: [element],
             location: mockLocation("\(reference).swift"),
-            accessLevel: .internal
+            accessLevel: .internal,
+            originModule: testModule
         )
     }
 
@@ -82,7 +85,8 @@ struct MultibindingFanInTests {
             flavour: .mapped,
             typeArguments: [key, value],
             location: mockLocation("\(reference).swift"),
-            accessLevel: .internal
+            accessLevel: .internal,
+            originModule: testModule
         )
     }
 
@@ -92,7 +96,8 @@ struct MultibindingFanInTests {
             flavour: .builder,
             typeArguments: [builder],
             location: mockLocation("\(reference).swift"),
-            accessLevel: .internal
+            accessLevel: .internal,
+            originModule: testModule
         )
     }
 

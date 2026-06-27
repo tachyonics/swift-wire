@@ -19,7 +19,7 @@ struct CrossScopeDiagnosticsTests {
         source: String,
         sourcePath: String
     ) -> (errors: GraphResult.ValidationErrors?, rendered: String) {
-        let discovery = discover(in: source, sourcePath: sourcePath)
+        let discovery = discover(in: source, sourcePath: sourcePath, module: testModule)
         let result = buildDependencyGraph(
             from: discovery.bindings,
             typealiases: discovery.typealiases
@@ -117,7 +117,7 @@ struct CrossScopeDiagnosticsTests {
                 @Inject var b: BService
             }
             """
-        let discovery = discover(in: source, sourcePath: "Source.swift")
+        let discovery = discover(in: source, sourcePath: "Source.swift", module: testModule)
         // Build the per-seed graph for SeedA only — include the seed
         // synthetic so the orchestrator runs realistically, but no
         // borrows (we want the missing-binding for BService to fire).
@@ -127,7 +127,8 @@ struct CrossScopeDiagnosticsTests {
             seedKey: ScopeKey(seed: "SeedA"),
             scopeBindings: aBindings,
             borrowBindings: [],
-            typealiases: discovery.typealiases
+            typealiases: discovery.typealiases,
+            module: testModule
         )
         let enriched = enrichMissingBindingsWithCrossScopeHints(
             orchestration.result,

@@ -12,7 +12,7 @@ import Testing
 struct ContributionDiscoveryTests {
     /// Contributions on the first discovered default-graph binding.
     private func contributions(in source: String) -> [Contribution] {
-        discover(in: source, sourcePath: "C.swift").bindings.first?.contributions ?? []
+        discover(in: source, sourcePath: "C.swift", module: testModule).bindings.first?.contributions ?? []
     }
 
     @Test func singletonContributionCapturesKeyReference() throws {

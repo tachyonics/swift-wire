@@ -26,7 +26,7 @@ struct DiagnosticGalleryTests {
         source: String,
         sourcePath: String
     ) -> (errors: GraphResult.ValidationErrors?, rendered: String) {
-        let discovery = discover(in: source, sourcePath: sourcePath)
+        let discovery = discover(in: source, sourcePath: sourcePath, module: testModule)
         let result = buildDependencyGraph(
             from: discovery.bindings,
             typealiases: discovery.typealiases
@@ -438,7 +438,7 @@ struct DiagnosticGalleryTests {
                 }
             }
             """
-        let discovery = discover(in: source, sourcePath: "Config.swift")
+        let discovery = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Config.swift:4:19: error:"))
         #expect(rendered.contains("'@Inject mutating func' on a struct"))
@@ -462,7 +462,7 @@ struct DiagnosticGalleryTests {
             struct Mixed {
             }
             """
-        let discovery = discover(in: source, sourcePath: "Mixed.swift")
+        let discovery = discover(in: source, sourcePath: "Mixed.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(
             rendered.contains(
@@ -485,7 +485,7 @@ struct DiagnosticGalleryTests {
                 @Inject var logger: Logger
             }
             """
-        let discovery = discover(in: source, sourcePath: "Plain.swift")
+        let discovery = discover(in: source, sourcePath: "Plain.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Plain.swift:2:5: warning:"))
         #expect(rendered.contains("@Inject on 'logger' has no effect"))
@@ -496,7 +496,7 @@ struct DiagnosticGalleryTests {
         let source = """
             @Inject let logger: Logger = Logger()
             """
-        let discovery = discover(in: source, sourcePath: "Logger.swift")
+        let discovery = discover(in: source, sourcePath: "Logger.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Logger.swift:1:1: warning:"))
         #expect(
@@ -519,7 +519,7 @@ struct DiagnosticGalleryTests {
                 }
             }
             """
-        let discovery = discover(in: source, sourcePath: "Foo.swift")
+        let discovery = discover(in: source, sourcePath: "Foo.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("warning: @Inject on an extension init has no effect"))
         #expect(rendered.contains("'Foo'"))
@@ -534,7 +534,7 @@ struct DiagnosticGalleryTests {
             private struct Hidden {
             }
             """
-        let discovery = discover(in: source, sourcePath: "Hidden.swift")
+        let discovery = discover(in: source, sourcePath: "Hidden.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Hidden.swift:2:16: error:"))
         #expect(rendered.contains("@Singleton type 'Hidden' is 'private'"))
@@ -546,7 +546,7 @@ struct DiagnosticGalleryTests {
         let source = """
             @Provides private let logger: Logger = Logger()
             """
-        let discovery = discover(in: source, sourcePath: "Logger.swift")
+        let discovery = discover(in: source, sourcePath: "Logger.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Logger.swift:1:23: error:"))
         #expect(rendered.contains("@Provides declaration 'logger' is 'private'"))
@@ -561,7 +561,7 @@ struct DiagnosticGalleryTests {
                 @Provides static let baseURL: URL = URL(string: "...")!
             }
             """
-        let discovery = discover(in: source, sourcePath: "Config.swift")
+        let discovery = discover(in: source, sourcePath: "Config.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("Config.swift:2:26: error:"))
         #expect(rendered.contains("@Provides declaration 'baseURL' is effectively 'private'"))
@@ -581,7 +581,7 @@ struct DiagnosticGalleryTests {
                 @Inject private weak var coordinator: Coordinator?
             }
             """
-        let discovery = discover(in: source, sourcePath: "View.swift")
+        let discovery = discover(in: source, sourcePath: "View.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("View.swift:3:30: error:"))
         #expect(rendered.contains("@Inject weak var 'coordinator' is 'private'"))
@@ -667,7 +667,7 @@ struct DiagnosticGalleryTests {
                 @Inject private func receive(data: Data) {}
             }
             """
-        let discovery = discover(in: source, sourcePath: "View.swift")
+        let discovery = discover(in: source, sourcePath: "View.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("View.swift:3:26: error:"))
         #expect(rendered.contains("@Inject func 'receive' is 'private'"))
@@ -682,7 +682,7 @@ struct DiagnosticGalleryTests {
                 @Inject public private(set) weak var coordinator: Coordinator?
             }
             """
-        let discovery = discover(in: source, sourcePath: "View.swift")
+        let discovery = discover(in: source, sourcePath: "View.swift", module: testModule)
         let rendered = renderDiagnostics(discovery.warnings)
         #expect(rendered.contains("View.swift:3:42: error:"))
         #expect(rendered.contains("@Inject weak var 'coordinator' setter is 'private(set)'"))

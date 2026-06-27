@@ -9,21 +9,21 @@ import Testing
 @Suite("TeardownDiscovery")
 struct TeardownDiscoveryTests {
     private func providers(in source: String, _ path: String = "T.swift") -> [DiscoveredProvider] {
-        discover(in: source, sourcePath: path).bindings.compactMap {
+        discover(in: source, sourcePath: path, module: testModule).bindings.compactMap {
             if case .provider(let provider) = $0 { return provider }
             return nil
         }
     }
 
     private func singletons(in source: String, _ path: String = "T.swift") -> [DiscoveredScopeBoundType] {
-        discover(in: source, sourcePath: path).bindings.compactMap {
+        discover(in: source, sourcePath: path, module: testModule).bindings.compactMap {
             if case .scopeBound(let scopeBound) = $0 { return scopeBound }
             return nil
         }
     }
 
     private func errors(in source: String, _ path: String = "T.swift") -> [Diagnostic] {
-        discover(in: source, sourcePath: path).warnings.filter { $0.severity == .error }
+        discover(in: source, sourcePath: path, module: testModule).warnings.filter { $0.severity == .error }
     }
 
     // MARK: - Owned-type member form
@@ -76,7 +76,7 @@ struct TeardownDiscoveryTests {
             """
         // Scoped types route into a seed partition, so pull the binding
         // straight from `allBindings`.
-        let scoped = discover(in: source, sourcePath: "T.swift").allBindings
+        let scoped = discover(in: source, sourcePath: "T.swift", module: testModule).allBindings
             .values.flatMap { $0 }
             .compactMap { binding -> DiscoveredScopeBoundType? in
                 if case .scopeBound(let scopeBound) = binding { return scopeBound }
@@ -284,7 +284,8 @@ struct TeardownDiscoveryTests {
                 teardown: TeardownAction(
                     kind: .member(methodName: "teardown", isAsync: true, isThrowing: true),
                     location: mockLocation("Pool.swift")
-                )
+                ),
+                originModule: testModule
             )
         )
         let provider = DiscoveredBinding.provider(
@@ -298,7 +299,8 @@ struct TeardownDiscoveryTests {
                 teardown: TeardownAction(
                     kind: .action(expression: "{ (c: HTTPClient) in try await c.shutdown() }"),
                     location: mockLocation("Client.swift")
-                )
+                ),
+                originModule: testModule
             )
         )
         let output = renderWireGraph(imports: [], topologicalOrder: [scopeBound, provider])

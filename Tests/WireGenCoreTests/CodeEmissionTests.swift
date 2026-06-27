@@ -24,7 +24,8 @@ struct CodeEmissionTests {
                 typeKind: "struct",
                 genericParameterNames: [],
                 dependencies: deps,
-                location: mockLocation("\(name).swift")
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
             )
         )
     }
@@ -40,7 +41,8 @@ struct CodeEmissionTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                location: mockLocation("\(accessPath).swift")
+                location: mockLocation("\(accessPath).swift"),
+                originModule: testModule
             )
         )
     }
@@ -65,7 +67,8 @@ struct CodeEmissionTests {
                 form: .function,
                 dependencies: deps,
                 genericParameterNames: [],
-                location: mockLocation("\(accessPath).swift")
+                location: mockLocation("\(accessPath).swift"),
+                originModule: testModule
             )
         )
     }
@@ -99,7 +102,8 @@ struct CodeEmissionTests {
                 genericParameterNames: [],
                 dependencies: strong,
                 location: mockLocation("\(name).swift"),
-                memberInjections: memberInjections
+                memberInjections: memberInjections,
+                originModule: testModule
             )
         )
     }
@@ -1118,7 +1122,8 @@ struct CodeEmissionTests {
                     line: line,
                     column: column
                 ),
-                keyIdentifier: key
+                keyIdentifier: key,
+                originModule: testModule
             )
         )
     }
@@ -1153,7 +1158,8 @@ struct CodeEmissionTests {
                         keyIdentifier: depKey
                     )
                 ],
-                location: mockLocation("\(name).swift")
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
             )
         )
     }
@@ -1360,7 +1366,8 @@ struct CodeEmissionTests {
                 dependencies: [],
                 genericParameterNames: [],
                 location: mockLocation("DB.swift"),
-                keyIdentifier: "Database.primary"
+                keyIdentifier: "Database.primary",
+                originModule: testModule
             )
         )
         let unkeyedDB: DiscoveredBinding = .provider(
@@ -1371,7 +1378,8 @@ struct CodeEmissionTests {
                 dependencies: [],
                 genericParameterNames: [],
                 location: mockLocation("DB.swift"),
-                keyIdentifier: nil
+                keyIdentifier: nil,
+                originModule: testModule
             )
         )
         let output = renderWireGraph(
@@ -1403,7 +1411,8 @@ struct CodeEmissionTests {
                 dependencies: [],
                 genericParameterNames: [],
                 location: mockLocation("DB.swift"),
-                keyIdentifier: "Module.shared.primary"
+                keyIdentifier: "Module.shared.primary",
+                originModule: testModule
             )
         )
         let output = renderWireGraph(
@@ -1428,7 +1437,8 @@ struct CodeEmissionTests {
                 dependencies: [],
                 genericParameterNames: [],
                 location: mockLocation("DB.swift"),
-                keyIdentifier: "alternate"
+                keyIdentifier: "alternate",
+                originModule: testModule
             )
         )
         let output = renderWireGraph(
@@ -1452,7 +1462,8 @@ struct CodeEmissionTests {
                 dependencies: [],
                 genericParameterNames: [],
                 location: mockLocation("DB.swift"),
-                keyIdentifier: "Database.primary"
+                keyIdentifier: "Database.primary",
+                originModule: testModule
             )
         )
         let consumer: DiscoveredBinding = .scopeBound(
@@ -1469,7 +1480,8 @@ struct CodeEmissionTests {
                         keyIdentifier: "Database.primary"
                     )
                 ],
-                location: mockLocation("UserRepo.swift")
+                location: mockLocation("UserRepo.swift"),
+                originModule: testModule
             )
         )
         let output = renderWireGraph(

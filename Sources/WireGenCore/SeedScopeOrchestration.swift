@@ -89,7 +89,8 @@ package func orchestrateSeedScope(
     parentGraphType: String = "_WireGraph",
     typealiases: [DiscoveredTypealias],
     multibindingKeys: [DiscoveredMultibindingKey] = [],
-    resultBuilders: [DiscoveredResultBuilder] = []
+    resultBuilders: [DiscoveredResultBuilder] = [],
+    module: String
 ) -> SeedScopeOrchestration {
     let seedSuffix = sanitizeIdentifier(seedKey.seed)
     let identifierSuffix: String
@@ -99,7 +100,7 @@ package func orchestrateSeedScope(
         identifierSuffix = seedSuffix
     }
 
-    let seedBinding = syntheticSeedBinding(seedTypeExpression: seedKey.seed)
+    let seedBinding = syntheticSeedBinding(seedTypeExpression: seedKey.seed, module: module)
 
     let combined = scopeBindings + [seedBinding] + borrowBindings
     // Multibindings aggregate from the scope's own contributors (a
@@ -196,7 +197,7 @@ package func wireGraphParameterInternalName(forType parentGraphType: String) -> 
 /// bind from the parameter to a same-named local; the same-name
 /// shadow short-circuits emission's `let X = X` skip so no line is
 /// actually written, and bare references resolve to the parameter.
-private func syntheticSeedBinding(seedTypeExpression: String) -> DiscoveredBinding {
+private func syntheticSeedBinding(seedTypeExpression: String, module: String) -> DiscoveredBinding {
     .provider(
         DiscoveredProvider(
             boundType: seedTypeExpression,
@@ -204,7 +205,8 @@ private func syntheticSeedBinding(seedTypeExpression: String) -> DiscoveredBindi
             form: .property,
             dependencies: [],
             genericParameterNames: [],
-            location: SourceLocation(file: "<synthetic>", line: 0, column: 0)
+            location: SourceLocation(file: "<synthetic>", line: 0, column: 0),
+            originModule: module
         )
     )
 }
@@ -243,6 +245,7 @@ private func syntheticBorrowBinding(
         dependencies: [],
         genericParameterNames: [],
         location: singleton.location,
-        keyIdentifier: singleton.keyIdentifier
+        keyIdentifier: singleton.keyIdentifier,
+        originModule: singleton.originModule
     )
 }

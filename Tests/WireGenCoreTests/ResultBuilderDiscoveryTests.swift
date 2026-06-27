@@ -8,7 +8,7 @@ import Testing
 @Suite("Result builder discovery")
 struct ResultBuilderDiscoveryTests {
     private func builders(in source: String) -> [DiscoveredResultBuilder] {
-        discover(in: source, sourcePath: "B.swift").resultBuilders
+        discover(in: source, sourcePath: "B.swift", module: testModule).resultBuilders
     }
 
     @Test func buildBlockResultTypeIsCaptured() throws {

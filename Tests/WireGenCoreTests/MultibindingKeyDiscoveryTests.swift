@@ -11,7 +11,7 @@ import Testing
 @Suite("Multibinding key discovery")
 struct MultibindingKeyDiscoveryTests {
     private func keys(in source: String) -> [DiscoveredMultibindingKey] {
-        discover(in: source, sourcePath: "Keys.swift").multibindingKeys
+        discover(in: source, sourcePath: "Keys.swift", module: testModule).multibindingKeys
     }
 
     @Test func collectedKeyOnExtensionCapturesFlavourTypeAndReference() throws {

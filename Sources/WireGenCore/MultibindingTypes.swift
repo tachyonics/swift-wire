@@ -47,6 +47,9 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
     /// `allowUnused: true` on the key declaration — silences the
     /// dead-/empty-multibinding warning.
     package let allowUnused: Bool
+    /// The module this key was discovered in. Used for cross-module key
+    /// references (7f).
+    package let originModule: String
 
     package init(
         keyReference: String,
@@ -54,7 +57,8 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
         typeArguments: [String],
         location: SourceLocation,
         accessLevel: AccessLevel,
-        allowUnused: Bool = false
+        allowUnused: Bool = false,
+        originModule: String
     ) {
         self.keyReference = keyReference
         self.flavour = flavour
@@ -62,6 +66,7 @@ package struct DiscoveredMultibindingKey: Sendable, Equatable {
         self.location = location
         self.accessLevel = accessLevel
         self.allowUnused = allowUnused
+        self.originModule = originModule
     }
 }
 
@@ -89,6 +94,10 @@ package struct DiscoveredAggregate: Sendable {
     /// The key declaration's location — what aggregate-level diagnostics
     /// point at.
     package let location: SourceLocation
+    /// The module the aggregate logically lives in — inherited from the
+    /// key declaration it's built from (the fan-in pass passes
+    /// `key.originModule`).
+    package let originModule: String
 
     package init(
         keyReference: String,
@@ -96,7 +105,8 @@ package struct DiscoveredAggregate: Sendable {
         flavour: MultibindingKeyFlavour,
         builderTypeName: String? = nil,
         contributors: [AggregateContributor],
-        location: SourceLocation
+        location: SourceLocation,
+        originModule: String
     ) {
         self.keyReference = keyReference
         self.collectionType = collectionType
@@ -104,6 +114,7 @@ package struct DiscoveredAggregate: Sendable {
         self.builderTypeName = builderTypeName
         self.contributors = contributors
         self.location = location
+        self.originModule = originModule
     }
 }
 

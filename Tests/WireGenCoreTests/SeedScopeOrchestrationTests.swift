@@ -26,7 +26,8 @@ struct SeedScopeOrchestrationTests {
                 genericParameterNames: [],
                 dependencies: deps,
                 location: mockLocation("\(name).swift"),
-                scopeKey: ScopeKey(seed: seed)
+                scopeKey: ScopeKey(seed: seed),
+                originModule: testModule
             )
         )
     }
@@ -39,7 +40,8 @@ struct SeedScopeOrchestrationTests {
                 form: .property,
                 dependencies: [],
                 genericParameterNames: [],
-                location: mockLocation("\(name).swift")
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
             )
         )
     }
@@ -59,7 +61,8 @@ struct SeedScopeOrchestrationTests {
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
             borrowBindings: [],
-            typealiases: []
+            typealiases: [],
+            module: testModule
         )
         let order = try #require(orchestration.result.outcome.topologicalOrder)
         // Order: seed first (no deps), then RequestLogger (depends on seed).
@@ -83,7 +86,8 @@ struct SeedScopeOrchestrationTests {
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
             borrowBindings: syntheticSingletonBorrowBindings(from: [singleton]),
-            typealiases: []
+            typealiases: [],
+            module: testModule
         )
         let order = try #require(orchestration.result.outcome.topologicalOrder)
         // Order: Logger borrow + seed (both no deps), then RequestLogger.
@@ -107,7 +111,8 @@ struct SeedScopeOrchestrationTests {
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
             borrowBindings: [],
-            typealiases: []
+            typealiases: [],
+            module: testModule
         )
         let errors = try #require(orchestration.result.outcome.validationErrors)
         #expect(!errors.missingBindings.isEmpty)
@@ -122,7 +127,8 @@ struct SeedScopeOrchestrationTests {
             seedKey: ScopeKey(seed: "TenantSeed<String>"),
             scopeBindings: [],
             borrowBindings: [],
-            typealiases: []
+            typealiases: [],
+            module: testModule
         )
         #expect(orchestration.identifierSuffix == "TenantSeedOfString")
         #expect(orchestration.seedTypeExpression == "TenantSeed<String>")
@@ -153,7 +159,8 @@ struct SeedScopeOrchestrationTests {
                 inWireGraphOfType: containerGraphType
             ),
             parentGraphType: containerGraphType,
-            typealiases: []
+            typealiases: [],
+            module: testModule
         )
         #expect(orchestration.identifierSuffix == "TestContainer_HBRequestSeed")
         #expect(orchestration.parentGraphType == containerGraphType)
@@ -185,7 +192,8 @@ struct SeedScopeOrchestrationTests {
             scopeBindings: [],
             borrowBindings: [],
             parentGraphType: "_TestContainerWireGraph",
-            typealiases: []
+            typealiases: [],
+            module: testModule
         )
         // Replace the result with one that has a different
         // topological order so we can assert the new value is what's
@@ -219,7 +227,8 @@ struct SeedScopeOrchestrationTests {
             seedKey: ScopeKey(seed: "HBRequestSeed"),
             scopeBindings: [scope],
             borrowBindings: syntheticSingletonBorrowBindings(from: [unused]),
-            typealiases: []
+            typealiases: [],
+            module: testModule
         )
         let order = try #require(orchestration.result.outcome.topologicalOrder)
         #expect(order.contains { $0.boundType == "HTTPClient" })
