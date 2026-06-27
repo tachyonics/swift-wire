@@ -156,13 +156,13 @@ struct TaskCluster {
         let config = ConfigReader(provider: EnvironmentVariablesProvider())
 
         try await Wire.hummingbird()                // WireHummingbird is implied by the builder
-            .activating(WireOpenAPI.self)           // pulls in @RoutedBy support
             .port(config.int(forKey: "HTTP_PORT", default: 8080))
             .health("/health")
             .run()
         // TaskController and DynamoDBTaskRepository are picked up automatically
-        // (sibling targets in the same Package.swift); @RoutedBy contributes the
-        // `controller.registerHandlers(on:)` call once WireOpenAPI is activated.
+        // (sibling targets in the same Package.swift); WireOpenAPI's @RoutedBy
+        // support is composed because WireOpenAPI is a dependency of this target
+        // — depending on a Wire-aware library is what activates it, no call needed.
     }
 }
 ```
@@ -689,10 +689,10 @@ A type can have both if it has both responsibilities, but most are one or the ot
 
 ### Multi-module composition
 
-Wire-aware library packages — `WireSQS`, `WireOpenAPI`, internal company packages shipping shared bindings — declare their `@Singleton`s, `@Provides`, and `@Contributes` like any other module. To bring them into the consuming target's graph, the consumer **activates** the library at the entry point:
+Wire-aware library packages — `WireSQS`, `WireOpenAPI`, internal company packages shipping shared bindings — declare their `@Singleton`s, `@Provides`, and `@Contributes` like any other module, plus a one-line `_WireExports.swift` marker file that opts them into composition. A consumer **activates** such a library simply by **depending on it** in the consuming target — the dependency *is* the activation:
 
 ```swift
-// In WireSQS package
+// In WireSQS package — opted into composition by shipping `_WireExports.swift`.
 @Singleton
 public struct SQSClient {
     @Inject public init(url: URL) async throws { ... }
@@ -701,70 +701,56 @@ public struct SQSClient {
     public func teardown() async throws { ... }
 }
 
-// In task-cluster
-import WireSQS
+// In task-cluster's Package.swift — depending on a Wire-aware library activates it.
+.target(
+    name: "TaskCluster",
+    dependencies: [.product(name: "WireSQS", package: "wire-sqs")],
+    plugins: [.plugin(name: "WireBuildPlugin", package: "swift-wire")]
+)
 
-@main
-struct TaskCluster {
-    static func main() async throws {
-        try await Wire.hummingbird()
-            .activating(WireSQS.self)             // pulls WireSQS's bindings into the graph
-            .activating(WireOpenAPI.self)
-            .port(8080)
-            .run()
-    }
-}
-
+// In task-cluster source — no activation directive; the dependency is the activation.
 @Singleton
 struct WorkerService: Service {
     @Inject var sqs: SQSClient                    // resolves to WireSQS.SQSClient
 }
 ```
 
-Activation is **all-or-nothing per library**: an activated library contributes every one of its bindings — `@Singleton`s available for injection, `@Provides` available, `@Contributes` joining the relevant collections, adapter-annotated types having their `_wireRegister` called. A non-activated library contributes none. Its Swift symbols are still importable (use its types as parameters, conform to its protocols, etc. — that's what `import` always does), but `@Inject var client: SQSClient` from an unactivated library is a compile error: "no binding for `SQSClient`; activate `WireSQS` to use its bindings."
+**Why the dependency, not a call-site directive.** Activation is a *compile-time* fact: the build plugin must know the activated set before it generates anything, so it can validate the whole graph and collate multibindings at build time (the plugin emits exactly one `_WireGraph` per target — there is one activation set per target, not a per-bootstrap-call choice). The manifest dependency list is where that fact already lives, name-checked by SPM. Both halves of activation are explicit and visible: your `Package.swift` (which libraries you pulled in) and each library's `_WireExports.swift` (its opt-in to being composable). Nothing transitive or hidden activates — only the libraries you directly named.
 
-The all-or-nothing rule prevents the silent failure mode of partial activation — taking a library's `@Singleton` while its `@Contributes` partner is invisible, with the type system blessing a graph that's missing behavior the library was designed to provide as a coherent unit. A library is a unit; you take all of it or none of it.
+Activation is **all-or-nothing per library**: an activated library contributes every one of its bindings — `@Singleton`s available for injection, `@Provides` available, `@Contributes` joining the relevant collections, adapter-annotated types having their `_wireRegister` called. A library is a unit; depending on it takes all of it. This prevents the silent failure mode of partial activation — taking a library's `@Singleton` while its `@Contributes` partner is invisible, with the type system blessing a graph that's missing behavior the library was designed to provide as a coherent unit.
 
-#### Same-package vs external-package targets
+#### Same-package, external, and transitive
 
-Sibling library targets within the same `Package.swift` (task-cluster's `TaskClusterApp`, `TaskClusterDynamoDBModel`, etc.) are auto-activated — the package author intends all bindings together. Targets from external packages (declared as `.package(url:)`) require explicit `.activating(...)` at the consumer's entry point.
+The rule is uniform: **you activate the Wire-aware libraries your target directly depends on.**
 
-The rule: same `Package.swift` = same project = activated together. External package = third-party = explicit activation required.
+- **Same-package siblings** and **external packages** are treated identically — a direct dependency is a direct dependency, whether declared as a sibling `.target` or a `.product` from `.package(url:)`.
+- **Transitive** dependencies (a dependency of a dependency, not in your target's own `dependencies`) are *not* auto-activated. To compose a transitive library's bindings you add it to your own `dependencies` — which you must do anyway to `import` and reference its types. So "transitive activation is explicit" falls out for free: only what you directly depend on is in scope, and your `Package.swift` is always a complete statement of what's activated.
 
-#### Transitive activation is explicit
-
-If `WireOpenAPI` references bindings declared in `WireHummingbird`, the consumer activates both:
-
-```swift
-.activating(WireHummingbird.self)
-.activating(WireOpenAPI.self)
-```
-
-The build plugin detects missing transitive activations at compile time: if `WireOpenAPI`'s `_wireRegister` parameter list references `Router<BasicRequestContext>` (a binding declared in `WireHummingbird`) and `WireHummingbird` isn't activated, the diagnostic names the missing activation with a fix-it suggesting `.activating(WireHummingbird.self)`. The consumer's activation list at the entry point is always a complete statement of what's in scope — no hidden transitive activations.
+The build plugin still detects *missing* transitive activations at compile time: if an activated `WireOpenAPI` references `Router<BasicRequestContext>` (a binding declared in `WireHummingbird`) and your target doesn't depend on `WireHummingbird`, that's a missing-binding diagnostic naming the library, with a fix-it suggesting you add the `WireHummingbird` dependency.
 
 #### Cross-library validation
 
-Within the activated set, validation is the same as in-target: every `@Inject` must be satisfied somewhere across the union of activated libraries plus the consumer's own bindings. If `WireSQS.SQSClient` needs a `URL` and the consumer hasn't bound one, the diagnostic names the library and the missing binding. If two activated libraries both bind `Cache`, the consumer disambiguates with a key. `@Contributes(to:)` collections union across activated libraries; a `CollectedKey<any Service>` declared anywhere collects contributors from the activated set.
+Within the activated set, validation is the same as in-target: every `@Inject` must be satisfied somewhere across the union of activated libraries plus the consumer's own bindings. If `WireSQS.SQSClient` needs a `URL` and the consumer hasn't bound one, the diagnostic names the library and the missing binding. If two activated libraries both bind `Cache`, the consumer disambiguates with a key. `@Contributes(to:)` collections union across activated libraries; a `CollectedKey<any Service>` declared anywhere collects contributors from the activated set. A binding referenced across a module boundary must be `public` (or `package` within a package) — the cross-module visibility threshold; the in-module floor stays `internal`.
 
 #### How it works mechanically
 
-The build plugin running on the consuming target enumerates dependency targets via the SPM plugin context, then identifies Wire-aware libraries by the presence of a `_WireExports.swift` marker file in their sources — written manually in M1 (a one-line stub), generated by the library's own Wire build plugin in M6. M0 confirmed that `PackagePlugin` doesn't expose plugin-usage information for dependency targets, so the marker file is the committed discovery mechanism rather than the SPM-context-inspection path that would otherwise be cleaner.
+The build plugin running on the consuming target enumerates its direct dependency targets via the SPM plugin context, then identifies Wire-aware libraries by the presence of a `_WireExports.swift` marker file in their sources — written manually in M1 (a one-line stub), generated by the library's own Wire build plugin in M6a. M0 confirmed that `PackagePlugin` doesn't expose plugin-usage information for dependency targets, so the marker file is the committed discovery mechanism rather than the SPM-context-inspection path that would otherwise be cleaner.
 
-For each activated Wire-aware library, the plugin reads the library's source files (M1: re-parse; M6: compile-time manifest) and aggregates `@Singleton`/`@Provides`/`@Contributes` declarations and adapter-annotated types into the graph for validation. Non-activated libraries are skipped entirely — their bindings never reach the validator and never appear in the generated bootstrap.
+For each activated Wire-aware dependency, the plugin reads the library's source files (M1: re-parse; M6a: a compile-time manifest the library emits) and aggregates `@Singleton`/`@Provides`/`@Contributes` declarations and adapter-annotated types into **one merged graph** for validation and codegen. There is no runtime graph composition — the generated `_WireGraph` is a single flat graph spanning the consumer and its activated libraries, and Wire's "runtime is just stored properties" invariant holds across module boundaries exactly as within one module. Non-activated libraries are skipped entirely.
+
+**Eager construction and the reachability optimization.** In M1 every binding in the merged graph is constructed at bootstrap — including a library binding nothing in the consumer reaches. That's correct but not free: a large library you depend on for a few bindings still constructs all its singletons. M6b adds compile-time **reachability pruning** — only bindings reachable from the home package's roots are constructed, the rest stripped before codegen — so depending on a library costs only what you use. Until then, an expensive library binding can opt into deferral with `Lazy<T>`.
 
 #### Test-only substitution
 
-A test target activates the libraries it needs — typically a mix of production and test variants:
+A test target depends on the libraries it needs — typically a mix of production and test variants:
 
 ```swift
-// In test entry point
-try await Wire.hummingbird()
-    .activating(WireMockSQS.self)        // mock instead of WireSQS
-    .activating(WireOpenAPI.self)
-    .run()
+// In the test target's Package.swift dependencies:
+.product(name: "WireMockSQS", package: "wire-mock-sqs"),   // mock instead of WireSQS
+.product(name: "WireOpenAPI", package: "wire-openapi"),
 ```
 
-The production library isn't activated, so its bindings are absent from the test graph. If a test mistakenly activates both `WireSQS` and `WireMockSQS`, that's a compile error from the strict-on-ambiguity rule (two libraries binding `SQSClient`); either disambiguate with keys or activate only one.
+The production library isn't depended on, so its bindings are absent from the test graph. If a test target depends on both `WireSQS` and `WireMockSQS`, that's a compile error from the strict-on-ambiguity rule (two libraries binding `SQSClient`); depend on only one, or disambiguate with keys.
 
 ### Concurrency and isolation
 
@@ -890,7 +876,7 @@ Wire core ships the data; tooling builds on it. A `wire graph` CLI, IDE plugins,
 - **No fine-grained binding override across containers.** When you select a `@Container` at the entry point, it's the whole graph for that run, not an overlay on the default. "Selectively swap one binding while keeping the rest" is the next ergonomic ask post-1.0, but introducing override semantics is a big enough commitment that it stays out until there's a concrete use case it's the only answer to.
 - **No `~Copyable` injection through 0.x.** All bindings are `Copyable`. Wrap move-only resources in a Sendable reference type that manages scoped access internally.
 - **No container-level isolation enforcement.** Swift's per-type isolation handles correctness; container-level policies (`@Container(isolation:)`) are a deliberately deferred direction, addable post-1.0 without breaking existing code.
-- **No implicit library bindings.** Adding a Wire-aware package to your dependencies makes its symbols importable but does *not* register its bindings or run any of its services. External libraries are activated only when the consumer explicitly calls `.activating(LibraryName.self)` at the entry point. This is a deliberate non-goal — Spring's classpath autoconfig surprise (adding a JAR pulls in beans that start side-effecting things) is exactly what this rule prevents.
+- **No *transitive* or hidden library activation.** Depending on a Wire-aware library *directly* composes its bindings (the dependency is the activation), but only for the libraries you name in your own target's `dependencies` — never a dependency-of-a-dependency, and never from a bare `import`. So the surprise Wire rules out is Spring's classpath autoconfig (a JAR transitively dragged onto the classpath starts side-effecting beans): here the activated set is exactly your manifest's direct dependencies, visible in one place, and any binding conflict it introduces is a compile error (strict-on-ambiguity), not a silent runtime behavior change. A way to depend-without-activating (use a library's plain types but not its wiring) is a deferred refinement, not an M1 feature.
 
 ---
 
@@ -921,12 +907,14 @@ Library milestones are tied to what task-cluster needs next, not to a fixed cale
   - Spike 2 (type-level macro walking method-level annotations): PASS. M5's `WireMVC` design is mechanically viable.
   - Spike 3 (annotation argument extraction): PASS. SwiftSyntax preserves type-expression structure verbatim, including nested- and multi-argument generics. M1 must normalise interior whitespace before binding lookup so `Router<X, Y>` and `Router<X,Y>` resolve to the same binding.
   - Spike 4 (swift-syntax pinning): PASS. `from: "601.0.0"` resolves to swift-syntax 601.0.1 identically on both platforms. Bumps to 602.x are deliberate per-Swift-release maintenance events.
-- **M1: core graph.** Macros (`@Singleton`, `@Scoped`, `@Inject`, `@Container`, `@Provides`, `@Contributes`, `@Teardown`), runtime types (`Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`), build plugin, graph validation (including cross-scope storage checks), the adapter-annotation contract v1 (designed for all three annotation forms, versioned for future evolution), multi-module composition (full cross-target validation by re-parsing dependency sources at build time; the manifest-based optimization is deferred to M6), build-time graph JSON dump (`_WireGraph.json` for tooling/CI/IDE consumption), Linux CI. task-cluster's manual wiring switches to Wire-driven construction; framework integration stays manual at this point. No public 0.x tag yet.
+- **M1: core graph.** Macros (`@Singleton`, `@Scoped`, `@Inject`, `@Container`, `@Provides`, `@Contributes`, `@Teardown`), runtime types (`Lazy<T>`, `BindingKey<T>`, `CollectedKey<T>`, `MappedKey<K, V>`, `BuilderKey<B>`), build plugin, graph validation (including cross-scope storage checks), the adapter-annotation contract v1 (designed for all three annotation forms, versioned for future evolution), multi-module composition (activation = depending on a Wire-aware library; full cross-target validation by re-parsing dependency sources at build time and merging into one graph; the manifest and reachability-pruning optimizations are deferred to M6a/M6b), build-time graph JSON dump (`_WireGraph.json` for tooling/CI/IDE consumption), Linux CI. task-cluster's manual wiring switches to Wire-driven construction; framework integration stays manual at this point. No public 0.x tag yet.
 - **M2: `WireHummingbird` adapter.** Lands when task-cluster needs first-class request-scoped observability — likely a request-id-tagged logger or the equivalent for tracing. Includes the per-request resolver, `@WebSocketRoute` as the first ship-worthy adapter annotation (type-level form), the first concrete consumer of `CollectedKey` (the application's `[any Service]` lifecycle list), and the runtime `Resolver.introspect()` API plus an `/admin/wiring` example endpoint demonstrating it.
 - **M3: `WireOpenAPI` adapter (`@RoutedBy`).** Lands when task-cluster's existing `TaskController.registerHandlers(on:)` call moves into the adapter-annotation system. Auto-wires generated `APIProtocol` conformances. The headline differentiator.
 - **M4: lifecycle orchestration.** Lands when task-cluster gets a resource needing orderly shutdown — most likely the first time `AsyncHTTPClient` or a real DynamoDB client (vs the in-memory one) ships in the example. The `@Teardown` annotation exists from M1 (recognised and recorded, but inert); M4 is when the build plugin starts emitting teardown calls in reverse dependency order at scope teardown, integrating with swift-service-lifecycle for app-scope signal handling and Hummingbird's request lifecycle for request-scope teardown. Defines failure semantics (init failure tears down already-initialized bindings in reverse order; teardown failures are collected and logged).
 - **M5: `WireMVC` adapter.** Lands when task-cluster has an actual use case for inline route declarations — likely an internal admin endpoint, or as a deliberate content piece contrasting `@RoutedBy`. The first type-level-with-member-recognition adapter; if the contract holds up here, it'll hold up for almost anything.
-- **M6: multi-module composition optimization.** Lands when re-parsing dependency sources at build time becomes a performance problem (typically once the dependency graph is large enough that build-time cost is felt). Each library's build plugin generates a per-library compile-time manifest of its bindings; the consumer reads manifests instead of re-parsing source. Surface contract unchanged; optimization invisible to users. Multi-module composition itself ships in M1 — this milestone is purely the perf optimization.
+- **M6: multi-module composition optimizations.** Multi-module composition itself ships in M1; M6 is purely two perf optimizations, each landing when its cost is felt. Both keep the surface contract unchanged and are invisible to users.
+  - **M6a — manifest-based discovery.** Lands when re-parsing dependency sources at build time becomes a build-time performance problem (a large dependency graph). Each library's build plugin emits a per-library compile-time manifest of its bindings; the consumer reads manifests instead of re-parsing source. The `_WireExports.swift` marker (a hand-written stub in M1) becomes the generated manifest.
+  - **M6b — reachability pruning.** Lands when *eager construction* becomes a runtime/startup cost — depending on a library constructs all its singletons even if the consumer reaches only a few. The plugin computes the bindings reachable from the home package's roots (`allowUnused` marks a root, and only in the home package) and strips the rest before codegen, so a dependency costs only what's used. Until then, an expensive library binding opts into deferral with `Lazy<T>`.
 - **Post-1.0:** custom scopes, container composition / fine-grained overrides, `WireVapor` if a Vapor variant of task-cluster materialises, anything else that came out of real use.
 
 The ordering assumes task-cluster's roughly-expected trajectory; it'll shift if the trajectory does.
