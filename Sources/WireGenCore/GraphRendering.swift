@@ -86,11 +86,19 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
 private func duplicateBindingLines(_ duplicate: DuplicateBinding) -> [String] {
     guard let primary = duplicate.bindings.first else { return [] }
     let typeSlot = describeTypeSlot(boundType: duplicate.boundType, key: duplicate.keyIdentifier)
+    // When the conflicting bindings come from different modules, name the
+    // module on each — a cross-library ambiguity (two activated libraries
+    // binding the same type) is otherwise hard to place. Same-module
+    // duplicates keep the original wording (the suffix is empty).
+    let crossModule = Set(duplicate.bindings.map(\.originModule)).count > 1
+    func moduleSuffix(_ binding: DiscoveredBinding) -> String {
+        crossModule ? " (module '\(binding.originModule)')" : ""
+    }
     var lines = [
-        "\(primary.location.formattedPrefix): error: type \(typeSlot) has multiple bindings; the dependency graph is ambiguous"
+        "\(primary.location.formattedPrefix): error: type \(typeSlot) has multiple bindings; the dependency graph is ambiguous\(moduleSuffix(primary))"
     ]
     for binding in duplicate.bindings.dropFirst() {
-        lines.append("\(binding.location.formattedPrefix): note: also bound here")
+        lines.append("\(binding.location.formattedPrefix): note: also bound here\(moduleSuffix(binding))")
     }
     if duplicate.keyIdentifier == nil {
         lines.append(
