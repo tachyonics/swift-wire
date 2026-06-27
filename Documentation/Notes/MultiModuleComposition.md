@@ -59,6 +59,15 @@ growing a collection you consume, which is the intended cross-module
 multibinding feature and is visible in the `_WireGraph.json` dump. A way
 to depend-without-activate (types-only) is a deferred refinement.
 
+Guidance for that case: a multibinding key is a *global extension point*,
+so injecting a key you don't own means any activated package may
+contribute to it (the collection grows with your dependency set). If you
+need a known, complete contributor set, declare the key in a target you
+control — most strongly the leaf app target, which nothing depends on, so
+only your own code can reach it. (Order-sensitive collections also need
+`withOrder:`; cross-module element order is otherwise unspecified — see
+the `withOrder:` cross-module note below.)
+
 ## Deferred optimizations (M6a / M6b)
 
 Two perf optimizations are split out of M1; each keeps the surface
