@@ -49,25 +49,38 @@ struct WireBuildPlugin: BuildToolPlugin {
         )
         let wireGen = try context.tool(named: "WireGen")
 
-        // Cross-module composition (7c): re-parse the sources of every
-        // same-package, Wire-aware dependency so their bindings compose
-        // into this target's graph. A dependency opts in by including a
-        // `_WireExports.swift` marker file. External-package dependencies
-        // and the explicit `.activating(...)` selection land in 7d —
-        // same-package siblings auto-activate.
-        let samePackageTargetIDs = Set(context.package.targets.map(\.id))
+        // Cross-module composition (7d): activation is the dependency.
+        // Re-parse the sources of every Wire-aware library this target
+        // *directly* depends on so their bindings compose into this
+        // target's graph. A library opts in with a `_WireExports.swift`
+        // marker. The rule is uniform — same-package siblings (`.target`)
+        // and external-package products (`.product`) both activate by
+        // direct dependency; transitive dependencies are not
+        // auto-activated. See `Documentation/Notes/MultiModuleComposition.md`.
         var dependencyGroups: [(module: String, sources: [URL])] = []
-        for dependency in target.recursiveTargetDependencies {
-            guard
-                samePackageTargetIDs.contains(dependency.id),
-                let dependencyModule = dependency.sourceModule
-            else { continue }
-            let dependencySources = dependencyModule.sourceFiles(withSuffix: "swift").map(\.url)
-            let isWireAware = dependencySources.contains {
-                $0.lastPathComponent == "_WireExports.swift"
+        var seenModules: Set<String> = []
+        for dependency in target.dependencies {
+            let dependencyTargets: [Target]
+            switch dependency {
+            case .target(let dependencyTarget):
+                dependencyTargets = [dependencyTarget]
+            case .product(let dependencyProduct):
+                dependencyTargets = dependencyProduct.targets
+            @unknown default:
+                dependencyTargets = []
             }
-            guard isWireAware else { continue }
-            dependencyGroups.append((dependencyModule.moduleName, dependencySources))
+            for dependencyTarget in dependencyTargets {
+                guard let dependencyModule = dependencyTarget.sourceModule,
+                    !seenModules.contains(dependencyModule.moduleName)
+                else { continue }
+                let dependencySources = dependencyModule.sourceFiles(withSuffix: "swift").map(\.url)
+                let isWireAware = dependencySources.contains {
+                    $0.lastPathComponent == "_WireExports.swift"
+                }
+                guard isWireAware else { continue }
+                seenModules.insert(dependencyModule.moduleName)
+                dependencyGroups.append((dependencyModule.moduleName, dependencySources))
+            }
         }
 
         let allInputFiles = swiftSources + dependencyGroups.flatMap(\.sources)
