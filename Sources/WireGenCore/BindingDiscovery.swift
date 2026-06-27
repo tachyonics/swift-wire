@@ -511,9 +511,6 @@ final class BindingDiscovery: SyntaxVisitor {
 extension BindingDiscovery {
     /// Resolve the 1-based file/line/col of a syntax node's start
     /// position. Used by everything that needs a `SourceLocation`.
-    /// (In this same-file extension so `private` access to the visitor's
-    /// `converter`/`sourcePath` is preserved while keeping the class body
-    /// under the length cap.)
     private func location(of node: some SyntaxProtocol) -> SourceLocation {
         let position = node.startLocation(converter: converter)
         return SourceLocation(
