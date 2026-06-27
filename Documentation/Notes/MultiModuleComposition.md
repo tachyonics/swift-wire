@@ -1,18 +1,14 @@
 # Multi-module composition
 
-> **Status:** forward-looking design. Multi-module composition is not
-> implemented — Wire is per-module today (the build plugin runs WireGen
-> per target; `_WireGraph` is generated into, and references types
-> within/imported by, that one module). This note records the design
-> direction so two coupled decisions — cross-module **naming** (SE-0491
-> module selectors) and cross-module **visibility** — aren't relitigated
-> when composition is taken on. Nothing here is built yet, and nothing
-> needs building until there's a composition feature to consume it.
->
-> **Now being taken on:** M1_PLAN iteration 7 implements this note across
-> sittings 7a–7g. The two foundations it calls out land first — single-
-> `BindingKey` tracking (7a) and origin-module metadata per binding (7b) —
-> before the cross-target reading, activation, and naming/visibility work.
+> **Status:** in progress. M1_PLAN iteration 7 implements multi-module
+> composition across sittings 7a–7g. Landed so far: single-`BindingKey`
+> tracking (7a), origin-module metadata per binding (7b), and same-package
+> cross-target source reading (7c). Remaining: external-package activation
+> (7d), cross-library diagnostics (7e), SE-0491 naming + the cross-module
+> visibility threshold (7f), the two-package integration gate (7g). This
+> note records the design — including the **activation model** (below),
+> cross-module **naming** (SE-0491 module selectors), and cross-module
+> **visibility** — so those coupled decisions aren't relitigated.
 
 ## What composition is
 
@@ -27,6 +23,79 @@ Composition changes one fundamental thing: **the generated bootstrap
 references types from modules other than its own, and is consumed across
 module boundaries.** That breaks two assumptions the single-module model
 bakes in — naming and visibility.
+
+## Activation is the dependency (a compile-time decision)
+
+Activation is **compile-time**, not runtime. Wire's thesis is the static
+graph: the plugin emits exactly one `_WireGraph` per target, so there is
+one activation set per target — *not* a per-bootstrap-call choice — and
+the plugin must know it before codegen to validate the whole graph and
+collate multibindings. There is no runtime composition of separately
+built module-graphs; the merged graph is flat, and "runtime is just
+stored properties" holds across module boundaries.
+
+**The surface is the manifest dependency list.** A library opts into
+composition with a `_WireExports.swift` marker; a consumer activates it by
+**depending on it** in the target's `dependencies`. The plugin reads the
+target's *direct* dependencies, keeps the Wire-aware ones, and composes
+them. No call-site `.activating(X.self)` directive (that was rejected: it
+can't be a per-bootstrap decision, and SPM build-tool plugins can't take
+custom per-target config anyway — the dependency list is the one
+plugin-readable, SPM-name-checked manifest signal). One uniform rule:
+**you activate the Wire-aware libraries your target directly depends on.**
+Same-package and external are identical; transitive deps are *not*
+auto-activated (you add them to your own `dependencies`, which you need to
+`import` them anyway), so "transitive activation is explicit" falls out
+for free.
+
+**Depend = activate** collapses the importable-vs-activated distinction
+for Wire-aware libraries. That's acceptable because it isn't the bad kind
+of magic: the activated set is your direct, manifest-declared deps ∩
+marker-shipping libraries (both halves visible and deliberate, nothing
+transitive), and every conflict is *loud* — a library shadowing your
+binding is a duplicate/ambiguity compile error, a missing dep is a
+compile error. The only quiet behavior change is a library `@Contributes`
+growing a collection you consume, which is the intended cross-module
+multibinding feature and is visible in the `_WireGraph.json` dump. A way
+to depend-without-activate (types-only) is a deferred refinement.
+
+Guidance for that case: a multibinding key is a *global extension point*,
+so injecting a key you don't own means any activated package may
+contribute to it (the collection grows with your dependency set). If you
+need a known, complete contributor set, declare the key in a target you
+control — most strongly the leaf app target, which nothing depends on, so
+only your own code can reach it. (Order-sensitive collections also need
+`withOrder:`; cross-module element order is otherwise unspecified — see
+the `withOrder:` cross-module note below.)
+
+## Deferred optimizations (M6a / M6b)
+
+Two perf optimizations are split out of M1; each keeps the surface
+contract unchanged and lands when its cost is felt:
+
+- **M6a — manifest-based discovery.** M1 re-parses dependency sources at
+  the consumer's build; M6a has each library emit a per-library
+  compile-time manifest of its bindings, which the consumer reads instead
+  of re-parsing. The seam is the discovery-output model
+  (`[DiscoveredBinding]` + key lists): M1 produces it by parsing, M6a by
+  deserializing a manifest. Everything downstream (merge, graph, codegen,
+  diagnostics) is unchanged — `originModule` is already per-binding and
+  serializable, so it rides into the manifest exactly as stamped today.
+  `_WireExports.swift` evolves from a presence-only marker into the
+  manifest.
+- **M6b — reachability pruning.** M1 eager-constructs *every* binding in
+  the merged graph, including a library binding nothing reaches — so a
+  large dependency costs all its singletons even when the consumer uses a
+  few. M6b computes the bindings reachable from the home package's roots
+  and strips the rest before codegen. The hard part is defining roots:
+  the plugin sees `@Inject` edges but not external `graph.x` accesses, so
+  `allowUnused` becomes "I'm a root, keep me" — valid **only** in the home
+  package; a library's `allowUnused` is ignored for reachability, and a
+  library binding is live iff reached from a home-package root. This
+  changes the construction model (construct-reachable, not construct-all)
+  and adds a small annotation cost (mark externally-pulled roots), so it's
+  milestone-sized. Until it lands, an expensive library binding opts into
+  deferral with `Lazy<T>`.
 
 ## Naming — use SE-0491 module selectors
 
