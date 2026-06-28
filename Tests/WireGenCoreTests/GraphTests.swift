@@ -618,7 +618,7 @@ struct GraphTests {
             singleton("Repository", dependencies: [], generics: ["Model"]),
             singleton("App"),
         ])
-        #expect(result.skipped.map { $0.boundType } == ["Repository"])
+        #expect(result.genericTemplates.map { $0.boundType } == ["Repository"])
         let order = try #require(result.outcome.topologicalOrder)
         #expect(order.map { $0.boundType } == ["App"])
     }
@@ -633,7 +633,7 @@ struct GraphTests {
             ),
             singleton("App"),
         ])
-        #expect(result.skipped.count == 1)
+        #expect(result.genericTemplates.count == 1)
         let order = try #require(result.outcome.topologicalOrder)
         #expect(order.map { $0.boundType } == ["App"])
     }
@@ -646,7 +646,7 @@ struct GraphTests {
             singleton("Repository", dependencies: [], generics: ["Model"]),
             singleton("App", dependencies: [(name: "repo", type: "Repository")]),
         ])
-        #expect(result.skipped.count == 1)
+        #expect(result.genericTemplates.count == 1)
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.missingBindings.count == 1)
     }
@@ -697,16 +697,16 @@ struct GraphTests {
         #expect(report.contains("Config.dbURL"))
     }
 
-    // MARK: - renderSkipped
+    // MARK: - renderGenericTemplates
 
-    @Test func renderSkippedEmptyReturnsEmptyString() {
+    @Test func renderGenericTemplatesEmptyReturnsEmptyString() {
         // Suppression so the CLI doesn't print an empty section header
-        // when there are no generic bindings.
-        #expect(renderSkipped([]).isEmpty)
+        // when there are no generic templates.
+        #expect(renderGenericTemplates([]).isEmpty)
     }
 
-    @Test func renderSkippedRendersGenericParameters() {
-        let report = renderSkipped([
+    @Test func renderGenericTemplatesRendersGenericParameters() {
+        let report = renderGenericTemplates([
             singleton("Repository", generics: ["Model"]),
             singleton("Pair", generics: ["Left", "Right"]),
         ])

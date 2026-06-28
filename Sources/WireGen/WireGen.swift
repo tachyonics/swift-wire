@@ -50,7 +50,7 @@ struct WireGen {
         let containerGraphs = graphs.containerGraphs
         let seedScopeOrchestrations = graphs.seedScopeOrchestrations
 
-        printSkippedReport(
+        printGenericTemplatesReport(
             default: defaultGraph,
             containers: containerGraphs,
             seedScopes: seedScopeOrchestrations
@@ -227,7 +227,7 @@ struct WireGen {
     /// scopes borrow from their parent container's singletons.
     private static func buildAllGraphs(in aggregate: DiscoveryAggregate) -> GraphBuilds {
         let partitions = partitionBindings(in: aggregate)
-        var defaultGraph = GraphResult(outcome: .success(topologicalOrder: []), skipped: [])
+        var defaultGraph = GraphResult(outcome: .success(topologicalOrder: []), genericTemplates: [])
         var containerGraphs: [(name: String, result: GraphResult)] = []
         var seedScopeOrchestrations: [SeedScopeOrchestration] = []
         var resolvedBindingsByContainer: [String?: [DiscoveredBinding]] = [:]
@@ -381,18 +381,18 @@ struct WireGen {
         }
     }
 
-    /// Print skipped (generic) bindings combined across all graphs.
+    /// Print the generic templates combined across all graphs.
     /// Informational; doesn't affect validation.
-    private static func printSkippedReport(
+    private static func printGenericTemplatesReport(
         default defaultGraph: GraphResult,
         containers containerGraphs: [(name: String, result: GraphResult)],
         seedScopes seedScopeOrchestrations: [SeedScopeOrchestration]
     ) {
-        let allSkipped =
-            defaultGraph.skipped
-            + containerGraphs.flatMap { $0.result.skipped }
-            + seedScopeOrchestrations.flatMap { $0.result.skipped }
-        let report = renderSkipped(allSkipped)
+        let allGenericTemplates =
+            defaultGraph.genericTemplates
+            + containerGraphs.flatMap { $0.result.genericTemplates }
+            + seedScopeOrchestrations.flatMap { $0.result.genericTemplates }
+        let report = renderGenericTemplates(allGenericTemplates)
         guard !report.isEmpty else { return }
         print("")
         print(report)

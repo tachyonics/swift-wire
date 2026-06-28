@@ -14,14 +14,16 @@ package func renderTopologicalOrder(_ order: [DiscoveredBinding]) -> String {
     return lines.joined(separator: "\n")
 }
 
-/// Render skipped bindings (generic types pending concrete
-/// specialisation support) as a short notice, suppressed entirely when
-/// none were skipped.
-package func renderSkipped(_ skipped: [DiscoveredBinding]) -> String {
-    guard !skipped.isEmpty else { return "" }
+/// Render the generic templates that aren't constructed directly as a
+/// short notice, suppressed entirely when there are none. Wire builds a
+/// concrete binding for each instantiation a consumer requests; those
+/// instantiations appear in the topological order. A template no consumer
+/// instantiates contributes nothing to the graph.
+package func renderGenericTemplates(_ genericTemplates: [DiscoveredBinding]) -> String {
+    guard !genericTemplates.isEmpty else { return "" }
     var lines: [String] = []
-    lines.append("skipped (generic types — concrete specialisation not yet supported):")
-    for binding in skipped {
+    lines.append("generic templates (not constructed directly; specialised per requested instantiation):")
+    for binding in genericTemplates {
         let generics = "<\(binding.genericParameterNames.joined(separator: ", "))>"
         lines.append("  \(displayName(binding))\(generics)")
     }
