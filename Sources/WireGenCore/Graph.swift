@@ -6,17 +6,18 @@
 /// validation errors, or check `hasErrors` and forget to handle the
 /// success path.
 ///
-/// `skipped` lives at the top level alongside `outcome` because it's
-/// informational (generic bindings are deferred until concrete
-/// specialisation is implemented) and reported the same way regardless
-/// of whether the rest of the graph validated cleanly.
+/// `genericTemplates` lives at the top level alongside `outcome` because
+/// it's informational (the generic templates aren't graph nodes
+/// themselves — Wire builds a concrete binding per requested
+/// instantiation) and reported the same way regardless of whether the
+/// rest of the graph validated cleanly.
 package struct GraphResult: Sendable {
     package let outcome: Outcome
-    package let skipped: [DiscoveredBinding]
+    package let genericTemplates: [DiscoveredBinding]
 
-    package init(outcome: Outcome, skipped: [DiscoveredBinding]) {
+    package init(outcome: Outcome, genericTemplates: [DiscoveredBinding]) {
         self.outcome = outcome
-        self.skipped = skipped
+        self.genericTemplates = genericTemplates
     }
 
     /// Either a valid topological order (the graph constructs cleanly)
@@ -617,7 +618,7 @@ private func parseGenericType(_ expression: String) -> (base: String, params: [S
 private func earlyValidationFailure(
     duplicateBindings: [DuplicateBinding] = [],
     identifierCollisions: [IdentifierCollision] = [],
-    skipped: [DiscoveredBinding]
+    genericTemplates: [DiscoveredBinding]
 ) -> GraphResult {
     GraphResult(
         outcome: .validationFailed(
@@ -628,7 +629,7 @@ private func earlyValidationFailure(
                 identifierCollisions: identifierCollisions
             )
         ),
-        skipped: skipped
+        genericTemplates: genericTemplates
     )
 }
 
@@ -649,13 +650,13 @@ package func buildDependencyGraph(
             resultBuilders: resultBuilders
         )
     let partition = partitionBindings(allBindings)
-    let skipped = partition.skipped
+    let genericTemplates = partition.genericTemplates
 
     let (uniqueByIdentity, duplicates) = splitUniqueFromDuplicates(
         partition.groupedByIdentity
     )
     if !duplicates.isEmpty {
-        return earlyValidationFailure(duplicateBindings: duplicates, skipped: skipped)
+        return earlyValidationFailure(duplicateBindings: duplicates, genericTemplates: genericTemplates)
     }
 
     // Generic specialisation: walk every binding's deps; for each
@@ -671,15 +672,21 @@ package func buildDependencyGraph(
     var resolvedBindings = uniqueByIdentity
     let specialisationAmbiguities = specialiseGenericBindings(
         uniqueByIdentity: &resolvedBindings,
-        genericBindings: partition.genericBindings
+        genericBindings: genericTemplates
     )
     if !specialisationAmbiguities.isEmpty {
-        return earlyValidationFailure(duplicateBindings: specialisationAmbiguities, skipped: skipped)
+        return earlyValidationFailure(
+            duplicateBindings: specialisationAmbiguities,
+            genericTemplates: genericTemplates
+        )
     }
 
     let identifierCollisions = detectIdentifierCollisions(in: resolvedBindings)
     if !identifierCollisions.isEmpty {
-        return earlyValidationFailure(identifierCollisions: identifierCollisions, skipped: skipped)
+        return earlyValidationFailure(
+            identifierCollisions: identifierCollisions,
+            genericTemplates: genericTemplates
+        )
     }
 
     let (dependencyEdges, missingBindings) = resolveDependencies(
@@ -705,34 +712,31 @@ package func buildDependencyGraph(
         )
     }
 
-    return GraphResult(outcome: outcome, skipped: skipped)
+    return GraphResult(outcome: outcome, genericTemplates: genericTemplates)
 }
 
 /// Bucket every discovered binding by what role it plays in graph
 /// construction: concrete bindings go into `groupedByIdentity` keyed
 /// by their `(type, key)` identity (duplicates within the same key
 /// land in the same group for later detection); generic bindings go
-/// into both `skipped` (reported as informational) and
-/// `genericBindings` (specialisation candidates).
+/// into `genericTemplates`, which both seeds specialisation and is
+/// reported as informational.
 private func partitionBindings(
     _ bindings: [DiscoveredBinding]
 ) -> (
     groupedByIdentity: [BindingIdentity: [DiscoveredBinding]],
-    skipped: [DiscoveredBinding],
-    genericBindings: [DiscoveredBinding]
+    genericTemplates: [DiscoveredBinding]
 ) {
     var groupedByIdentity: [BindingIdentity: [DiscoveredBinding]] = [:]
-    var skipped: [DiscoveredBinding] = []
-    var genericBindings: [DiscoveredBinding] = []
+    var genericTemplates: [DiscoveredBinding] = []
     for binding in bindings {
         if binding.genericParameterNames.isEmpty {
             groupedByIdentity[binding.identity, default: []].append(binding)
         } else {
-            skipped.append(binding)
-            genericBindings.append(binding)
+            genericTemplates.append(binding)
         }
     }
-    return (groupedByIdentity, skipped, genericBindings)
+    return (groupedByIdentity, genericTemplates)
 }
 
 /// Split a grouped-by-identity map into uniquely-bound identities
