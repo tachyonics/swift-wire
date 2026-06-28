@@ -71,6 +71,51 @@ struct CrossLibraryValidationTests {
         #expect(rendered.contains("module 'LibB'"))
     }
 
+    /// Run the unknown-key check over several merged modules' discovery —
+    /// the missing-key check is "no such key in the parse set," and the
+    /// parse set is the union across activated modules.
+    private func unknownKeyDiagnostics(_ modules: [(module: String, source: String)]) -> [Diagnostic] {
+        var allBindings: [Partition: [DiscoveredBinding]] = [:]
+        var declaredKeys: Set<String> = []
+        for (index, entry) in modules.enumerated() {
+            let discovery = discover(
+                in: entry.source,
+                sourcePath: "\(entry.module)\(index).swift",
+                module: entry.module
+            )
+            for (partition, bindings) in discovery.allBindings {
+                allBindings[partition, default: []] += bindings
+            }
+            declaredKeys.formUnion(discovery.bindingKeys.map(\.keyReference))
+            declaredKeys.formUnion(discovery.multibindingKeys.map(\.keyReference))
+        }
+        return unknownBindingKeyDiagnostics(
+            bindingsByPartition: allBindings,
+            declaredKeyReferences: declaredKeys
+        )
+    }
+
+    @Test func crossLibraryKeyReferenceResolves() {
+        // A `BindingKey` declared in module `Lib` resolves a keyed
+        // `@Inject` in module `App` — the parse set spans the activated
+        // modules, so the missing-key check loosens automatically.
+        let lib = """
+            extension Database {
+                static let primary = BindingKey<Database>()
+            }
+
+            @Provides(Database.primary)
+            let primaryDB: Database = Database()
+            """
+        let app = """
+            @Singleton
+            struct Consumer {
+                @Inject(Database.primary) var db: Database
+            }
+            """
+        #expect(unknownKeyDiagnostics([("Lib", lib), ("App", app)]).isEmpty)
+    }
+
     @Test func sameModuleDuplicateKeepsOriginalWording() {
         // A same-module duplicate is still ambiguous, but naming the module
         // would be noise — the original wording is preserved (no "module

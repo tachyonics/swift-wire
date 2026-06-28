@@ -57,17 +57,25 @@ struct WireBuildPlugin: BuildToolPlugin {
         // and external-package products (`.product`) both activate by
         // direct dependency; transitive dependencies are not
         // auto-activated. See `Documentation/Notes/MultiModuleComposition.md`.
-        var dependencyGroups: [(module: String, sources: [URL])] = []
+        // `.product` dependencies come from an external package; `.target`
+        // dependencies are same-package siblings. The distinction drives
+        // the cross-module visibility threshold (7f) — a `package` binding
+        // reaches across same-package modules but not across packages.
+        var dependencyGroups: [(module: String, sources: [URL], isExternal: Bool)] = []
         var seenModules: Set<String> = []
         for dependency in target.dependencies {
             let dependencyTargets: [Target]
+            let isExternal: Bool
             switch dependency {
             case .target(let dependencyTarget):
                 dependencyTargets = [dependencyTarget]
+                isExternal = false
             case .product(let dependencyProduct):
                 dependencyTargets = dependencyProduct.targets
+                isExternal = true
             @unknown default:
                 dependencyTargets = []
+                isExternal = false
             }
             for dependencyTarget in dependencyTargets {
                 guard let dependencyModule = dependencyTarget.sourceModule,
@@ -79,7 +87,7 @@ struct WireBuildPlugin: BuildToolPlugin {
                 }
                 guard isWireAware else { continue }
                 seenModules.insert(dependencyModule.moduleName)
-                dependencyGroups.append((dependencyModule.moduleName, dependencySources))
+                dependencyGroups.append((dependencyModule.moduleName, dependencySources, isExternal))
             }
         }
 
@@ -98,15 +106,19 @@ struct WireBuildPlugin: BuildToolPlugin {
             )
         }
 
-        // Sources are grouped by `--module`: the consumer first, then each
-        // Wire-aware dependency. WireGen stamps every binding with its
-        // group's module (origin module — load-bearing for cross-module
-        // composition; see MultiModuleComposition.md).
+        // Sources are grouped by module: the consumer first (`--module`),
+        // then each Wire-aware dependency — `--module` for same-package
+        // siblings, `--external-module` for external-package products.
+        // WireGen stamps every binding with its group's module (origin
+        // module — load-bearing for cross-module composition) and uses the
+        // external flag for the visibility threshold. See
+        // MultiModuleComposition.md.
         var arguments =
             [graphURL.path, keyChecksURL.path, "--module", sourceModule.moduleName]
             + swiftSources.map(\.path)
         for group in dependencyGroups {
-            arguments += ["--module", group.module] + group.sources.map(\.path)
+            let flag = group.isExternal ? "--external-module" : "--module"
+            arguments += [flag, group.module] + group.sources.map(\.path)
         }
 
         return [
