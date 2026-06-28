@@ -57,7 +57,8 @@ struct WireGen {
         )
         let crossFileDiagnostics = collectCrossFileDiagnostics(
             in: aggregate,
-            containerNames: Set(containerGraphs.map { $0.name })
+            containerNames: Set(containerGraphs.map { $0.name }),
+            resolvedBindingsByContainer: graphs.resolvedBindingsByContainer
         )
         let allDiagnostics = aggregate.warnings + crossFileDiagnostics
         printDiagnostics(allDiagnostics)
@@ -188,6 +189,12 @@ struct WireGen {
         var defaultGraph: GraphResult
         var containerGraphs: [(name: String, result: GraphResult)]
         var seedScopeOrchestrations: [SeedScopeOrchestration]
+        // Resolved-graph bindings per container (post-specialisation),
+        // merged across the container's singleton graph and its seed
+        // scopes. Feeds the dead-binding detector so a concrete producer
+        // consumed only through a specialised generic dependency counts
+        // as live.
+        var resolvedBindingsByContainer: [String?: [DiscoveredBinding]]
     }
 
     /// Partition `aggregate.allBindings` along both axes in a single
@@ -223,6 +230,7 @@ struct WireGen {
         var defaultGraph = GraphResult(outcome: .success(topologicalOrder: []), skipped: [])
         var containerGraphs: [(name: String, result: GraphResult)] = []
         var seedScopeOrchestrations: [SeedScopeOrchestration] = []
+        var resolvedBindingsByContainer: [String?: [DiscoveredBinding]] = [:]
         for containerKey in partitions.keys.sorted(by: containerKeyOrder) {
             let scopes = partitions[containerKey] ?? [:]
             let singletons = scopes[nil] ?? []
@@ -246,6 +254,7 @@ struct WireGen {
             } else {
                 defaultGraph = graph
             }
+            resolvedBindingsByContainer[containerKey, default: []] += graph.outcome.topologicalOrder ?? []
             let borrows = syntheticSingletonBorrowBindings(
                 from: singletons,
                 inWireGraphOfType: parentGraphType
@@ -273,49 +282,15 @@ struct WireGen {
                     allBindings: aggregate.allBindings
                 )
                 seedScopeOrchestrations.append(orchestration.withResult(enrichedResult))
+                resolvedBindingsByContainer[containerKey, default: []] += enrichedResult.outcome.topologicalOrder ?? []
             }
         }
         return GraphBuilds(
             defaultGraph: defaultGraph,
             containerGraphs: containerGraphs,
-            seedScopeOrchestrations: seedScopeOrchestrations
+            seedScopeOrchestrations: seedScopeOrchestrations,
+            resolvedBindingsByContainer: resolvedBindingsByContainer
         )
-    }
-
-    /// Sort container keys with `nil` first (the default graph
-    /// processes before any named container), then alphabetically by
-    /// container name. Used to give the unified partition iteration
-    /// a deterministic, predictable order.
-    private static func containerKeyOrder(_ lhs: String?, _ rhs: String?) -> Bool {
-        switch (lhs, rhs) {
-        case (nil, nil): return false
-        case (nil, _): return true
-        case (_, nil): return false
-        case (.some(let lhsName), .some(let rhsName)): return lhsName < rhsName
-        }
-    }
-
-    /// Flatten the per-seed orchestrations into the emission-side
-    /// shape `renderWireGraph` consumes — each entry carries the seed
-    /// type expression, the identifier suffix, the parent graph type,
-    /// the topological order, and the borrowed-binding property-name
-    /// set the emitter uses to distinguish locally-constructed
-    /// bindings from singleton borrows. Orchestrations whose graphs
-    /// failed validation are excluded (the validation-failure pipeline
-    /// has already exited by this point; the filter is defensive).
-    private static func collectSeedScopeOrders(
-        _ orchestrations: [SeedScopeOrchestration]
-    ) -> [SeedScopeEmission] {
-        orchestrations.compactMap { orchestration in
-            guard let order = orchestration.result.outcome.topologicalOrder else { return nil }
-            return SeedScopeEmission(
-                seedTypeExpression: orchestration.seedTypeExpression,
-                identifierSuffix: orchestration.identifierSuffix,
-                parentGraphType: orchestration.parentGraphType,
-                topologicalOrder: order,
-                borrowedBindingPropertyNames: orchestration.borrowedBindingPropertyNames
-            )
-        }
     }
 
     /// WireGen-level warnings that need module-wide context to fire:
@@ -324,7 +299,8 @@ struct WireGen {
     /// Per-file warnings come straight from `aggregate.warnings`.
     private static func collectCrossFileDiagnostics(
         in aggregate: DiscoveryAggregate,
-        containerNames: Set<String>
+        containerNames: Set<String>,
+        resolvedBindingsByContainer: [String?: [DiscoveredBinding]]
     ) -> [Diagnostic] {
         var diagnostics: [Diagnostic] = []
         diagnostics += unannotatedExtensionContainerDiagnostics(
@@ -346,7 +322,10 @@ struct WireGen {
                 bindings.flatMap { $0.contributions }
             }
         )
-        diagnostics += deadBindingDiagnostics(across: aggregate.allBindings)
+        diagnostics += deadBindingDiagnostics(
+            across: aggregate.allBindings,
+            resolvedByContainer: resolvedBindingsByContainer
+        )
         diagnostics += multibindingLivenessDiagnostics(
             multibindingKeys: aggregate.multibindingKeys,
             bindingsByPartition: aggregate.allBindings
@@ -500,8 +479,48 @@ struct WireGen {
 
 }
 
-/// CLI argument parsing and usage, split into an extension so it doesn't
-/// count toward the main struct's `type_body_length`.
+/// Ordering helpers: deterministic container iteration order and the
+/// seed-scope flattening that feeds the emitter.
+extension WireGen {
+    /// Sort container keys with `nil` first (the default graph
+    /// processes before any named container), then alphabetically by
+    /// container name. Used to give the unified partition iteration
+    /// a deterministic, predictable order.
+    fileprivate static func containerKeyOrder(_ lhs: String?, _ rhs: String?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return false
+        case (nil, _): return true
+        case (_, nil): return false
+        case (.some(let lhsName), .some(let rhsName)): return lhsName < rhsName
+        }
+    }
+
+    /// Flatten the per-seed orchestrations into the emission-side
+    /// shape `renderWireGraph` consumes — each entry carries the seed
+    /// type expression, the identifier suffix, the parent graph type,
+    /// the topological order, and the borrowed-binding property-name
+    /// set the emitter uses to distinguish locally-constructed
+    /// bindings from singleton borrows. Orchestrations whose graphs
+    /// failed validation are excluded (the validation-failure pipeline
+    /// has already exited by this point; the filter is defensive).
+    fileprivate static func collectSeedScopeOrders(
+        _ orchestrations: [SeedScopeOrchestration]
+    ) -> [SeedScopeEmission] {
+        orchestrations.compactMap { orchestration in
+            guard let order = orchestration.result.outcome.topologicalOrder else { return nil }
+            return SeedScopeEmission(
+                seedTypeExpression: orchestration.seedTypeExpression,
+                identifierSuffix: orchestration.identifierSuffix,
+                parentGraphType: orchestration.parentGraphType,
+                topologicalOrder: order,
+                borrowedBindingPropertyNames: orchestration.borrowedBindingPropertyNames
+            )
+        }
+    }
+}
+
+/// CLI argument parsing and usage: module-group parsing and the usage
+/// message printed on malformed invocation.
 extension WireGen {
     /// Parse the module segments (everything after the two output paths)
     /// into ordered groups. Each group is `--module <name> <files…>` (the
