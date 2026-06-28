@@ -2,12 +2,15 @@
 
 > **Status:** in progress. M1_PLAN iteration 7 implements multi-module
 > composition across sittings 7a–7g. Landed so far: single-`BindingKey`
-> tracking (7a), origin-module metadata per binding (7b), and same-package
-> cross-target source reading (7c). Remaining: external-package activation
-> (7d), cross-library diagnostics (7e), SE-0491 naming + the cross-module
-> visibility threshold (7f), the two-package integration gate (7g). This
-> note records the design — including the **activation model** (below),
-> cross-module **naming** (SE-0491 module selectors), and cross-module
+> tracking (7a), origin-module metadata per binding (7b), same-package
+> cross-target source reading (7c), direct-dependency activation (7d),
+> cross-library validation + origin-module-aware ambiguity (7e), and the
+> cross-module visibility threshold + cross-module key references (7f).
+> SE-0491 `::` naming is **deferred** out of 7f (see "Naming" below for
+> why). Remaining: the two-package integration gate (7g), which also
+> exercises 7d's external `.product` path and 7e's missing-transitive-
+> activation hint end-to-end. This note records the design — the
+> **activation model**, cross-module **naming** (deferred), and cross-module
 > **visibility** — so those coupled decisions aren't relitigated.
 
 ## What composition is
@@ -99,6 +102,27 @@ contract unchanged and lands when its cost is felt:
 
 ## Naming — use SE-0491 module selectors
 
+> **Status: deferred past 7f / M1.** Working it through during iteration 7
+> surfaced that `::` is *not* "mechanical once origin-module metadata
+> exists." Two bindings both named `Logger` from different modules have the
+> **same** textual `BindingIdentity` (`base: "Logger"`), so today they're a
+> duplicate/ambiguity (7e names the conflicting modules; resolve with a
+> key) — for `A::Logger` and `B::Logger` to *coexist* the identity model
+> would have to incorporate the origin module, which also changes the
+> duplicate check and consumer-side matching (does bare `@Inject var x:
+> Logger` match `A::Logger`?). The residual genuine clash — a binding's
+> simple name colliding with a *non-binding* type another activated module
+> exports — Wire can't even detect structurally (it sees bindings, not all
+> exports), so the only robust fix is *always-qualify every reference*,
+> which churns all codegen output and still can't qualify nested generic
+> arguments. Meanwhile the common case — non-clashing foreign types —
+> already works via 7c's `import <module>`. So `::` gets its own design
+> pass (identity model + matching + generics) when an adopter hits the
+> clash; until then it's a known limitation (a binding whose simple type
+> name collides with another activated module's exported type can produce
+> an ambiguous reference in generated code — rename, or disambiguate with a
+> key). The design direction below is retained for that pass.
+
 In a single module the generated file lives in that module, so a bare
 type reference resolves by Swift's normal rules (own-module types win by
 local precedence). Compose `A` and `B` where **both define a `Logger`**,
@@ -173,9 +197,14 @@ Two constraints ride along, both already covered above:
   ranks per key (duplicate `withOrder:` is an error, keeping "ranked" a
   strict total order). That's fine in one module but hard to coordinate
   across independently-authored modules contributing to a shared key.
-  When composition lands, revisit: either relax to ties-allowed with a
-  documented tiebreak (origin module, then source location — both already
-  known structurally), or scope rank-uniqueness per contributing module.
+  **M1 decision (7f): keep the global-uniqueness rule** — a cross-module
+  duplicate `withOrder:` is still an error (it already fires on the merged
+  set), and cross-module *unordered* collection order is unspecified, so
+  an order-sensitive cross-module collection must use `withOrder:`. The
+  coordination relief — relax to ties-allowed with a documented tiebreak
+  (origin module, then source location, both known structurally) or scope
+  rank-uniqueness per contributing module — is deferred until an adopter
+  hits it with independently-authored modules sharing a key.
 
 This makes cross-module multibindings the *motivating* case for
 composition: aggregating contributions a host module can't see is a

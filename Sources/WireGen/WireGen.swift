@@ -118,6 +118,10 @@ struct WireGen {
         /// The consumer module these sources belong to — carried so the
         /// graph-building pass can stamp synthetic seed bindings with it.
         var module: String
+        /// Modules composed from external packages (the `--external-module`
+        /// groups). Drives the cross-module visibility threshold: a binding
+        /// from one of these needs `public`, not just `package`.
+        var externalModules: Set<String> = []
         var perFile: [(path: String, items: [DiscoveredBinding])] = []
         var allBindings: [Partition: [DiscoveredBinding]] = [:]
         var imports: [String] = []
@@ -132,10 +136,11 @@ struct WireGen {
     }
 
     private static func discoverAllSources(
-        groups: [(module: String, sources: [String])],
+        groups: [(module: String, sources: [String], isExternal: Bool)],
         consumerModule: String
     ) -> DiscoveryAggregate {
         var aggregate = DiscoveryAggregate(module: consumerModule)
+        aggregate.externalModules = Set(groups.filter(\.isExternal).map(\.module))
         let modulePaths = groups.flatMap { group in group.sources.map { (group.module, $0) } }
         for (module, path) in modulePaths {
             let source = readSource(at: path)
@@ -351,6 +356,11 @@ struct WireGen {
             declaredKeyReferences: Set(aggregate.bindingKeys.map(\.keyReference))
                 .union(aggregate.multibindingKeys.map(\.keyReference))
         )
+        diagnostics += crossModuleVisibilityDiagnostics(
+            bindings: aggregate.allBindings.values.flatMap { $0 },
+            consumerModule: aggregate.module,
+            externalModules: aggregate.externalModules
+        )
         return diagnostics
     }
 
@@ -493,27 +503,32 @@ struct WireGen {
 /// CLI argument parsing and usage, split into an extension so it doesn't
 /// count toward the main struct's `type_body_length`.
 extension WireGen {
-    /// Parse the `--module <name> <files…>` segments (everything after the
-    /// two output paths) into ordered `(module, sources)` groups. The
-    /// first group is the consumer target; later groups are Wire-aware
-    /// dependencies the plugin read for cross-module composition (7c).
+    /// Parse the module segments (everything after the two output paths)
+    /// into ordered groups. Each group is `--module <name> <files…>` (the
+    /// consumer or a same-package dependency) or `--external-module <name>
+    /// <files…>` (a dependency from an external package). The first group
+    /// is the consumer target. `isExternal` drives the cross-module
+    /// visibility threshold (7f): `package` reaches across same-package
+    /// modules but not across packages.
     static func parseModuleGroups(
         _ args: [String]
-    ) -> [(module: String, sources: [String])] {
-        var groups: [(module: String, sources: [String])] = []
+    ) -> [(module: String, sources: [String], isExternal: Bool)] {
+        var groups: [(module: String, sources: [String], isExternal: Bool)] = []
         var index = 0
         while index < args.count {
-            guard args[index] == "--module", index + 1 < args.count else {
+            let flag = args[index]
+            guard flag == "--module" || flag == "--external-module", index + 1 < args.count else {
                 printUsageAndExit()
             }
+            let isExternal = flag == "--external-module"
             let module = args[index + 1]
             index += 2
             var sources: [String] = []
-            while index < args.count, args[index] != "--module" {
+            while index < args.count, args[index] != "--module", args[index] != "--external-module" {
                 sources.append(args[index])
                 index += 1
             }
-            groups.append((module, sources))
+            groups.append((module, sources, isExternal))
         }
         return groups
     }
