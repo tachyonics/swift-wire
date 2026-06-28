@@ -794,6 +794,11 @@ package struct SourceFileDiscovery: Sendable {
     /// argument is carried for the value-level scope key (Axis B) and
     /// cross-module type checks.
     package let bindingKeys: [DiscoveredBindingKey]
+    /// Adapter-annotation definitions (`WireAdapterAnnotationV1` declarations)
+    /// found in this file. Aggregated across the module by `WireGen` and
+    /// matched by name against adapter use-sites to resolve the generated
+    /// `_wireRegister` calls.
+    package let adapterAnnotations: [DiscoveredAdapterAnnotation]
     /// `@resultBuilder` types found in this file, with their fold result
     /// type. Matched against `BuilderKey<Builder>` keys so a builder
     /// aggregate knows its producer-side result type.
@@ -809,6 +814,7 @@ package struct SourceFileDiscovery: Sendable {
         nonInjectExtensionInits: [NonInjectExtensionInit] = [],
         multibindingKeys: [DiscoveredMultibindingKey] = [],
         bindingKeys: [DiscoveredBindingKey] = [],
+        adapterAnnotations: [DiscoveredAdapterAnnotation] = [],
         resultBuilders: [DiscoveredResultBuilder] = []
     ) {
         self.allBindings = allBindings
@@ -820,6 +826,7 @@ package struct SourceFileDiscovery: Sendable {
         self.nonInjectExtensionInits = nonInjectExtensionInits
         self.multibindingKeys = multibindingKeys
         self.bindingKeys = bindingKeys
+        self.adapterAnnotations = adapterAnnotations
         self.resultBuilders = resultBuilders
     }
 }
@@ -876,6 +883,7 @@ package func discover(
         nonInjectExtensionInits: visitor.nonInjectExtensionInits,
         multibindingKeys: visitor.multibindingKeys,
         bindingKeys: visitor.bindingKeys,
+        adapterAnnotations: visitor.adapterAnnotations,
         resultBuilders: visitor.resultBuilders
     )
 }

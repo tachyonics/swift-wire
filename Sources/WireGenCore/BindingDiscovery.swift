@@ -101,6 +101,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// matched against `@Inject(K)` / `@Provides(K)` references (unified
     /// with `multibindingKeys`) to diagnose references to undeclared keys.
     var bindingKeys: [DiscoveredBindingKey] = []
+    /// Adapter-annotation definitions (`WireAdapterAnnotationV1` declarations)
+    /// found in this file. Aggregated across the module by `WireGen` and
+    /// matched by name against adapter use-sites to resolve and validate the
+    /// generated `_wireRegister` calls.
+    var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
     /// `@resultBuilder` types found in this file, with their fold result
     /// type — the producer-side result type a `BuilderKey` aggregate has.
     var resultBuilders: [DiscoveredResultBuilder] = []
@@ -376,6 +381,16 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         {
             bindingKeys.append(key)
+        }
+        if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
+            let definition = adapterAnnotation(
+                from: node,
+                sourcePath: sourcePath,
+                converter: converter,
+                module: module
+            )
+        {
+            adapterAnnotations.append(definition)
         }
         if hasAttribute(node.attributes, named: "Provides"),
             isAtRecognisedProvidesPosition(modifiers: node.modifiers)
