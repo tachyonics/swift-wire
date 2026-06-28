@@ -5,36 +5,64 @@
 // reach here (the declaration-too-private error already failed the build).
 // See `Documentation/Notes/VisibilityModel.md`.
 //
+// Consumption is judged from both the discovered bindings and the resolved
+// graph. A generic binding's dependency reaches a concrete producer only
+// after specialisation (a `table: Table` parameter substituted to
+// `table: ConcreteTable`); that substituted edge lives in the resolved
+// graph's bindings, so feeding those in keeps the concrete producer live.
+//
 // First-order only: a binding consumed solely by another dead binding is
-// not yet detected (no fixed-point pass). Runs per partition — each graph
-// is atomic, so liveness is judged within the partition's own bindings.
+// not yet detected (no fixed-point pass). Runs per container — each graph
+// is atomic, so liveness is judged within the container's own bindings.
 
 /// Dead-binding warnings across a module, grouped by container. Liveness
 /// is judged per *container* (all of a container's scopes merged), not per
 /// `(container, scope)` partition: a seed scope borrows its container's
 /// singletons, so a singleton consumed only by a scope binding must still
 /// count as live. Containers are atomic, so each is judged independently.
+///
+/// `resolvedByContainer` carries each container's resolved-graph bindings
+/// (post-specialisation). Their dependency edges count toward liveness on
+/// top of the discovered bindings'; a container with no resolved entry
+/// falls back to its discovered bindings alone.
 package func deadBindingDiagnostics(
-    across bindingsByPartition: [Partition: [DiscoveredBinding]]
+    across bindingsByPartition: [Partition: [DiscoveredBinding]],
+    resolvedByContainer: [String?: [DiscoveredBinding]] = [:]
 ) -> [Diagnostic] {
     var bindingsByContainer: [String?: [DiscoveredBinding]] = [:]
     for (partition, bindings) in bindingsByPartition {
         bindingsByContainer[partition.container, default: []].append(contentsOf: bindings)
     }
-    let diagnostics = bindingsByContainer.values.flatMap { deadBindingDiagnostics(in: $0) }
+    let diagnostics = bindingsByContainer.flatMap { container, discovered in
+        deadBindingDiagnostics(
+            in: discovered,
+            consumers: discovered + (resolvedByContainer[container] ?? [])
+        )
+    }
     return diagnostics.sorted { $0.location < $1.location }
 }
 
-/// Warn for each binding in `bindings` that no other binding consumes,
-/// subject to the visibility gate. `bindings` is one container's
-/// discovered bindings (no synthesised aggregates). Output is sorted by
-/// source location for stable build output.
+/// Warn for each binding in `bindings` that no binding consumes, subject to
+/// the visibility gate. Consumption is read from the same `bindings`.
 package func deadBindingDiagnostics(in bindings: [DiscoveredBinding]) -> [Diagnostic] {
+    deadBindingDiagnostics(in: bindings, consumers: bindings)
+}
+
+/// Warn for each binding in `bindings` (one container's discovered
+/// bindings, no synthesised aggregates) that nothing in `consumers`
+/// consumes, subject to the visibility gate. `consumers` is the set whose
+/// dependency edges establish liveness — the discovered bindings plus the
+/// resolved graph's specialised bindings. Output is sorted by source
+/// location for stable build output.
+package func deadBindingDiagnostics(
+    in bindings: [DiscoveredBinding],
+    consumers: [DiscoveredBinding]
+) -> [Diagnostic] {
     var producerByIdentity: [BindingIdentity: DiscoveredBinding] = [:]
     for binding in bindings {
         producerByIdentity[binding.identity] = binding
     }
-    let consumed = consumedIdentities(in: bindings, producers: producerByIdentity)
+    let consumed = consumedIdentities(in: consumers, producers: producerByIdentity)
 
     var diagnostics: [Diagnostic] = []
     for identity in producerByIdentity.keys.sorted() where !consumed.contains(identity) {
@@ -51,11 +79,11 @@ package func deadBindingDiagnostics(in bindings: [DiscoveredBinding]) -> [Diagno
     return diagnostics.sorted { $0.location < $1.location }
 }
 
-/// Identities consumed by any binding's init-time dependencies or member-
+/// Identities consumed by any consumer's init-time dependencies or member-
 /// injection parameters, resolved through `matchProducer` so optional
 /// promotion is honoured (a `T?` dependency keeps the `T` producer live).
 private func consumedIdentities(
-    in bindings: [DiscoveredBinding],
+    in consumers: [DiscoveredBinding],
     producers: [BindingIdentity: DiscoveredBinding]
 ) -> Set<BindingIdentity> {
     var consumed: Set<BindingIdentity> = []
@@ -64,7 +92,7 @@ private func consumedIdentities(
             consumed.insert(producer)
         }
     }
-    for binding in bindings {
+    for binding in consumers {
         for dependency in binding.dependencies {
             record(dependency.identity)
         }

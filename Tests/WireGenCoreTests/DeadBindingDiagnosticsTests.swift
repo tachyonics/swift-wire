@@ -179,6 +179,80 @@ struct DeadBindingDiagnosticsTests {
         #expect(files == ["bannerA.swift", "ConsumerB.swift"])
     }
 
+    // MARK: - Liveness via generic specialisation
+
+    @Test func concreteProducerConsumedViaSpecialisationIsLive() {
+        // `Table` is consumed only by a generic `Repo<T>` whose dependency
+        // is the bare parameter `table: T`. The discovered `Repo` is
+        // generic (skipped from warnings) and its `table: T` edge doesn't
+        // reach `Table`. The resolved graph's specialised `Repo<Table>`
+        // carries the substituted `table: Table` edge, which keeps `Table`
+        // live.
+        let genericRepo = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "Repo",
+                typeKind: "struct",
+                genericParameterNames: ["T"],
+                dependencies: [
+                    DependencyParameter(
+                        name: "table",
+                        type: "T",
+                        kind: .injectProperty,
+                        location: mockLocation("Repo.swift"),
+                        keyIdentifier: nil
+                    )
+                ],
+                location: mockLocation("Repo.swift"),
+                accessLevel: .internal,
+                contributions: [],
+                allowUnused: false,
+                originModule: testModule
+            )
+        )
+        let specialisedRepo = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "Repo<Table>",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [
+                    DependencyParameter(
+                        name: "table",
+                        type: "Table",
+                        kind: .injectProperty,
+                        location: mockLocation("Repo.swift"),
+                        keyIdentifier: nil
+                    )
+                ],
+                location: mockLocation("Repo.swift"),
+                accessLevel: .internal,
+                contributions: [],
+                allowUnused: false,
+                originModule: testModule
+            )
+        )
+        let partitions: [Partition: [DiscoveredBinding]] = [
+            Partition(container: nil, scope: nil): [
+                genericRepo, provider("makeTable", boundType: "Table"),
+            ]
+        ]
+
+        // With the resolved graph supplied, the substituted edge keeps
+        // `Table` live and nothing warns.
+        #expect(
+            deadBindingDiagnostics(
+                across: partitions,
+                resolvedByContainer: [nil: [specialisedRepo]]
+            ).isEmpty
+        )
+
+        // Without it, the substituted edge is invisible and `Table` is
+        // reported dead — the gap this resolved-graph input closes.
+        #expect(
+            Set(deadBindingDiagnostics(across: partitions).map(\.location.file))
+                == ["makeTable.swift"]
+        )
+    }
+
     // MARK: - Multibinding contributors (conservative skip for now)
 
     @Test func contributorIsLiveViaItsAggregate() {

@@ -57,7 +57,8 @@ struct WireGen {
         )
         let crossFileDiagnostics = collectCrossFileDiagnostics(
             in: aggregate,
-            containerNames: Set(containerGraphs.map { $0.name })
+            containerNames: Set(containerGraphs.map { $0.name }),
+            resolvedBindingsByContainer: graphs.resolvedBindingsByContainer
         )
         let allDiagnostics = aggregate.warnings + crossFileDiagnostics
         printDiagnostics(allDiagnostics)
@@ -188,6 +189,12 @@ struct WireGen {
         var defaultGraph: GraphResult
         var containerGraphs: [(name: String, result: GraphResult)]
         var seedScopeOrchestrations: [SeedScopeOrchestration]
+        // Resolved-graph bindings per container (post-specialisation),
+        // merged across the container's singleton graph and its seed
+        // scopes. Feeds the dead-binding detector so a concrete producer
+        // consumed only through a specialised generic dependency counts
+        // as live.
+        var resolvedBindingsByContainer: [String?: [DiscoveredBinding]]
     }
 
     /// Partition `aggregate.allBindings` along both axes in a single
@@ -223,6 +230,7 @@ struct WireGen {
         var defaultGraph = GraphResult(outcome: .success(topologicalOrder: []), skipped: [])
         var containerGraphs: [(name: String, result: GraphResult)] = []
         var seedScopeOrchestrations: [SeedScopeOrchestration] = []
+        var resolvedBindingsByContainer: [String?: [DiscoveredBinding]] = [:]
         for containerKey in partitions.keys.sorted(by: containerKeyOrder) {
             let scopes = partitions[containerKey] ?? [:]
             let singletons = scopes[nil] ?? []
@@ -246,6 +254,8 @@ struct WireGen {
             } else {
                 defaultGraph = graph
             }
+            resolvedBindingsByContainer[containerKey, default: []]
+                += graph.outcome.topologicalOrder ?? []
             let borrows = syntheticSingletonBorrowBindings(
                 from: singletons,
                 inWireGraphOfType: parentGraphType
@@ -273,12 +283,15 @@ struct WireGen {
                     allBindings: aggregate.allBindings
                 )
                 seedScopeOrchestrations.append(orchestration.withResult(enrichedResult))
+                resolvedBindingsByContainer[containerKey, default: []]
+                    += enrichedResult.outcome.topologicalOrder ?? []
             }
         }
         return GraphBuilds(
             defaultGraph: defaultGraph,
             containerGraphs: containerGraphs,
-            seedScopeOrchestrations: seedScopeOrchestrations
+            seedScopeOrchestrations: seedScopeOrchestrations,
+            resolvedBindingsByContainer: resolvedBindingsByContainer
         )
     }
 
@@ -324,7 +337,8 @@ struct WireGen {
     /// Per-file warnings come straight from `aggregate.warnings`.
     private static func collectCrossFileDiagnostics(
         in aggregate: DiscoveryAggregate,
-        containerNames: Set<String>
+        containerNames: Set<String>,
+        resolvedBindingsByContainer: [String?: [DiscoveredBinding]]
     ) -> [Diagnostic] {
         var diagnostics: [Diagnostic] = []
         diagnostics += unannotatedExtensionContainerDiagnostics(
@@ -346,7 +360,10 @@ struct WireGen {
                 bindings.flatMap { $0.contributions }
             }
         )
-        diagnostics += deadBindingDiagnostics(across: aggregate.allBindings)
+        diagnostics += deadBindingDiagnostics(
+            across: aggregate.allBindings,
+            resolvedByContainer: resolvedBindingsByContainer
+        )
         diagnostics += multibindingLivenessDiagnostics(
             multibindingKeys: aggregate.multibindingKeys,
             bindingsByPartition: aggregate.allBindings
