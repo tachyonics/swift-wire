@@ -68,39 +68,47 @@ a parallel notion of compatibility.
   belong to multi-module composition, not normalization. See
   [`MultiModuleComposition.md`](MultiModuleComposition.md).)
 
-### Ambiguity: a `T?` consumer with both candidates is an error
+### Ambiguity: declaring both `T` and `T?` at one key is an error
 
-When a consumer asks for `T?` and, **under the same key**, both an exact
-`T?` producer and a promotable `T` producer exist, Wire does **not**
-silently rank one over the other. It is a **binding-ambiguity error**,
-and the user disambiguates with keys — the same mechanism that resolves
-any duplicate binding.
+When both an exact `T?` producer and a promotable `T` producer exist
+**under the same key**, Wire rejects the pair. The user disambiguates
+with keys — the same mechanism that resolves any duplicate binding. Wire
+does not silently rank one over the other.
 
 This deliberately diverges from Swift's own overload ranking, which
 silently prefers the exact match. Swift *must* pick — it cannot error on
 every promotable overload without breaking the language. Wire is under
 no such constraint: it is a build-time graph validator whose job is to
-surface ambiguity, and it already errors on duplicate bindings. So Wire
-mirrors Swift for *what satisfies what* (the assignability direction in
-the table above) but **not** for *tie-breaking* — there the
-explicit-over-implicit posture wins, consistent with the rest of this
-note. No silent precedence the user has to memorize.
+surface ambiguity. So Wire mirrors Swift for *what satisfies what* (the
+assignability direction in the table above) but **not** for *tie-breaking*
+— there the explicit-over-implicit posture wins, consistent with the rest
+of this note. No silent precedence the user has to memorize.
 
-Detection is **consumer-driven** — the collision is a resolution
-ambiguity at the `T?` site, not a duplicate *registration* (`T` and `T?`
-are distinct keys, so there is no duplicate to catch producer-side):
+Detection is **producer-side**, and it falls out of the existing
+identifier-collision check rather than a separate resolution pass: `T`
+and `T?` lower to the same generated local name (sanitisation drops the
+`?`), so declaring both at one key collides on that name and fails the
+build. `matchProducer` itself stays exact-first — it resolves a `T?`
+consumer to an exact `T?` producer and promotes a `T` producer only when
+no `T?` exists — so a single producer is never ambiguous.
 
-- The error fires only when resolving a `T?` dependency that finds both
-  a `(key, T?)` and a `(key, T)` producer.
-- A `T` consumer is never ambiguous — the asymmetry means a `T?`
-  producer cannot promote *down* to it.
-- Two producers with no `T?` consumer are not ambiguous; the `T?`
-  producer is simply its own (possibly dead) binding, covered by the
-  existing dead-binding warning.
-- Keys partition the space, and promotion still applies *within* a
-  matched key (`@Inject(key: K) x: T?` resolves against
-  `@Provides(key: K) -> T` by promotion). The ambiguity arises only when
-  two producers share one key.
+Catching the conflict at the producer *pair* has a property a
+consumer-driven rule would not:
+
+- **The error is stable regardless of consumers.** It fires the moment
+  both producers are declared, so adding a `T?` consumer later can never
+  turn a previously-valid graph ambiguous. A consumer-driven rule would
+  let two producers sit quietly until some distant `T?` consumer first
+  forces the choice — surfacing the conflict far from its cause.
+- The whole "a consumer sees two candidates" scenario is therefore
+  *mooted*: you cannot get both producers into one key to begin with, so
+  there is no consumer-site ambiguity left to resolve.
+- A `T` consumer is never involved — the asymmetry means a `T?` producer
+  can't promote *down* to it.
+- Keys partition the space: under distinct keys the two producers get
+  distinct generated names, coexist cleanly, and promotion still applies
+  *within* a key (`@Inject(K) x: T?` resolves against `@Provides(K) -> T`
+  when that key has no exact `T?`).
 
 ### What Wire deliberately does NOT do
 
@@ -172,7 +180,7 @@ against a `T` producer."
 |---|---|
 | `T?` consumer, only a `T` producer | resolves via promotion — no diagnostic |
 | `T?` consumer, only a `T?` producer | resolves exact — no diagnostic |
-| `T?` consumer, **both** a `T?` and a `T` producer | **ambiguity error** — disambiguate with a key (see above) |
+| **both** a `T` and a `T?` producer declared (any consumer, or none) | **error** at declaration — the pair collides on the generated name; disambiguate with a key (see above) |
 | `T?` consumer, neither `T` nor `T?` producer | missing-binding, listing *both* `T` and `T?` as candidate spellings |
 | `T` consumer, only a `T` producer | resolves exact — no diagnostic |
 | `T` consumer, only a `T?` producer | missing-binding with the asymmetry hint: a `T?` producer exists but can't satisfy a non-optional `T`; add a `T` producer or make the consumer `T?` |

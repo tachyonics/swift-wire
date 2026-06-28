@@ -1,88 +1,239 @@
 # Support for Opaque Types — design note
 
-> **Status:** design spec for deferred work. The pattern described here
-> is not implemented in M1's current iteration plan. Implementation
-> timing is tied to iteration 9 (task-cluster migration) — if migrating
-> task-cluster surfaces real `@Provides -> some P` cases, the work
-> lands there. Otherwise it slips post-M1 with no demand-pull.
+> **Status:** design spec for deferred work, revised after iteration 7's
+> incremental task-cluster adoption surfaced a concrete forcing case.
+> The feature is still unimplemented and scheduled around iteration 9,
+> but the demand is no longer hypothetical — see *Forcing function* below.
+> The model here deliberately stops short of conformance-based resolution
+> (see *Identity model*); it is opaque *nominal identity* plus a small,
+> closed set of promotion rules.
 
 ## The pattern
 
-A `@Provides` function whose return type uses Swift's opaque-type
-syntax — `some P` — to hide a concrete type behind a protocol while
-preserving the concrete identity at compile time:
+Opaque-type syntax — `some P` — hides a concrete type behind a protocol
+while preserving its concrete identity at compile time, with no
+existential boxing. Two positions use it:
+
+**Producer-side**, where the concrete type is hidden in the body:
 
 ```swift
 @Provides
 func makeDatabase() -> some DatabaseClient {
     PostgresClient(host: "...", port: 5432)
 }
+```
 
-@Singleton
-struct UserService<DB: DatabaseClient> {
-    @Inject var db: DB
+**Consumer-side**, where a binding is injected through the protocol it
+conforms to rather than its concrete type:
+
+```swift
+@Singleton(as: TaskRepository.self)        // declares graph identity `some TaskRepository`
+struct DynamoDBTaskRepository<Table: …>: TaskRepository { … }
+
+@Singleton struct CompositionRoot {
+    @Inject var repository: some TaskRepository   // not DynamoDBTaskRepository<…>
 }
 ```
 
-The mechanics:
+The consumer-side case is what iteration 7's task-cluster adoption
+surfaced, and it is *not* the `@Provides -> some P` shape this note was
+originally written around. It is treated below as a first-class form, not
+a footnote.
 
-- `makeDatabase()` returns a concrete type (`PostgresClient`) but
-  exposes it through the protocol with a stable opaque-type identity.
-- A generic consumer (`UserService<DB: DatabaseClient>`) is
-  specialised by Wire using the opaque type as `DB`, producing
-  `UserService<some DatabaseClient>` — a fully concrete instantiation
-  in the graph.
-- The consumer's source references the protocol only; the concrete
-  type stays hidden from the consumer's code but specialised through
-  the type system. No existential boxing.
+`some P` is the middle ground between two existing options:
 
-This is a middle ground between two existing options:
+- **`any P`** — type-erased existential; runtime virtual dispatch.
+- **Concrete type at both ends** — full specialisation, zero abstraction;
+  the consumer names the concrete type directly.
 
-- **`any P`** — type-erased existential. Standard hex/ports pattern,
-  runtime virtual dispatch, consumer doesn't know the implementation.
-- **Concrete type at both ends** — full specialisation, zero
-  abstraction; the consumer references the concrete type directly.
+`some P` keeps the abstraction at the source level while preserving
+compile-time identity through the type system.
 
-`some P` keeps the abstraction at the source level (provider returns
-through the protocol, generic consumers depend only on the protocol)
-while preserving compile-time identity through the type system.
+## Identity model: `some P` is an opaque *nominal* identity
 
-## How it fits Wire's binding model
+This is the load-bearing decision. `some P` is **another exact-match
+identity token**, alongside `DynamoDBTaskRepository<…>`, `any P`, and the
+rest. Wire matches it the way it matches everything — by canonical text.
+`some TaskRepository` matches an injection point that spells
+`some TaskRepository`, and nothing else.
 
-Wire's binding identity is text-based: two `@Provides` with the
-same canonical-text return type are duplicates (ambiguity error,
-requires keying). For opaque returns this means:
+Wire does **not** do conformance-based resolution. There is no "find the
+binding whose concrete type conforms to `P`." That would require
+reimplementing a meaningful slice of the type system (conformance
+checking, including inherited/conditional/retroactive conformances Wire
+can't see syntactically) and would make ambiguity the *default* — every
+type conforming to `P` would contend for one slot. Keeping `some P` a
+nominal token avoids all of that: there is exactly one binding per
+`some P` identity (subject to the duplicate/collision rules below), so
+resolution stays exact and unambiguous.
 
-- `@Provides -> some DatabaseClient` produces a binding with key text
-  `some DatabaseClient`.
-- Two such providers without disambiguating keys are a duplicate-
-  binding error — same as any other duplicate. The keys-disambiguation
-  pattern handles it.
-- A binding `@Provides -> MySDK<some DatabaseClient>` produces a
-  *different* key text (`MySDK<some DatabaseClient>`) and is a
-  distinct binding from `some DatabaseClient`. The opaque types
-  inside the two return positions are independent — Swift's
-  semantics, not just Wire's matching.
+The consequence for self-production: **a `@Singleton` has one graph
+identity by default** — its concrete type. `@Singleton(as: P.self)` lets a
+self-producer instead declare that identity as `some P`, the library
+inferring the `@Provides -> some P` wrapper the user would otherwise
+hand-write, with no second instance. A binding may also declare
+*additional* explicit identities so it is reachable under more than one
+token (see *Multiple explicit identities*). What Wire never does is
+*derive* an identity from conformance — the set is always exactly what the
+author declared.
 
-Generic-specialisation already handles the lookup-through-constraint
-case: a consumer `Foo<T: P>` with `@Inject var x: T` matches against
-any binding whose bound type satisfies `T: P`, including `some P`
-bindings. The existing specialisation machinery is sufficient for
-the resolution side; the new work is in code emission.
+## The closure invariant: opacity is viral, and the chain is `some` end-to-end
 
-## Codegen requirements
+Because matching is nominal and there is no conformance resolution, an
+abstract consumer can only be fed by a producer that declares the *same*
+abstract identity. You cannot splice a concrete-identity producer into a
+`some P` slot — that hop is exactly the conformance lookup we rejected.
 
-The complication is that Swift's `some P` opens a fresh opaque-type
-abstraction at every declaration position. Two stored properties
-declared as `some DatabaseClient` get *different* opaque types even
-when initialised from the same expression. So Wire's generated
-`_WireGraph` can't just spell `some P` at multiple property positions
-that should refer to the same opaque-type identity. The shape that
-works:
+So opacity is **contagious upward**: if `CompositionRoot` wants
+`some APIProtocol`, then the controller, the repository, *and* the leaf
+all declare opaque identities. The chain is `some` from top to bottom and
+bottoms out at a single concrete initialiser:
 
 ```swift
-// Generated for a graph with @Provides -> some DatabaseClient
-// plus UserService<DB: DatabaseClient> as a generic consumer:
+@Provides let table: some DynamoDBCompositePrimaryKeyTable
+    = InMemoryDynamoDBCompositePrimaryKeyTable()
+
+@Singleton(as: TaskRepository.self)
+struct DynamoDBTaskRepository<Table: DynamoDBCompositePrimaryKeyTable & Sendable>: TaskRepository {
+    @Inject init(table: some DynamoDBCompositePrimaryKeyTable) { … }
+}
+
+@Singleton(as: APIProtocol.self)
+struct TaskController<Repository: TaskRepository>: APIProtocol {
+    @Inject init(repository: some TaskRepository) { … }
+}
+
+@Singleton struct CompositionRoot {
+    @Inject var controller: some APIProtocol
+}
+```
+
+The concrete type `InMemoryDynamoDBCompositePrimaryKeyTable` appears
+**exactly once**, as the leaf initialiser — the genuine composition-root
+choice, not a wart. The nested spelling
+`TaskController<DynamoDBTaskRepository<InMemoryDynamoDBCompositePrimaryKeyTable>>`
+that today's `CompositionRoot` is forced into collapses entirely.
+
+**The leaf must be `some`, not the bare protocol (`any`).** Writing
+`@Provides let table: DynamoDBCompositePrimaryKeyTable = …` makes it an
+existential, which fails twice: it reintroduces boxing at the bottom of an
+otherwise zero-cost chain, and `any P` generally can't satisfy a generic
+constraint `Table: P` (protocols with `Self`/associated-type/static
+requirements don't self-conform), so it can't be the generic argument at
+all. `some` conforms normally. This isn't a Wire rule — it falls straight
+out of Swift's own opaque/existential semantics; users obey it whenever
+they hand-write this code.
+
+## Multiple explicit identities
+
+A binding may declare more than one identity and satisfy consumers of
+each — for example the in-memory table as both
+`InMemoryDynamoDBCompositePrimaryKeyTable` and
+`some DynamoDBCompositePrimaryKeyTable`, from one instance. This is
+*explicit aliasing*, not conformance: the author lists the identities and
+Wire matches each by exact token; nothing is derived.
+
+It is the sanctioned way to **bridge the concrete and opaque sub-graphs**.
+The closure invariant makes opacity viral — a `some P` consumer needs a
+`some P` producer all the way down. A multi-identity binding is the one
+place that virality is deliberately broken: a single node living in both
+worlds, so most of the graph can stay concrete while one seam is exposed
+opaquely (or vice versa).
+
+It supersedes the wrapper workaround (`@Singleton` for the concrete
+identity plus a thin `@Provides -> some P` that injects and returns it),
+and beats it on two counts:
+
+- **One instance, declared once** — no second binding to keep in sync.
+- **Cheaper codegen.** The wrapper's `@Provides -> some P` *hides* the
+  type, forcing the `_WireGraph<DB>` lifting. A native alias keeps the
+  type known (it came from the `@Singleton` / `@Provides let`), so the
+  `some P` consumers are served by the bridge/promotion rules with no
+  lifting.
+
+Bounds that keep it safe:
+
+- **No new ambiguity class.** Each declared identity goes through the
+  existing duplicate/collision detection independently — two bindings
+  claiming `some P` is the ordinary duplicate error, whatever else either
+  one declares.
+- **Known-type bindings only.** A genuinely-hidden `@Provides -> some P`
+  cannot also claim a concrete identity (Wire doesn't know the concrete
+  type). Aliasing applies where the type is known — self-producers and
+  `@Provides let x: some P = Concrete()` — which is also the no-lifting
+  case.
+
+**Status: deferred, not yet needed.** Task-cluster's opaque chain consumes
+each binding under a single identity, so there is no live forcing case.
+The model leaves room for aliases (single identity is a *default*, not a
+cap), but the machinery waits for a real binding consumed under two
+identities, where the wrapper boilerplate starts to grate.
+
+## Resolving consumers
+
+Three rules, in precedence order. None require conformance search.
+
+1. **Exact token.** `@Inject … some P` resolves to the binding with
+   identity `some P`. Standard exact match.
+
+2. **Constrained-parameter bridge.** A generic dependency whose type is a
+   bare type parameter constrained to `P` — `repository: Repository`
+   where `Repository: TaskRepository`, with no concrete instantiation
+   requested — resolves to the unique `some P` binding. This is the one
+   conformance-*aware* step, and it stays bounded: it reads the
+   parameter's declared constraint and maps it to the `some P` token; it
+   does not search conformers. The single-identity rule guarantees at most
+   one `some P` binding, so there is no ambiguity to resolve. The closure
+   invariant guarantees the binding exists (every hop up the chain offers
+   one). Codegen then emits the construction with the opaque value and the
+   Swift compiler specialises the generic — Wire never names the hidden
+   type.
+
+3. **Qualifier promotion: `some P` satisfies `any P`.** A `some P` binding
+   may feed an `any P` consumer (the concrete-underlying value boxes into
+   the existential). One-directional: `any P` can never feed `some P` (an
+   existential has erased the single underlying type `some P` requires).
+   The boxing cost lands at the `any P` consumption site — the consumer
+   that chose the existential pays for it; the binding stays zero-cost for
+   its `some P` consumers.
+
+   This is the second member of a **closed set** of qualifier promotions,
+   alongside `T` satisfies `T?` (see
+   [`OptionalMatchingAndCycles.md`](Documentation/Notes/OptionalMatchingAndCycles.md)).
+   The set is deliberately closed — there is no `X` satisfies `any P`
+   (that is the conformance lookup we rejected; it is safe for `some P`
+   precisely because `some P` already names `P` in its identity, whereas a
+   concrete `X` would have to be *discovered* to conform), and no
+   `any P` satisfies `some P`. Promotion is only ever between qualifier
+   variants of the *same named protocol*.
+
+## Disambiguation is producer-side
+
+Consistent with the optional rule (which this note's promotion set mirrors),
+conflicts are caught at declaration, not at a consumer:
+
+- **Two bindings with the *same* `some P` identity** (e.g. two unkeyed
+  `@Provides -> some DatabaseClient`) are a duplicate-binding error, the
+  same as any duplicate. Disambiguate with keys.
+- **A `some P` binding and an `any P` binding** are distinct identities but
+  lower to the same generated name, so declaring both at one key is an
+  identifier collision — exactly as `T` and `T?` collide. Keys give them
+  distinct names and let them coexist.
+
+Both fire when the producers are declared, independent of any consumer, so
+adding a consumer later can never turn a valid graph ambiguous.
+
+## Codegen: lifting opaque bindings onto `_WireGraph`
+
+Whenever an opaque binding is *exposed as a graph property* (read off the
+bootstrapped graph, or stored across the `_WireGraph` boundary rather than
+consumed only within `_wireBootstrap`), the concrete identity has to be
+carried as a generic parameter. Swift opens a fresh opaque type at every
+`some P` declaration position, so a stored property typed `some P` would
+not refer to the same type the bootstrap produced. The shape that works:
+
+```swift
+// @Provides -> some DatabaseClient, plus a generic consumer:
 struct _WireGraph<DB: DatabaseClient> {
     let db: DB
     let userService: UserService<DB>
@@ -98,33 +249,35 @@ func _wireBootstrap() throws -> _WireGraph<some DatabaseClient> {
 
 Rules for the codegen pass:
 
-1. **Every distinct opaque-typed binding lifts a generic parameter
-   on `_WireGraph`.** With N opaque-typed bindings (after key
-   disambiguation), the graph type is `_WireGraph<P1, P2, ..., PN>`.
-   Each Pᵢ corresponds to one opaque-typed binding's concrete
-   identity. The bootstrap returns
-   `_WireGraph<some P1, some P2, ..., some PN>`.
+1. **Every distinct opaque-typed binding exposed on the graph lifts a
+   generic parameter on `_WireGraph`.** With N such bindings (after key
+   disambiguation) the graph type is `_WireGraph<P1, …, PN>` and the
+   bootstrap returns `_WireGraph<some P1, …, some PN>`.
 
 2. **Lifting applies to nested positions, not only top-level.** A
-   `@Provides -> MySDK<some P>` binding lifts the inner opaque type
-   to a generic parameter even though `MySDK` wraps it. Two stored
-   properties declared as `MySDK<some P>` would otherwise open two
-   independent opaque-type abstractions; lifting forces a single
-   identity through the generic parameter.
+   `@Provides -> MySDK<some P>` binding lifts the inner opaque type so two
+   `MySDK<some P>` properties don't open two independent abstractions.
 
 3. **Generic-specialised consumers reference the lifted parameter.**
-   `UserService<DB>` in the example above uses the same `DB` symbol
-   that's the lifted parameter on `_WireGraph`. Wire's codegen
-   substitutes consistently across the graph.
+   `UserService<DB>` uses the same `DB` symbol lifted onto `_WireGraph`;
+   codegen substitutes consistently across the graph.
 
 4. **Per-container graphs apply the same rule.** Each
-   `_<ContainerName>WireGraph` lifts its own opaque parameters. The
-   container's opaque-type set is independent of the default graph's.
+   `_<ContainerName>WireGraph` lifts its own opaque set.
+
+A `@Singleton(as: P)` self-producer whose concrete type Wire already knows
+(it is declared) does not strictly need lifting for *construction* — the
+bootstrap can build it concretely — but it does need it for any *exposure*
+as a `some P` graph property, so the same machinery applies uniformly.
+
+Opaque bindings are skipped from `_WireKeyChecks` type assertions: the
+build plugin can't unify the hidden concrete type, so it emits no
+compile-time check for them (the existing `!type.hasPrefix("some ")` guard
+in code emission already does this).
 
 ## Multiple opaque bindings via keying
 
-Keys disambiguate duplicate-text bindings just like elsewhere in the
-graph:
+Keys disambiguate same-identity bindings exactly as elsewhere:
 
 ```swift
 extension Database {
@@ -132,123 +285,54 @@ extension Database {
     static let replica = BindingKey<some DatabaseClient>("replica")
 }
 
-@Provides(Database.primary)
-func primaryDB() -> some DatabaseClient { PostgresClient() }
-
-@Provides(Database.replica)
-func replicaDB() -> some DatabaseClient { PostgresClient(readonly: true) }
+@Provides(Database.primary) func primaryDB() -> some DatabaseClient { PostgresClient() }
+@Provides(Database.replica) func replicaDB() -> some DatabaseClient { PostgresClient(readonly: true) }
 ```
 
-Both bindings have canonical text `some DatabaseClient` but distinct
-keys, so they coexist in the graph. Each lifts its own generic
-parameter on `_WireGraph`. The bootstrap return becomes
-`_WireGraph<some DatabaseClient, some DatabaseClient>` — two
-independent opaque type slots.
+Both have canonical text `some DatabaseClient` but distinct keys, so they
+coexist; each lifts its own generic parameter.
 
-## Why iteration 9 timing
+## Forcing function
 
-Iteration 9 (task-cluster migration) is the trigger because that's
-where real `some P` cases either surface or stay hypothetical.
-Task-cluster's pre-Wire code uses the pattern in `buildApplication`:
+Iteration 7's incremental task-cluster adoption surfaced the need, and in
+the consumer-side shape above rather than `@Provides -> some P`:
+`CompositionRoot` is forced to spell
+`TaskController<DynamoDBTaskRepository<InMemoryDynamoDBCompositePrimaryKeyTable>>`
+because the self-producing `@Singleton` repository and controller have
+only concrete identities. `@Singleton(as:)` + the closure invariant
+collapse that to `@Inject var controller: some APIProtocol` with the
+concrete type named once at the leaf.
 
-```swift
-package func buildApplication<Repository: TaskRepository>(
-    repository: Repository,
-    configuration: ApplicationConfiguration,
-    logger: Logger
-) throws -> some ApplicationProtocol {
-    let controller = TaskController(repository: repository)
-    // ...
-    return Application(...)
-}
-```
+The cost is real and worth stating: adopting opacity means changing the
+form of the layers involved (the chain becomes `some` end-to-end), the
+same kind of shape-shift adopting any Wire feature can require. It buys
+removing the nested concrete spelling and the manual composition root, at
+the price of declaring opaque identity at each hop.
 
-Wire's generated bootstrap is structurally equivalent — generic
-function constructing concrete instances with opaque-return type
-abstraction. The codegen described above generates exactly this
-shape automatically.
+Scheduling stays around iteration 9 (the broader task-cluster migration),
+but the case is now concrete rather than speculative, so this is the
+design to implement against, not a hypothetical.
 
-If iteration 9 migrates task-cluster and the migration needs
-`@Provides -> some P`, the work lands then with task-cluster as the
-forcing function. If migration goes through without hitting it, the
-spec stays documented here and implementation waits for an adopter's
-case to surface.
+## What this note deliberately does NOT add
 
-## Open implementation questions for iteration 9
-
-1. **Detection.** Which `@Provides` return types are opaque? Wire's
-   build plugin recognises `some P` syntactically via SwiftSyntax.
-   Confirm nested forms (`MySDK<some P>`, `(some P, some Q)`) are
-   detected too — they need the same lifted-parameter treatment.
-
-2. **Identity matching across the graph.** When a generic consumer
-   has `T: P` and exactly one binding satisfies it via `some P`,
-   specialisation picks the opaque type. When *multiple* opaque-type
-   bindings could satisfy the constraint (different keys), Wire's
-   existing ambiguity detection fires and the user resolves with
-   explicit keys. No new mechanism — keys carry through the existing
-   path.
-
-3. **Visibility through nested types.** A binding bound as
-   `MySDK<some DatabaseClient>` doesn't *expose* a `DatabaseClient`
-   binding to the rest of the graph — the inner opaque type is
-   encapsulated. Confirm Wire's graph-walking pass treats the
-   wrapper's bound type (`MySDK<some DatabaseClient>`) as the only
-   binding-key contribution, not the inner protocol.
-
-4. **Generated code's interaction with consumers outside the graph.**
-   `_wireBootstrap()` returns `_WireGraph<some P>`. A consumer that
-   wants to thread the bootstrap's result through generic functions
-   of its own works naturally (Swift's type-system propagation
-   handles it). Consumers that want to *name* the concrete type
-   inside the opaque slot can't (by design). Document this in the
-   README so users understand the trade-off.
-
-5. **Interaction with multi-module composition.** When an activated
-   library publishes `@Provides -> some P`, the consuming target's
-   build plugin must lift the same opaque type into the consumer's
-   `_WireGraph`. Confirm the library's manifest format carries the
-   opaque-typed binding's canonical text correctly.
-
-## Why not in M1's current iteration plan
-
-- **Concrete + `any P` covers the common case.** Iteration 4's
-  validation gate, and the README's canonical examples, work without
-  opaque returns. Users have two well-supported paths.
-- **The codegen pipeline gains a new dimension.** Lifting generic
-  parameters onto `_WireGraph` is mechanically straightforward but
-  affects every layer of emission: type declarations, init
-  signatures, container-graph variants, key-checks. Designing the
-  emission against a real use case (iteration 9 or an adopter) avoids
-  shipping speculative codegen.
-- **Task-cluster's *current* Wire'd version (per the README) doesn't
-  force this.** The README is somewhat sanitised; faithful migration
-  may push toward opaque returns, but until iteration 9 runs the
-  migration we don't know which specific cases.
-
-The codegen shape is canonical Swift backend (per task-cluster's
-buildApplication pattern). When iteration 9 demands it, implementing
-against this spec is "wire up the codegen pipeline against the
-already-designed shape," not "design from scratch."
-
-## Decision trigger
-
-Iteration 9 surfaces a real `@Provides -> some P` need that blocks
-task-cluster migration → implement opaque-types support against this
-spec in iteration 9.
-
-Migration completes without hitting the case → spec stays documented;
-implementation waits for an external adopter's case to surface.
+- **Conformance-based binding.** No resolving a protocol dependency to an
+  arbitrary conformer. The closed promotion set is the only loosening of
+  exact matching, and it is restricted to qualifier variants of one named
+  protocol. Reasserted because it is the line that keeps this feature from
+  becoming a type-system reimplementation.
+- **Silent precedence.** Conflicts are producer-side errors resolved with
+  keys, never silent tie-breaks.
+- **Fabricated optionals / absent bindings.** Unchanged from the optional
+  note: absence is always an error.
 
 ## Second forcing condition: `BuilderKey<B>`
 
-Iteration 5's `BuilderKey<B>` (result-builder-driven multibinding
-fold) couples into this spec for the parameterized-opaque case.
-A `BuilderKey` whose result type the producer wants to declare as
-`some P<…>` — typically a typed middleware-style builder — uses
-a producer-side factory that captures the opaque shape and routes
-the binding through the same parameter-lifting mechanism described
-above:
+Iteration 5's `BuilderKey<B>` (result-builder-driven multibinding fold)
+couples into this spec for the parameterized-opaque case. A `BuilderKey`
+whose result type the producer wants to declare as `some P<…>` — typically
+a typed middleware-style builder — declares the opaque shape at the key
+(producer-side, same dependency direction as everywhere else) and routes
+through the same parameter-lifting mechanism:
 
 ```swift
 static let middleware = BuilderKey<MiddlewareBuilder>.opaque(
@@ -257,21 +341,10 @@ static let middleware = BuilderKey<MiddlewareBuilder>.opaque(
 )
 ```
 
-The opaque shape is declared at the key (producer-side, same
-direction of dependency as everywhere else in Wire — consumers
-match against the key's declared type, don't drive it).
-`_WireGraph` lifts a generic parameter for the opaque slot;
-consumers reference the same lifted parameter via their generic
-constraint.
-
-If a `BuilderKey<B>` adopter (in iteration 5 or later) wants this
-opaque variant before task-cluster migration does, that's an
-independent reason to move opaque-types support forward. See
-`Documentation/Notes/BuilderKeyDesign.md` for the design coupling
-in full.
-
-Iteration 5 ships `BuilderKey<B>` with the non-opaque cases —
-both implicit (where Wire derives the result type from the
-builder's `buildBlock` / `buildFinalResult`) and the explicit-
-`any P<…>` form on the key — without needing this spec. The
-parameterized-opaque case lands when this spec lands.
+`_WireGraph` lifts a generic parameter for the opaque slot; consumers
+reference it via their generic constraint. Iteration 5 ships `BuilderKey<B>`
+with the non-opaque cases (implicit result type derived from the builder,
+and the explicit `any P<…>` form); the parameterized-opaque case lands
+when this spec does. See
+[`BuilderKeyDesign.md`](Documentation/Notes/BuilderKeyDesign.md) for the
+coupling in full.
