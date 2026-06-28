@@ -58,6 +58,22 @@ jobs:
       - name: Run tests
         run: swift test
 
+  CompositionHarness:
+    name: Composition harness (multi-module gate)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: SwiftyLab/setup-swift@v1
+        with:
+          swift-version: "6.3.1"
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: Run composition harness
+        # Multi-module composition gate (iteration 7g). Runs outside
+        # `swift test` because the macro-using harness library depends on
+        # swift-wire — a fixture in swift-wire's own tests would cycle.
+        run: bash CompositionHarness/run-harness.sh
+
   SwiftSyntaxMatrix:
     name: swift-syntax ${{ matrix.swift-syntax-major }}.x / Swift ${{ matrix.swift-version }}
     strategy:

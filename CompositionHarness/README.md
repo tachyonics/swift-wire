@@ -15,7 +15,7 @@ CompositionHarness/
 ├── Consumer/   — depends on swift-wire + Library, applies WireBuildPlugin;
 │                 an executable that bootstraps the generated graph and asserts
 │                 the library's bindings composed across the package boundary
-└── run-harness.sh — runs the gate (CI invokes this in iteration 9)
+└── run-harness.sh — runs the gate (the CompositionHarness CI job invokes this)
 ```
 
 ## Running

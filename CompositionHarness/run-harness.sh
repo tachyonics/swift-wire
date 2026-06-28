@@ -7,7 +7,7 @@
 # test targets depended on would form a circular package dependency. So the
 # external-`.product` activation path is exercised by a separate
 # consumer+library package pair that depend on swift-wire (one direction),
-# run here. CI (iteration 9) invokes this script.
+# run here. The CompositionHarness CI job invokes this script.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 

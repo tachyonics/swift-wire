@@ -14,4 +14,16 @@ struct CrossModuleCompositionTests {
         let graph = try await _WireGraph.bootstrap()
         #expect(graph.libraryService.name == "library")
     }
+
+    /// Iteration 7f — same-package visibility threshold. `PackageVisibleService`
+    /// is `package`, not `public`. `WireTestLibrary` is a `.target` dependency
+    /// (same package), so `package` is reachable across the module boundary and
+    /// clears the threshold without `public`: this only compiles because the
+    /// generated `_WireGraph` references the `package` type. An `internal`
+    /// binding would be rejected; a `package` binding across a *package* boundary
+    /// (the external harness) would need `public`.
+    @Test func samePackagePackageVisibleBindingIsComposed() async throws {
+        let graph = try await _WireGraph.bootstrap()
+        #expect(graph.packageVisibleService.label == "package-visible")
+    }
 }
