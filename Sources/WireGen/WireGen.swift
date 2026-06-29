@@ -133,6 +133,8 @@ struct WireGen {
         var nonInjectExtensionInits: [NonInjectExtensionInit] = []
         var multibindingKeys: [DiscoveredMultibindingKey] = []
         var bindingKeys: [DiscoveredBindingKey] = []
+        var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
+        var adapterUseSites: [AdapterUseSite] = []
         var resultBuilders: [DiscoveredResultBuilder] = []
     }
 
@@ -177,6 +179,8 @@ struct WireGen {
             )
             aggregate.multibindingKeys.append(contentsOf: result.multibindingKeys)
             aggregate.bindingKeys.append(contentsOf: result.bindingKeys)
+            aggregate.adapterAnnotations.append(contentsOf: result.adapterAnnotations)
+            aggregate.adapterUseSites.append(contentsOf: result.adapterUseSites)
             aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
         }
         return aggregate

@@ -106,6 +106,10 @@ final class BindingDiscovery: SyntaxVisitor {
     /// matched by name against adapter use-sites to resolve and validate the
     /// generated `_wireRegister` calls.
     var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
+    /// Adapter-annotation use-sites (adapter-shaped attributes on type decls)
+    /// found in this file. Captured name-agnostically; classified against
+    /// `adapterAnnotations` later.
+    var adapterUseSites: [AdapterUseSite] = []
     /// `@resultBuilder` types found in this file, with their fold result
     /// type — the producer-side result type a `BuilderKey` aggregate has.
     var resultBuilders: [DiscoveredResultBuilder] = []
@@ -146,6 +150,7 @@ final class BindingDiscovery: SyntaxVisitor {
             attributes: node.attributes,
             members: node.memberBlock.members
         )
+        recordAdapterUseSites(name: node.name, attributes: node.attributes)
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -185,6 +190,7 @@ final class BindingDiscovery: SyntaxVisitor {
             attributes: node.attributes,
             members: node.memberBlock.members
         )
+        recordAdapterUseSites(name: node.name, attributes: node.attributes)
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -224,6 +230,7 @@ final class BindingDiscovery: SyntaxVisitor {
             attributes: node.attributes,
             members: node.memberBlock.members
         )
+        recordAdapterUseSites(name: node.name, attributes: node.attributes)
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -268,6 +275,7 @@ final class BindingDiscovery: SyntaxVisitor {
             attributes: node.attributes,
             members: node.memberBlock.members
         )
+        recordAdapterUseSites(name: node.name, attributes: node.attributes)
         warnings.append(
             contentsOf: containerWithScopeDiagnostics(
                 nameToken: node.name,
@@ -510,6 +518,23 @@ final class BindingDiscovery: SyntaxVisitor {
         ) {
             resultBuilders.append(builder)
         }
+    }
+
+    /// Capture any adapter-annotation use-sites on a type declaration. Called
+    /// from each nominal-type visit, before the type is pushed onto the scope
+    /// stack, so `scopes` holds only the enclosing types for the qualified
+    /// callee name.
+    private func recordAdapterUseSites(name: TokenSyntax, attributes: AttributeListSyntax) {
+        adapterUseSites.append(
+            contentsOf: scanAdapterUseSites(
+                annotatedTypeName: name.text,
+                annotatedQualifiedTypeName: (scopes.map(\.typeName) + [name.text]).joined(separator: "."),
+                attributes: attributes,
+                sourcePath: sourcePath,
+                converter: converter,
+                module: module
+            )
+        )
     }
 
     /// `@Provides` is only recognised at module scope or as a `static`
