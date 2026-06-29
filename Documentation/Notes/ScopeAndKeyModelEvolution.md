@@ -166,9 +166,10 @@ Tracking single keys flips concern 1 from "optional parity tweak" to
 - Single/multi key diagnostics become consistent (concern 1 resolved).
 - Scope inputs can be named by key alone — the redundancy disappears.
 
-i.e. `BindingKey<T>`, `CollectedKey<T>`, and a scope key all become "a
-declared, type-carrying reference Wire tracks," and diagnostics, scope
-inputs, and qualifiers read uniformly off that.
+i.e. `BindingKey<T>`, `CollectedKey<T>`, a scope key, and an adapter
+dependency (see below) all become "a declared, type-carrying reference Wire
+tracks," and diagnostics, scope inputs, qualifiers, and adapter
+registrations read uniformly off that.
 
 But it's a **behavioral change** (Wire would start diagnosing single
 keys). **Decision: land it as an early foundation sitting of multi-module
@@ -188,6 +189,50 @@ slips past iteration 7 (see the sequencing summary).
 - Mixing a bare metatype (`RequestSeed.self`) with a key reference in one
   call needs a common parameter type (a `ScopeInput` value or a shared
   protocol).
+
+## Adapter dependencies — a keyed reference with a second (macro) consumer
+
+The adapter-annotation contract (iteration 8) adds a fourth consumer of the
+keyed-reference foundation, alongside `@Inject(K)`, `@Provides(K)`, and scope
+inputs: an adapter use-site names the bindings its generated `_wireRegister`
+needs.
+
+- **Unkeyed:** `@RoutedBy(Router<C>.self)` — a bare type metatype, resolved
+  against the graph by type. (This is M1.)
+- **Keyed (deferred):** `@RoutedBy(keyed(Logger.self, with: Logger.primary))`,
+  via a type-safe helper `keyed<T>(_ type: T.Type, with key: BindingKey<T>)`
+  whose shared `T` makes a type/key mismatch a compile error. The key is
+  chosen by the **consumer** at the use-site (who knows their graph has two
+  loggers), transparent to the adapter author — the macro and its
+  register-signature template stay key-agnostic.
+
+It resolves to the same `(type, key)` identity as everything else, off the
+same `BindingKey` tracking and `matchProducer`. What differs is the
+*surface*, and it follows the family rule: **spell the key bare where the
+type is already available at the site; bundle type + key where it isn't.**
+`@Inject(K) var x: T` and scope inputs have the type elsewhere (the property,
+or recovered from the tracked key), so the key rides bare. An adapter slot
+has no other type source *and* a second consumer — the adapter's own macro,
+which must emit `_wireRegister(…, logger: Logger)` and so needs the type
+spelled — so the slot bundles both. The value→type wall (a value-level key
+can't sit in a type-position metatype) makes the bare-key shorthand
+impossible here regardless; and unlike a scope input, an adapter dependency
+*reads* an existing binding rather than *supplying* a scope value, so it's
+the same reference notation, not the same mechanism.
+
+Multi-dependency extends per-slot: each argument is independently a bare
+metatype or a `keyed(…)` slot, mapped positionally to the template's
+`$0`/`$1`/…. Per-element labels aren't available (a variadic macro can't
+label elements), which is *why* the key bundles into the slot rather than
+riding as a sibling labelled argument. When it lands, the slot grammar
+(bare metatype vs `keyed(…)`) should live in a Wire-provided macro-support
+helper used by **both** Wire's discovery scanner and adapter macros, so the
+two can't drift and authors don't re-implement the type extraction.
+
+**Deferred — no M1 forcing case** (task-cluster's adapter dependency is a
+single unkeyed router). The seam is already in place: resolution carries a
+`BindingIdentity` whose `key` is `nil` for bare slots, so keyed support is
+additive when a real case appears.
 
 ## Sequencing summary
 

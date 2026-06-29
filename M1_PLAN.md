@@ -288,6 +288,8 @@ Risk #6's mitigation lives here. Builds the contract surface that M3, M4, and M5
 
 **Validation gate:** the throwaway adapter's `_wireRegister` is detected, validated, and called in the bootstrap. Missing parameter binding produces an error pointing at the adapter annotation. Removing the adapter library from the target's dependencies deactivates the registration cleanly.
 
+**Deferred (M1 is unkeyed):** keyed adapter dependencies — referencing a *keyed* binding from an adapter use-site via a `keyed(Type.self, with: Key)` slot, consumer-chosen and macro-agnostic. It's another member of the keyed-reference family, designed in [`ScopeAndKeyModelEvolution.md`](Documentation/Notes/ScopeAndKeyModelEvolution.md) ("Adapter dependencies"); the resolution seam (`BindingIdentity.key`, `nil` for bare slots) is in place so it's additive when a real case appears.
+
 ## Iteration 9 — output, diagnostics polish, task-cluster migration
 
 Tail-end work scope-bounded by what earlier iterations surfaced.
