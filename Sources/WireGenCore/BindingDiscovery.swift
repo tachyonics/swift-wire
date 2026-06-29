@@ -461,6 +461,9 @@ final class BindingDiscovery: SyntaxVisitor {
         return .skipChildren
     }
 
+}
+
+extension BindingDiscovery {
     // MARK: Helpers
 
     /// Push one frame onto `scopes` for a type declaration. A
@@ -545,7 +548,6 @@ final class BindingDiscovery: SyntaxVisitor {
         if scopes.isEmpty { return true }
         return modifiers.contains { $0.name.tokenKind == .keyword(.static) }
     }
-
 }
 
 extension BindingDiscovery {
