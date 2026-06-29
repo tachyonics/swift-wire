@@ -70,6 +70,19 @@ struct WireGen {
         )
 
         let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
+
+        // Adapter registrations resolve against the *valid* default graph, so
+        // this runs after `failIfAnyGraphInvalid`. Their errors (missing
+        // dependency, duplicate definition) get their own fail step rather than
+        // riding the cross-file pass, which fires before the graph is known good.
+        let (adapterRegistrations, adapterDiagnostics) = resolveAdapterRegistrations(
+            useSites: aggregate.adapterUseSites,
+            definitions: aggregate.adapterAnnotations,
+            producers: defaultOrder
+        )
+        printDiagnostics(adapterDiagnostics)
+        failIfAnyDiagnosticIsError(adapterDiagnostics)
+
         let containerOrders = printAndCollectTopologicalOrders(
             defaultOrder: defaultOrder,
             containers: containerGraphs,
@@ -89,7 +102,8 @@ struct WireGen {
             imports: imports,
             topologicalOrder: defaultOrder,
             containerTopologicalOrders: containerOrders,
-            seedScopeOrders: seedScopeOrders
+            seedScopeOrders: seedScopeOrders,
+            adapterRegistrations: adapterRegistrations
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
