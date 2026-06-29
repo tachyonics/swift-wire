@@ -51,22 +51,37 @@ package func resolveAdapterRegistrations(
     definitions: [DiscoveredAdapterAnnotation],
     producers: [DiscoveredBinding]
 ) -> (registrations: [ResolvedAdapterRegistration], diagnostics: [Diagnostic]) {
-    var diagnostics: [Diagnostic] = []
-
     let resolvedProducers = Dictionary(
         producers.map { ($0.identity, $0) },
         uniquingKeysWith: { first, _ in first }
     )
+    let (definitionsByName, definitionDiagnostics) = indexAdapterDefinitions(definitions)
 
-    // Index definitions by annotation name. Two definitions sharing a name —
-    // conflicting contracts across modules — are an error, and use-sites of
-    // that name are left unresolved (no single contract to apply).
-    var definitionsByName: [String: DiscoveredAdapterAnnotation] = [:]
-    var byName: [String: [DiscoveredAdapterAnnotation]] = [:]
-    for definition in definitions {
-        byName[definition.annotationName, default: []].append(definition)
+    var registrations: [ResolvedAdapterRegistration] = []
+    var diagnostics = definitionDiagnostics
+    for useSite in useSites {
+        guard let definition = definitionsByName[useSite.annotationName] else { continue }
+        let resolved = resolveUseSite(useSite, against: definition, producers: resolvedProducers)
+        if let registration = resolved.registration { registrations.append(registration) }
+        diagnostics.append(contentsOf: resolved.diagnostics)
     }
-    for (name, group) in byName.sorted(by: { $0.key < $1.key }) {
+    return (registrations, diagnostics.sorted { $0.location < $1.location })
+}
+
+/// Index definitions by annotation name. Two definitions sharing a name —
+/// conflicting contracts across modules — are an error, and the name is left
+/// out of the index so its use-sites stay unresolved (no single contract to
+/// apply).
+private func indexAdapterDefinitions(
+    _ definitions: [DiscoveredAdapterAnnotation]
+) -> (byName: [String: DiscoveredAdapterAnnotation], diagnostics: [Diagnostic]) {
+    var grouped: [String: [DiscoveredAdapterAnnotation]] = [:]
+    for definition in definitions {
+        grouped[definition.annotationName, default: []].append(definition)
+    }
+    var byName: [String: DiscoveredAdapterAnnotation] = [:]
+    var diagnostics: [Diagnostic] = []
+    for (name, group) in grouped.sorted(by: { $0.key < $1.key }) {
         guard group.count == 1, let only = group.first else {
             for definition in group {
                 diagnostics.append(
@@ -79,70 +94,70 @@ package func resolveAdapterRegistrations(
             }
             continue
         }
-        definitionsByName[name] = only
+        byName[name] = only
     }
+    return (byName, diagnostics)
+}
 
-    var registrations: [ResolvedAdapterRegistration] = []
-    for useSite in useSites {
-        guard let definition = definitionsByName[useSite.annotationName] else { continue }
-
-        var arguments: [ResolvedAdapterRegistration.Argument] = []
-        var resolvedAll = true
-        for parameter in parseRegisterSignature(definition.registerSignature) {
-            guard let concreteType = substitute(parameter.placeholder, in: useSite) else {
-                diagnostics.append(
-                    Diagnostic(
-                        location: useSite.location,
-                        message:
-                            "'@\(useSite.annotationName)' on '\(useSite.annotatedTypeName)' "
-                            + "supplies \(useSite.typeArguments.count) type argument(s), but its "
-                            + "registration references '\(parameter.placeholder)'",
-                        severity: .error
-                    )
-                )
-                resolvedAll = false
-                continue
-            }
-            let split = optionalityStripped(canonicalTypeName(concreteType))
-            let identity = BindingIdentity(base: split.base, isOptional: split.isOptional, key: nil)
-            switch matchProducer(for: identity, in: resolvedProducers) {
-            case .resolved(let producerIdentity):
-                let binding = resolvedProducers[producerIdentity]
-                arguments.append(
-                    ResolvedAdapterRegistration.Argument(
-                        label: parameter.label,
-                        localName: identifierName(
-                            forType: binding?.boundType ?? concreteType,
-                            key: binding?.keyIdentifier
-                        )
-                    )
-                )
-            case .missing:
-                diagnostics.append(
-                    Diagnostic(
-                        location: useSite.location,
-                        message:
-                            "no binding produces '\(identity.displayType)', required by "
-                            + "'@\(useSite.annotationName)' on '\(useSite.annotatedTypeName)'",
-                        severity: .error
-                    )
-                )
-                resolvedAll = false
-            }
-        }
-
-        if resolvedAll {
-            registrations.append(
-                ResolvedAdapterRegistration(
-                    calleeType: useSite.annotatedQualifiedTypeName,
-                    phase: definition.phase,
-                    arguments: arguments
+/// Substitute and validate one use-site against its definition. Returns the
+/// registration when every parameter resolves, plus any diagnostics (a missing
+/// binding or an out-of-range type-argument reference, anchored at the use-site).
+private func resolveUseSite(
+    _ useSite: AdapterUseSite,
+    against definition: DiscoveredAdapterAnnotation,
+    producers: [BindingIdentity: DiscoveredBinding]
+) -> (registration: ResolvedAdapterRegistration?, diagnostics: [Diagnostic]) {
+    var arguments: [ResolvedAdapterRegistration.Argument] = []
+    var diagnostics: [Diagnostic] = []
+    var resolvedAll = true
+    for parameter in parseRegisterSignature(definition.registerSignature) {
+        guard let concreteType = substitute(parameter.placeholder, in: useSite) else {
+            diagnostics.append(
+                Diagnostic(
+                    location: useSite.location,
+                    message:
+                        "'@\(useSite.annotationName)' on '\(useSite.annotatedTypeName)' supplies "
+                        + "\(useSite.typeArguments.count) type argument(s), but its registration "
+                        + "references '\(parameter.placeholder)'",
+                    severity: .error
                 )
             )
+            resolvedAll = false
+            continue
+        }
+        let split = optionalityStripped(canonicalTypeName(concreteType))
+        let identity = BindingIdentity(base: split.base, isOptional: split.isOptional, key: nil)
+        switch matchProducer(for: identity, in: producers) {
+        case .resolved(let producerIdentity):
+            let binding = producers[producerIdentity]
+            arguments.append(
+                ResolvedAdapterRegistration.Argument(
+                    label: parameter.label,
+                    localName: identifierName(forType: binding?.boundType ?? concreteType, key: binding?.keyIdentifier)
+                )
+            )
+        case .missing:
+            diagnostics.append(
+                Diagnostic(
+                    location: useSite.location,
+                    message:
+                        "no binding produces '\(identity.displayType)', required by "
+                        + "'@\(useSite.annotationName)' on '\(useSite.annotatedTypeName)'",
+                    severity: .error
+                )
+            )
+            resolvedAll = false
         }
     }
-
-    return (registrations, diagnostics.sorted { $0.location < $1.location })
+    guard resolvedAll else { return (nil, diagnostics) }
+    return (
+        ResolvedAdapterRegistration(
+            calleeType: useSite.annotatedQualifiedTypeName,
+            phase: definition.phase,
+            arguments: arguments
+        ),
+        diagnostics
+    )
 }
 
 /// One parameter of a register signature: its call label (if any) and the
