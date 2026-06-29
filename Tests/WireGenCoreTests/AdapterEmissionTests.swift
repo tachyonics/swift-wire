@@ -51,12 +51,17 @@ struct AdapterEmissionTests {
             imports: [],
             topologicalOrder: [singleton("SimpleController"), provider("Config.router", boundType: "Router")],
             adapterRegistrations: [
-                registration("SimpleController", [(label: "instance", localName: "simpleController"), (label: "router", localName: "router")])
+                registration(
+                    "SimpleController",
+                    [(label: "instance", localName: "simpleController"), (label: "router", localName: "router")]
+                )
             ]
         )
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         func index(containing needle: String) -> Int? { lines.firstIndex { $0.contains(needle) } }
-        let call = try #require(index(containing: "SimpleController._wireRegister(instance: simpleController, router: router)"))
+        let call = try #require(
+            index(containing: "SimpleController._wireRegister(instance: simpleController, router: router)")
+        )
         let construction = try #require(index(containing: "let simpleController = SimpleController()"))
         let returnStatement = try #require(index(containing: "return _WireGraph("))
         #expect(construction < call)
