@@ -275,6 +275,39 @@ build plugin can't unify the hidden concrete type, so it emits no
 compile-time check for them (the existing `!type.hasPrefix("some ")` guard
 in code emission already does this).
 
+## Self-production: lift, don't specialise
+
+The lifting above isn't special to `@Provides -> some P` — it's the general
+rule for any **generic `@Singleton`**. A `@Singleton` is a graph node whether
+generic or not; the generic case just lifts its parameter onto `_WireGraph`.
+
+The distinction that matters:
+
+- **`@Singleton` (self-production) is *not* specialised.** Wire never computes
+  or spells `TaskController<DynamoDBTaskRepository<InMemoryTable>>`. It resolves
+  each `@Inject` dependency to a binding **by identity** (an abstract dep like
+  `repository: Repository: TaskRepository` matches the `some TaskRepository`
+  binding, via the constrained-parameter → `some P` bridge), emits
+  `TaskController(repository: r)`, and lets the **compiler infer** the type
+  arg — which Wire lifts onto `_WireGraph<…>`. Resolution by identity +
+  compiler inference + lifting, never Wire-computed specialisation.
+- **`@Provides func` is the only thing Wire specialises** — a parameterised
+  factory, where Wire computes the concrete type args and spells
+  `makeRepo<InMemoryTable>()`.
+
+Because a generic `@Singleton` just exists (like every singleton), nothing
+needs to *demand* it into the graph by spelling its concrete type. Consumers —
+including adapter sinks (`@RoutedBy`) — **read** the constructed member; they
+don't drive its construction. That is why the adapter chain resolves without a
+CompositionRoot: the controller is already a node; `_wireRegister` consumes it.
+
+`CompositionRoot` in task-cluster, and today's generated bootstrap spelling
+`DynamoDBTaskRepository<InMemoryDynamoDBCompositePrimaryKeyTable>(table:)`, are
+the **pre-lift stopgap**: M1 has no opaque identities, so the abstract deps
+can't resolve by identity, so the chain is held together by a concrete request
+(CompositionRoot) driving specialisation. The target model is lift +
+resolve-by-identity; the stopgap goes away when opaque identities land.
+
 ## Multiple opaque bindings via keying
 
 Keys disambiguate same-identity bindings exactly as elsewhere:
