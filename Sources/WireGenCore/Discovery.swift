@@ -799,6 +799,10 @@ package struct SourceFileDiscovery: Sendable {
     /// matched by name against adapter use-sites to resolve the generated
     /// `_wireRegister` calls.
     package let adapterAnnotations: [DiscoveredAdapterAnnotation]
+    /// Adapter-annotation use-sites (adapter-shaped attributes on type decls)
+    /// found in this file. Aggregated across the module by `WireGen` and
+    /// classified against the discovered adapter definitions.
+    package let adapterUseSites: [AdapterUseSite]
     /// `@resultBuilder` types found in this file, with their fold result
     /// type. Matched against `BuilderKey<Builder>` keys so a builder
     /// aggregate knows its producer-side result type.
@@ -815,6 +819,7 @@ package struct SourceFileDiscovery: Sendable {
         multibindingKeys: [DiscoveredMultibindingKey] = [],
         bindingKeys: [DiscoveredBindingKey] = [],
         adapterAnnotations: [DiscoveredAdapterAnnotation] = [],
+        adapterUseSites: [AdapterUseSite] = [],
         resultBuilders: [DiscoveredResultBuilder] = []
     ) {
         self.allBindings = allBindings
@@ -827,6 +832,7 @@ package struct SourceFileDiscovery: Sendable {
         self.multibindingKeys = multibindingKeys
         self.bindingKeys = bindingKeys
         self.adapterAnnotations = adapterAnnotations
+        self.adapterUseSites = adapterUseSites
         self.resultBuilders = resultBuilders
     }
 }
@@ -884,6 +890,7 @@ package func discover(
         multibindingKeys: visitor.multibindingKeys,
         bindingKeys: visitor.bindingKeys,
         adapterAnnotations: visitor.adapterAnnotations,
+        adapterUseSites: visitor.adapterUseSites,
         resultBuilders: visitor.resultBuilders
     )
 }
