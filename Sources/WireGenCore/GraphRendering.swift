@@ -132,10 +132,12 @@ private func nonOwningEdgeBreakNotes(in cycle: [DiscoveredBinding]) -> [String] 
         let producerSet = [producer.identity: producer]
         for dep in consumer.dependencies {
             guard let form = dep.nonOwningInitForm else { continue }
-            guard case .resolved = matchProducer(
-                for: bridgedDependencyIdentity(dep, in: consumer),
-                in: producerSet
-            ) else { continue }
+            guard
+                case .resolved = matchProducer(
+                    for: bridgedDependencyIdentity(dep, in: consumer),
+                    in: producerSet
+                )
+            else { continue }
             notes.append(
                 "\(dep.location.formattedPrefix): note: '\(dep.name ?? dep.type)' is an '@Inject \(form.description)' that closes this cycle; change it to 'weak var' to break the cycle (the bootstrap then delivers it post-construct, off the init-time edge)"
             )

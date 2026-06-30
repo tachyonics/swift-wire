@@ -249,12 +249,18 @@ struct GraphTests {
         // specialised.
         let result = buildDependencyGraph(from: [
             liftNode(
-                "Controller", identity: "API", paramName: "Repository",
-                constraint: "TaskRepo", depName: "repository"
+                "Controller",
+                identity: "API",
+                paramName: "Repository",
+                constraint: "TaskRepo",
+                depName: "repository"
             ),
             liftNode(
-                "Repo", identity: "TaskRepo", paramName: "Table",
-                constraint: "DBTable & Sendable", depName: "table"
+                "Repo",
+                identity: "TaskRepo",
+                paramName: "Table",
+                constraint: "DBTable & Sendable",
+                depName: "table"
             ),
             providerProperty("table", boundType: "some DBTable & Sendable"),
         ])
