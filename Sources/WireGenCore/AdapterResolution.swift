@@ -160,6 +160,28 @@ private func resolveUseSite(
     )
 }
 
+/// The identities of bindings that *carry* an adapter annotation (the `Self` of
+/// a use-site whose name matches a definition). The dead-binding check treats
+/// these as live: the annotation is an explicit declaration that the binding is
+/// adapted, the same way a multibinding contributor is live via its aggregate.
+///
+/// Deliberately *only* the annotated binding — not the adapter's declared
+/// dependencies. What `_wireRegister` actually does with those is the adapter's
+/// own opaque logic, so Wire can't soundly call them consumed; a binding
+/// provided solely for an adapter to use stays subject to the normal check.
+func adapterAnnotatedIdentities(
+    useSites: [AdapterUseSite],
+    definitions: [DiscoveredAdapterAnnotation]
+) -> Set<BindingIdentity> {
+    let (definitionsByName, _) = indexAdapterDefinitions(definitions)
+    var identities: Set<BindingIdentity> = []
+    for useSite in useSites where definitionsByName[useSite.annotationName] != nil {
+        let split = optionalityStripped(canonicalTypeName(useSite.annotatedTypeName))
+        identities.insert(BindingIdentity(base: split.base, isOptional: split.isOptional, key: nil))
+    }
+    return identities
+}
+
 /// One parameter of a register signature: its call label (if any) and the
 /// placeholder/type text to substitute.
 private struct SignatureParameter {

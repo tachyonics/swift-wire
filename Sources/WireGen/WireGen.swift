@@ -342,7 +342,9 @@ struct WireGen {
         )
         diagnostics += deadBindingDiagnostics(
             across: aggregate.allBindings,
-            resolvedByContainer: resolvedBindingsByContainer
+            resolvedByContainer: resolvedBindingsByContainer,
+            adapterUseSites: aggregate.adapterUseSites,
+            adapterDefinitions: aggregate.adapterAnnotations
         )
         diagnostics += multibindingLivenessDiagnostics(
             multibindingKeys: aggregate.multibindingKeys,
