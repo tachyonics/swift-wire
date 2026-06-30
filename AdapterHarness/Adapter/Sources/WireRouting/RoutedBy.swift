@@ -1,14 +1,20 @@
+import Synchronization
 import Wire
 
 /// A minimal router controllers register with. A reference type so the
-/// registration's mutation is visible on the bootstrapped graph's instance.
-public final class Router: @unchecked Sendable {
-    public private(set) var routes: [String] = []
+/// registration's mutation is visible on the bootstrapped graph's instance;
+/// its mutable state is `Mutex`-guarded (the same pattern as `Wire.AtomicState`),
+/// so it's properly `Sendable` and the synchronous `register` keeps
+/// `_wireRegister` synchronous.
+public final class Router: Sendable {
+    private let recorded = Mutex<[String]>([])
     public init() {}
+
+    public var routes: [String] { recorded.withLock { $0 } }
 
     /// Record a registered instance by its type name.
     public func register(_ instance: Any) {
-        routes.append(String(describing: type(of: instance)))
+        recorded.withLock { $0.append(String(describing: type(of: instance))) }
     }
 }
 
