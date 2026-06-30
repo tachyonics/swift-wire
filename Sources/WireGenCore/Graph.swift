@@ -730,7 +730,10 @@ private func partitionBindings(
     var groupedByIdentity: [BindingIdentity: [DiscoveredBinding]] = [:]
     var genericTemplates: [DiscoveredBinding] = []
     for binding in bindings {
-        if binding.genericParameterNames.isEmpty {
+        // An `@Singleton(as:)` lift node is a real graph node even when generic
+        // — it lifts its parameter rather than specialising — so it joins the
+        // resolved set keyed by its `some P` identity, not the template pool.
+        if binding.genericParameterNames.isEmpty || binding.hasExplicitIdentity {
             groupedByIdentity[binding.identity, default: []].append(binding)
         } else {
             genericTemplates.append(binding)
@@ -823,7 +826,10 @@ private func resolveDependencies(
         // Init-time deps: form graph edges (drive topo sort and
         // cycle detection). Missing ones produce errors.
         for dependency in binding.dependencies {
-            switch matchProducer(for: dependency.identity, in: resolvedBindings) {
+            switch matchProducer(
+                for: bridgedDependencyIdentity(dependency, in: binding),
+                in: resolvedBindings
+            ) {
             case .resolved(let producerIdentity):
                 // May differ from the dependency's own identity under
                 // promotion (a `T?` dep resolves to the `T` producer);
@@ -855,7 +861,7 @@ private func resolveDependencies(
         for injection in binding.memberInjections {
             for parameter in injection.parameters {
                 if case .missing(let optionalHint) = matchProducer(
-                    for: parameter.identity,
+                    for: bridgedDependencyIdentity(parameter, in: binding),
                     in: resolvedBindings
                 ) {
                     missing.append(

@@ -111,142 +111,6 @@ package enum DiscoveredBinding: Sendable {
     case aggregate(DiscoveredAggregate)
 }
 
-extension DiscoveredBinding {
-    /// The type the binding produces. For `@Singleton` this is the
-    /// type's name; for `@Provides` it's the property's annotated type
-    /// or the function's return type. Bindings are graph-keyed by this.
-    package var boundType: String {
-        switch self {
-        case .scopeBound(let scopeBound):
-            // `@Singleton(as: P.self)` keys the binding as `some P`; construction
-            // still uses the concrete type (`qualifiedTypeName`/`typeName`).
-            if let identity = scopeBound.explicitIdentity { return "some \(identity)" }
-            return scopeBound.typeName
-        case .provider(let provider): return provider.boundType
-        case .aggregate(let aggregate): return aggregate.collectionType
-        }
-    }
-
-    /// The bound type as referenced from the generated `_WireGraph.swift`
-    /// at module scope — qualified with any enclosing type prefix for
-    /// `@Singleton`s nested inside another type (typically a
-    /// `@Container`). `@Provides` bindings use their declared type
-    /// expression as-is; if a user writes a `@Provides` returning a
-    /// nested type, they need to qualify the type annotation
-    /// themselves (limitation we'll surface as a diagnostic in
-    /// iteration 3 if it bites).
-    package var boundTypeReference: String {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.qualifiedTypeName
-        case .provider(let provider): return provider.boundType
-        case .aggregate(let aggregate): return aggregate.collectionType
-        }
-    }
-
-    /// Dependencies the binding needs at construction — `@Inject`
-    /// parameters/properties for `@Singleton`, function parameters for
-    /// `@Provides func`, empty for `@Provides let`.
-    package var dependencies: [DependencyParameter] {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.dependencies
-        case .provider(let provider): return provider.dependencies
-        case .aggregate(let aggregate): return aggregate.contributors.map(\.dependency)
-        }
-    }
-
-    /// Post-construction injection points on the binding. Empty for
-    /// providers (functions/properties can't host post-init injection
-    /// — only `@Singleton`/`@Scoped` types can). For scope-bound
-    /// types this carries `@Inject weak var` sugar entries plus any
-    /// `@Inject func` entries.
-    package var memberInjections: [MemberInjection] {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.memberInjections
-        case .provider, .aggregate: return []
-        }
-    }
-
-    /// `true` iff the binding's host type is an `actor`. Member
-    /// injection codegen reads this to force an `await` prefix on
-    /// method-call injections — calling any method on an actor from
-    /// outside its isolation requires `await` regardless of whether
-    /// the method itself is `async`. Providers and non-actor
-    /// scope-bound types return `false`.
-    package var consumerIsActor: Bool {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.typeKind == "actor"
-        case .provider, .aggregate: return false
-        }
-    }
-
-    /// Generic-parameter names declared on the binding. The graph uses
-    /// these to skip bindings that can't be resolved without a concrete
-    /// specialisation pass (not yet implemented).
-    package var genericParameterNames: [String] {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.genericParameterNames
-        case .provider(let provider): return provider.genericParameterNames
-        case .aggregate: return []
-        }
-    }
-
-    package var location: SourceLocation {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.location
-        case .provider(let provider): return provider.location
-        case .aggregate(let aggregate): return aggregate.location
-        }
-    }
-
-    package var sourcePath: String {
-        location.file
-    }
-
-    /// The binding's key identifier, or `nil` for unkeyed bindings.
-    /// `@Singleton`s are always unkeyed; only `@Provides` can be keyed.
-    /// Graph identity is `(boundType, keyIdentifier?)`.
-    package var keyIdentifier: String? {
-        switch self {
-        case .scopeBound: return nil
-        case .provider(let provider): return provider.keyIdentifier
-        case .aggregate(let aggregate): return aggregate.keyReference
-        }
-    }
-
-    /// `@Contributes(to:)` annotations on this binding's producer —
-    /// empty for non-contributing bindings. The fan-in pass reads this
-    /// uniformly across both producer kinds.
-    package var contributions: [Contribution] {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.contributions
-        case .provider(let provider): return provider.contributions
-        case .aggregate: return []
-        }
-    }
-
-    /// Source-level access modifier on the binding's declaration. Drives
-    /// the dead-binding warning's visibility gate. Synthesised aggregates
-    /// have no source declaration; they report `.internal` (they're never
-    /// part of the discovered set the dead-binding analysis walks).
-    package var accessLevel: AccessLevel {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.accessLevel
-        case .provider(let provider): return provider.accessLevel
-        case .aggregate: return .internal
-        }
-    }
-
-    /// `allowUnused: true` on the binding's macro — the dead-binding-
-    /// warning silencer. Aggregates have no macro and never silence.
-    package var allowUnused: Bool {
-        switch self {
-        case .scopeBound(let scopeBound): return scopeBound.allowUnused
-        case .provider(let provider): return provider.allowUnused
-        case .aggregate: return false
-        }
-    }
-}
-
 /// One `@Singleton`-annotated type found in a source file, with the
 /// dependency declaration extracted from either an `@Inject`-marked init
 /// or from `@Inject` stored properties on the type.
@@ -271,6 +135,11 @@ package struct DiscoveredScopeBoundType: Sendable {
     package let qualifiedTypeName: String
     package let typeKind: String
     package let genericParameterNames: [String]
+    /// The protocol constraint on each generic parameter that declares one
+    /// (`Table: P & Sendable` → `["Table": "P & Sendable"]`), for the
+    /// constrained-parameter bridge that resolves a bare-parameter dependency to
+    /// the matching `some P` binding. Empty when no parameter is constrained.
+    package let genericParameterConstraints: [String: String]
     /// When the type carries `@Singleton(as: P.self)`, the declared opaque
     /// graph identity `P` — so the binding is keyed as `some P` rather than its
     /// concrete type, while construction still uses the concrete type. `nil` for
@@ -336,6 +205,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         qualifiedTypeName: String? = nil,
         typeKind: String,
         genericParameterNames: [String],
+        genericParameterConstraints: [String: String] = [:],
         explicitIdentity: String? = nil,
         dependencies: [DependencyParameter],
         location: SourceLocation,
@@ -356,6 +226,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.qualifiedTypeName = qualifiedTypeName ?? typeName
         self.typeKind = typeKind
         self.genericParameterNames = genericParameterNames
+        self.genericParameterConstraints = genericParameterConstraints
         self.explicitIdentity = explicitIdentity
         self.dependencies = dependencies
         self.location = location

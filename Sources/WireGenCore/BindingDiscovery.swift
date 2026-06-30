@@ -595,22 +595,10 @@ extension BindingDiscovery {
         modifiers: DeclModifierListSyntax,
         members: MemberBlockItemListSyntax
     ) {
-        let scopeKey: ScopeKey?
-        let allowUnused: Bool
-        let explicitIdentity: String?
-        if let singletonAttribute = attribute(in: attributes, named: "Singleton") {
-            scopeKey = nil
-            allowUnused = allowUnusedFlag(from: singletonAttribute)
-            explicitIdentity = asTypeExpression(from: singletonAttribute)
-        } else if let scopedAttribute = attribute(in: attributes, named: "Scoped"),
-            let seed = seedTypeExpression(from: scopedAttribute)
-        {
-            scopeKey = ScopeKey(seed: seed)
-            allowUnused = allowUnusedFlag(from: scopedAttribute)
-            explicitIdentity = nil
-        } else {
-            return
-        }
+        guard let scopeArguments = scopeMacroArguments(in: attributes) else { return }
+        let scopeKey = scopeArguments.scopeKey
+        let allowUnused = scopeArguments.allowUnused
+        let explicitIdentity = scopeArguments.explicitIdentity
         warnings.append(
             contentsOf: singletonInScopeBlockDiagnostics(
                 typeName: nameToken.text,
@@ -627,6 +615,11 @@ extension BindingDiscovery {
             )
         )
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
+        let genericParameterConstraints = Dictionary(
+            uniqueKeysWithValues: (generics?.parameters ?? []).compactMap { parameter in
+                parameter.inheritedType.map { (parameter.name.text, $0.trimmedDescription) }
+            }
+        )
         let injectResult = extractInjectDependencies(
             from: members,
             hostTypeKind: typeKind,
@@ -656,6 +649,7 @@ extension BindingDiscovery {
                     qualifiedTypeName: qualified,
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
+                    genericParameterConstraints: genericParameterConstraints,
                     explicitIdentity: explicitIdentity,
                     dependencies: injectResult.dependencies,
                     location: location(of: nameToken),

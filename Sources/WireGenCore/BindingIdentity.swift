@@ -121,6 +121,25 @@ package enum OptionalMismatchHint: Sendable, Equatable {
     case optionalNeedsExplicitProducer
 }
 
+/// Translate a dependency to the identity it resolves against, applying the
+/// constrained-parameter bridge (Rule 2 of the opaque model): when `binding` is
+/// an `@Singleton(as:)` lift node and `dependency` is one of its bare generic
+/// parameters constrained to a protocol `C`, the dependency resolves to the
+/// `some C` binding. Every other dependency keeps its own identity. This is the
+/// single conformance-*aware* step — it reads the declared constraint, it does
+/// not search conformers — and it only fires for lift nodes, so a non-`as:`
+/// generic template's parameters still specialise as before.
+func bridgedDependencyIdentity(
+    _ dependency: DependencyParameter,
+    in binding: DiscoveredBinding
+) -> BindingIdentity {
+    guard binding.hasExplicitIdentity,
+        let constraint = binding.genericParameterConstraints[canonicalTypeName(dependency.type)]
+    else { return dependency.identity }
+    let split = optionalityStripped(canonicalTypeName("some \(constraint)"))
+    return BindingIdentity(base: split.base, isOptional: split.isOptional, key: dependency.keyIdentifier)
+}
+
 func matchProducer(
     for dependency: BindingIdentity,
     in producers: [BindingIdentity: DiscoveredBinding]

@@ -124,11 +124,11 @@ private func consumedIdentities(
     }
     for binding in consumers {
         for dependency in binding.dependencies {
-            record(dependency.identity)
+            record(bridgedDependencyIdentity(dependency, in: binding))
         }
         for injection in binding.memberInjections {
             for parameter in injection.parameters {
-                record(parameter.identity)
+                record(bridgedDependencyIdentity(parameter, in: binding))
             }
         }
     }

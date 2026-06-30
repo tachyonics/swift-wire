@@ -148,6 +148,37 @@ func asTypeExpression(from attribute: AttributeSyntax) -> String? {
     return base.trimmedDescription
 }
 
+/// The scope macro's arguments read off a type's attributes.
+struct ScopeMacroArguments {
+    /// The scope partition: `nil` for `@Singleton`, the seed for `@Scoped`.
+    let scopeKey: ScopeKey?
+    /// The dead-binding opt-out (`allowUnused: true`).
+    let allowUnused: Bool
+    /// The `@Singleton(as:)` opaque graph identity, or `nil`.
+    let explicitIdentity: String?
+}
+
+/// Read the scope macro's arguments off a type's attributes. Returns `nil` when
+/// the type carries neither `@Singleton` nor `@Scoped` (or a `@Scoped` without a
+/// parseable seed).
+func scopeMacroArguments(in attributes: AttributeListSyntax) -> ScopeMacroArguments? {
+    if let singletonAttribute = attribute(in: attributes, named: "Singleton") {
+        return ScopeMacroArguments(
+            scopeKey: nil,
+            allowUnused: allowUnusedFlag(from: singletonAttribute),
+            explicitIdentity: asTypeExpression(from: singletonAttribute)
+        )
+    }
+    guard let scopedAttribute = attribute(in: attributes, named: "Scoped"),
+        let seed = seedTypeExpression(from: scopedAttribute)
+    else { return nil }
+    return ScopeMacroArguments(
+        scopeKey: ScopeKey(seed: seed),
+        allowUnused: allowUnusedFlag(from: scopedAttribute),
+        explicitIdentity: nil
+    )
+}
+
 /// Recover the bound type from a `Foo(...)` or `Foo<Bar>(...)`
 /// initializer when the user omitted the type annotation. Returns
 /// `nil` for any other expression shape — member access
