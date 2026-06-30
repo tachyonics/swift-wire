@@ -134,6 +134,20 @@ func seedTypeExpression(from attribute: AttributeSyntax) -> String? {
     return base.trimmedDescription
 }
 
+/// The opaque graph identity from `@Singleton(as: P.self)` — the `P` of the
+/// `as:` argument — or `nil` when the attribute carries no `as:`. The binding is
+/// then keyed as `some P`. Mirrors `seedTypeExpression`: validates the `.self`
+/// metatype form and returns the base type verbatim.
+func asTypeExpression(from attribute: AttributeSyntax) -> String? {
+    guard case let .argumentList(args) = attribute.arguments else { return nil }
+    guard let asArg = args.first(where: { $0.label?.text == "as" }) else { return nil }
+    guard let memberAccess = asArg.expression.as(MemberAccessExprSyntax.self),
+        memberAccess.declName.baseName.text == "self",
+        let base = memberAccess.base
+    else { return nil }
+    return base.trimmedDescription
+}
+
 /// Recover the bound type from a `Foo(...)` or `Foo<Bar>(...)`
 /// initializer when the user omitted the type annotation. Returns
 /// `nil` for any other expression shape — member access

@@ -111,6 +111,55 @@ struct DiscoveryTests {
         #expect(result[0].dependencies.isEmpty)
     }
 
+    // MARK: - `@Singleton(as:)` opaque graph identity
+
+    @Test func singletonAsDeclaresOpaqueGraphIdentity() {
+        let source = """
+            @Singleton(as: TaskRepository.self)
+            struct DynamoDBTaskRepository<Table: DynamoDBTable & Sendable>: TaskRepository {
+                @Inject init(table: Table) {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "Repo.swift")
+        #expect(result.count == 1)
+        let scopeBound = result[0]
+        #expect(scopeBound.explicitIdentity == "TaskRepository")
+        // The binding is keyed as `some TaskRepository`...
+        let binding = DiscoveredBinding.scopeBound(scopeBound)
+        #expect(binding.boundType == "some TaskRepository")
+        #expect(binding.identity.base == "someTaskRepository")
+        // ...while construction still uses the concrete type.
+        #expect(scopeBound.typeName == "DynamoDBTaskRepository")
+        #expect(scopeBound.qualifiedTypeName == "DynamoDBTaskRepository")
+        #expect(scopeBound.genericParameterNames == ["Table"])
+    }
+
+    @Test func singletonWithoutAsHasNoExplicitIdentity() {
+        let source = """
+            @Singleton
+            struct Plain {
+                @Inject init() {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "Plain.swift")
+        #expect(result.count == 1)
+        #expect(result[0].explicitIdentity == nil)
+        #expect(DiscoveredBinding.scopeBound(result[0]).boundType == "Plain")
+    }
+
+    @Test func singletonAsCoexistsWithAllowUnused() {
+        let source = """
+            @Singleton(as: TaskRepository.self, allowUnused: true)
+            struct Repo<Table: DynamoDBTable & Sendable>: TaskRepository {
+                @Inject init(table: Table) {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "Repo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].explicitIdentity == "TaskRepository")
+        #expect(result[0].allowUnused == true)
+    }
+
     @Test func singletonGenericParametersCaptured() {
         let source = """
             @Singleton

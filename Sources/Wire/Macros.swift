@@ -16,6 +16,18 @@
 public macro Singleton(allowUnused: Bool = false) =
     #externalMacro(module: "WireMacrosImpl", type: "SingletonMacro")
 
+/// Declares a process-lifetime singleton whose *graph identity* is the opaque
+/// type `some P`, not its concrete type — so abstract consumers resolve it as
+/// `some P` while the concrete type is still what Wire constructs. Use to expose
+/// a self-producer behind a protocol so the dependency chain stays `some`
+/// end-to-end and the concrete type is named once at the leaf, instead of
+/// spelling the full nested specialisation at a composition root. The generated
+/// members are identical to `@Singleton`; the `as:` argument only sets identity.
+/// See `OpaqueTypesSupport.md`.
+@attached(member, names: named(init), named(key))
+public macro Singleton<T>(as: T.Type, allowUnused: Bool = false) =
+    #externalMacro(module: "WireMacrosImpl", type: "SingletonMacro")
+
 /// Declares a type that lives for the dynamic extent of a scope keyed
 /// by `seed`. The seed type uniquely identifies the scope — two
 /// `@Scoped(seed: X.self)` types share a scope iff `X` is the same
