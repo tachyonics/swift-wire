@@ -74,6 +74,22 @@ jobs:
         # swift-wire — a fixture in swift-wire's own tests would cycle.
         run: bash CompositionHarness/run-harness.sh
 
+  AdapterHarness:
+    name: Adapter harness (adapter-contract gate)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: SwiftyLab/setup-swift@v1
+        with:
+          swift-version: "6.3.1"
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: Run adapter harness
+        # Adapter-contract gate (iteration 8). Runs outside `swift test`
+        # because the macro-using adapter package depends on swift-wire — a
+        # fixture in swift-wire's own tests would cycle.
+        run: bash AdapterHarness/run-adapter-harness.sh
+
   SwiftSyntaxMatrix:
     name: swift-syntax ${{ matrix.swift-syntax-major }}.x / Swift ${{ matrix.swift-version }}
     strategy:

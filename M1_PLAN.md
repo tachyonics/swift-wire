@@ -275,7 +275,7 @@ Cross-target binding aggregation, the activation model, transitive-activation di
 
 ## Iteration 8 — adapter-annotation contract
 
-Risk #6's mitigation lives here. Builds the contract surface that M3, M4, and M5's adapters will be written against, with a throwaway adapter as a regression test.
+Risk #6's mitigation lives here. Builds the contract surface that M3, M4, and M5's adapters will be written against, with a minimal in-repo adapter fixture as a permanent regression test.
 
 **Scope:**
 - Manifest format spec (Wire-aware library declares its adapter annotations: name, form, phase, contract version)
@@ -284,9 +284,9 @@ Risk #6's mitigation lives here. Builds the contract surface that M3, M4, and M5
 - `_wireRegister` parameter extraction (Spike 3's pattern)
 - Validation of adapter-declared dependencies against the binding graph
 - Generated bootstrap emits `_wireRegister` calls in phase order (post-graph for M1; per-request and per-job phases land later when an adapter actually needs them)
-- Throwaway `@RoutedBy`-style adapter built in this iteration as a regression test (don't ship it publicly until M3)
+- A `@RoutedBy`-style adapter built in this iteration as a non-shipped in-repo fixture backing a permanent contract gate (the real, published adapters arrive in M3; the fixture stays as the gate's test subject, not discarded)
 
-**Validation gate:** the throwaway adapter's `_wireRegister` is detected, validated, and called in the bootstrap. Missing parameter binding produces an error pointing at the adapter annotation. Removing the adapter library from the target's dependencies deactivates the registration cleanly.
+**Validation gate:** the fixture adapter's `_wireRegister` is detected, validated, and called in the bootstrap. Missing parameter binding produces an error pointing at the adapter annotation. Removing the adapter library from the target's dependencies deactivates the registration cleanly.
 
 **Deferred (M1 is unkeyed):** keyed adapter dependencies — referencing a *keyed* binding from an adapter use-site via a `keyed(Type.self, with: Key)` slot, consumer-chosen and macro-agnostic. It's another member of the keyed-reference family, designed in [`ScopeAndKeyModelEvolution.md`](Documentation/Notes/ScopeAndKeyModelEvolution.md) ("Adapter dependencies"); the resolution seam (`BindingIdentity.key`, `nil` for bare slots) is in place so it's additive when a real case appears.
 
@@ -315,7 +315,7 @@ Don't migrate task-cluster all at once at iteration 9. Migrate incrementally as 
 - After iteration 3: confirm the migration's diagnostics behave well (introduce a deliberate missing binding, fix it, see the diagnostic improvement work in real time).
 - After iteration 5: if any task-cluster behaviour benefits from `@Contributes` (e.g., a list of middleware), migrate it.
 - After iteration 7: if task-cluster's library targets exercise multi-module composition meaningfully, validate against them.
-- After iteration 8: if iteration 8's throwaway adapter approximates `@RoutedBy`, use it as a sketch of M3.
+- After iteration 8: if iteration 8's adapter fixture approximates `@RoutedBy`, use it as a sketch of M3.
 - Iteration 9: complete any residual migration; everything that was manually wired in `TaskCluster.swift` and `Application+build.swift` is now Wire-driven (except the framework-level `Application(...)` construction, which stays manual until M2's `WireHummingbird`).
 
 ### Diagnostic quality is iterative
