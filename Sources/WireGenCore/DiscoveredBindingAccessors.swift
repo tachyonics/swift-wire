@@ -1,7 +1,6 @@
 // Uniform read access over `DiscoveredBinding`'s three cases — the accessors
 // the graph, code emission, and diagnostics read without switching on the case
-// themselves. Split out of `Discovery.swift` to keep that file's model
-// definitions focused.
+// themselves.
 
 extension DiscoveredBinding {
     /// The type the binding produces. For `@Singleton` this is the
