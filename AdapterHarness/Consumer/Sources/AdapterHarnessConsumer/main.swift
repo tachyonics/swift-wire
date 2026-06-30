@@ -2,18 +2,19 @@ import Wire
 import WireRouting
 
 /// A `@Singleton` controller the `@RoutedBy` adapter registers with the router.
-/// `allowUnused` because in M1 the dead-binding check doesn't yet count an
-/// adapter registration as consumption — the controller is "used" only by its
-/// generated `_wireRegister`.
-@Singleton(allowUnused: true)
+/// The adapter consumes it as `instance: Self`, which keeps it live — no
+/// `allowUnused` needed.
+@Singleton
 @RoutedBy(Router.self)
 struct SimpleController {
     @Inject init() {}
 }
 
 enum Wiring {
-    // Read off the graph by the registration (and asserted below); the
-    // dead-binding check doesn't see the adapter's use of it, hence allowUnused.
+    // The router is the registration's collaborator, not a binding consumed by a
+    // derivation edge — what `_wireRegister` does with it is the adapter's own
+    // logic, which Wire can't see — so it carries `allowUnused`. (It's read off
+    // the graph below to assert the registration ran.)
     @Provides(allowUnused: true)
     static let router = Router()
 }

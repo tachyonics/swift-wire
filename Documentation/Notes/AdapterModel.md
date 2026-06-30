@@ -114,6 +114,47 @@ expansion; Wire does only DI plumbing. WireMVC illustrates it:
 So an adapter package can carry an arbitrarily rich internal vocabulary; the
 Wire-facing surface is one annotation plus its dependency signature.
 
+## Consumption and the dead-binding check
+
+The dead-binding check asks "does anything consume this binding?" An adapter
+makes some binding live, but *which* binding, and whether Wire can soundly say
+so, depends on the adapter's shape. The dividing line is **derivation edge vs
+side effect**:
+
+- **Side-effect adapter (postGraph sink — `@RoutedBy`, `@Controller`).** There
+  is no derivation edge: the controller is registered *into* the router;
+  neither is derived from the other. The annotation marks its **subject** (the
+  annotated instance) as used — that's the sound, declared fact — so the subject
+  is live. The adapter's other declared dependencies are **collaborators** the
+  side effect touches; what `_wireRegister` does with them is the adapter's own
+  opaque logic, so Wire does *not* claim them consumed. A binding provided
+  solely for such an adapter to use (the router) stays subject to the normal
+  check and carries `allowUnused`.
+- **Derivation-edge adapter (the iteration-9 forms).** The adapter produces a
+  value *from* its declared dependency, so the dependency is a genuine
+  dependency edge — *value ← dep* — and is consumed, soundly, from the
+  declaration. Two shapes:
+  - *Injection customiser* — `@Inject @Configuration(ConfigReader.self, "port")`
+    on a consumer's injection point rewrites that point's dependency from the
+    nominal `Int` to `ConfigReader`; the value is synthesised from it.
+  - *Producer* — the `@Provides`-level form, whose output is derived from its
+    inputs.
+
+  The neat consequence: these need **no adapter-specific dead-binding rule**.
+  The declared dependency *is* an effective dependency edge, so Wire's ordinary
+  dependency-edge liveness keeps it live, and the annotated binding (the output)
+  is a normal producer — dead if nobody injects it.
+
+So only the side-effect sink needs special handling — exempt the annotated
+subject, claim nothing else. `adapterAnnotatedIdentities` computes exactly that
+set (the `Self` of each use-site matching a definition) and the dead-binding
+check folds it into the consumed set, the same way a multibinding contributor
+is live via its aggregate. The treatment is keyed to the manifest's
+`form`/`phase`; M1 ships only the postGraph sink, so that exemption is the whole
+rule. The derivation-edge forms slot in as dependency edges when they land —
+nothing here generalises to "annotated is always live" or "deps are never
+live"; both are the sink case.
+
 ## Relationship to the rest of the model
 
 - **Self-production.** The annotated `@Singleton` is a graph node like any

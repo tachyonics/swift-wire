@@ -253,6 +253,60 @@ struct DeadBindingDiagnosticsTests {
         )
     }
 
+    // MARK: - Adapter-annotated bindings
+
+    @Test func adapterAnnotatedBindingIsLive() {
+        // `SimpleController` is consumed by no binding, but it carries a
+        // `@RoutedBy` annotation (a postGraph sink). The annotation is the
+        // declaration that it's adapted, so it's live — it must not warn. The
+        // adapter's collaborators are *not* derived from here; only the
+        // annotated subject counts.
+        let partitions: [Partition: [DiscoveredBinding]] = [
+            Partition(container: nil, scope: nil): [singleton("SimpleController")]
+        ]
+        let useSite = AdapterUseSite(
+            annotationName: "RoutedBy",
+            annotatedTypeName: "SimpleController",
+            annotatedQualifiedTypeName: "SimpleController",
+            typeArguments: [],
+            location: mockLocation("Use.swift"),
+            originModule: testModule
+        )
+        let definition = DiscoveredAdapterAnnotation(
+            annotationName: "RoutedBy",
+            form: .typeLevel,
+            phase: .postGraph,
+            registerSignature: "(instance: Self, router: $0)",
+            location: mockLocation("Def.swift"),
+            originModule: testModule
+        )
+
+        // Without the annotation, the singleton is dead.
+        #expect(
+            Set(deadBindingDiagnostics(across: partitions).map(\.location.file)) == ["SimpleController.swift"]
+        )
+        // Carrying the adapter annotation keeps it live.
+        #expect(
+            deadBindingDiagnostics(
+                across: partitions,
+                adapterUseSites: [useSite],
+                adapterDefinitions: [definition]
+            ).isEmpty
+        )
+
+        // A use-site whose annotation matches no definition (some other
+        // library's attribute) does not exempt it.
+        #expect(
+            Set(
+                deadBindingDiagnostics(
+                    across: partitions,
+                    adapterUseSites: [useSite],
+                    adapterDefinitions: []
+                ).map(\.location.file)
+            ) == ["SimpleController.swift"]
+        )
+    }
+
     // MARK: - Multibinding contributors (conservative skip for now)
 
     @Test func contributorIsLiveViaItsAggregate() {

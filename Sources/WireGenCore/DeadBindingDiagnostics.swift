@@ -25,10 +25,21 @@
 /// (post-specialisation). Their dependency edges count toward liveness on
 /// top of the discovered bindings'; a container with no resolved entry
 /// falls back to its discovered bindings alone.
+///
+/// A binding that *carries* an adapter annotation is live: the annotation is an
+/// explicit declaration that it's adapted (like a multibinding contributor is
+/// live via its aggregate). Only the annotated binding counts — not the
+/// adapter's declared dependencies, whose use is the adapter's own opaque logic,
+/// so a binding provided solely for an adapter to use stays subject to the
+/// normal check. M1 adapters register in the default graph, so these apply to
+/// the default (`nil`) container.
 package func deadBindingDiagnostics(
     across bindingsByPartition: [Partition: [DiscoveredBinding]],
-    resolvedByContainer: [String?: [DiscoveredBinding]] = [:]
+    resolvedByContainer: [String?: [DiscoveredBinding]] = [:],
+    adapterUseSites: [AdapterUseSite] = [],
+    adapterDefinitions: [DiscoveredAdapterAnnotation] = []
 ) -> [Diagnostic] {
+    let adapterAnnotated = adapterAnnotatedIdentities(useSites: adapterUseSites, definitions: adapterDefinitions)
     var bindingsByContainer: [String?: [DiscoveredBinding]] = [:]
     for (partition, bindings) in bindingsByPartition {
         bindingsByContainer[partition.container, default: []].append(contentsOf: bindings)
@@ -36,7 +47,8 @@ package func deadBindingDiagnostics(
     let diagnostics = bindingsByContainer.flatMap { container, discovered in
         deadBindingDiagnostics(
             in: discovered,
-            consumers: discovered + (resolvedByContainer[container] ?? [])
+            consumers: discovered + (resolvedByContainer[container] ?? []),
+            additionallyConsumed: container == nil ? adapterAnnotated : []
         )
     }
     return diagnostics.sorted { $0.location < $1.location }
@@ -58,11 +70,29 @@ package func deadBindingDiagnostics(
     in bindings: [DiscoveredBinding],
     consumers: [DiscoveredBinding]
 ) -> [Diagnostic] {
+    deadBindingDiagnostics(in: bindings, consumers: consumers, additionallyConsumed: [])
+}
+
+/// The implementation, with `additionallyConsumed` — identities consumed by
+/// something other than a binding's own dependency edge (an adapter
+/// registration). Internal: `BindingIdentity` can't cross the package boundary.
+func deadBindingDiagnostics(
+    in bindings: [DiscoveredBinding],
+    consumers: [DiscoveredBinding],
+    additionallyConsumed: Set<BindingIdentity>
+) -> [Diagnostic] {
     var producerByIdentity: [BindingIdentity: DiscoveredBinding] = [:]
     for binding in bindings {
         producerByIdentity[binding.identity] = binding
     }
-    let consumed = consumedIdentities(in: consumers, producers: producerByIdentity)
+    var consumed = consumedIdentities(in: consumers, producers: producerByIdentity)
+    // Adapter-consumed identities resolve through `matchProducer` too, so an
+    // optional-promoting or exact match keeps the producer live.
+    for identity in additionallyConsumed {
+        if case .resolved(let producer) = matchProducer(for: identity, in: producerByIdentity) {
+            consumed.insert(producer)
+        }
+    }
 
     var diagnostics: [Diagnostic] = []
     for identity in producerByIdentity.keys.sorted() where !consumed.contains(identity) {
