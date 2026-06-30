@@ -597,14 +597,17 @@ extension BindingDiscovery {
     ) {
         let scopeKey: ScopeKey?
         let allowUnused: Bool
+        let explicitIdentity: String?
         if let singletonAttribute = attribute(in: attributes, named: "Singleton") {
             scopeKey = nil
             allowUnused = allowUnusedFlag(from: singletonAttribute)
+            explicitIdentity = asTypeExpression(from: singletonAttribute)
         } else if let scopedAttribute = attribute(in: attributes, named: "Scoped"),
             let seed = seedTypeExpression(from: scopedAttribute)
         {
             scopeKey = ScopeKey(seed: seed)
             allowUnused = allowUnusedFlag(from: scopedAttribute)
+            explicitIdentity = nil
         } else {
             return
         }
@@ -653,6 +656,7 @@ extension BindingDiscovery {
                     qualifiedTypeName: qualified,
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
+                    explicitIdentity: explicitIdentity,
                     dependencies: injectResult.dependencies,
                     location: location(of: nameToken),
                     scopeKey: scopeKey,

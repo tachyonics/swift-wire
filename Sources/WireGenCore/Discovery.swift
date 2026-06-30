@@ -117,7 +117,11 @@ extension DiscoveredBinding {
     /// or the function's return type. Bindings are graph-keyed by this.
     package var boundType: String {
         switch self {
-        case .scopeBound(let scopeBound): return scopeBound.typeName
+        case .scopeBound(let scopeBound):
+            // `@Singleton(as: P.self)` keys the binding as `some P`; construction
+            // still uses the concrete type (`qualifiedTypeName`/`typeName`).
+            if let identity = scopeBound.explicitIdentity { return "some \(identity)" }
+            return scopeBound.typeName
         case .provider(let provider): return provider.boundType
         case .aggregate(let aggregate): return aggregate.collectionType
         }
@@ -267,6 +271,11 @@ package struct DiscoveredScopeBoundType: Sendable {
     package let qualifiedTypeName: String
     package let typeKind: String
     package let genericParameterNames: [String]
+    /// When the type carries `@Singleton(as: P.self)`, the declared opaque
+    /// graph identity `P` — so the binding is keyed as `some P` rather than its
+    /// concrete type, while construction still uses the concrete type. `nil` for
+    /// a plain `@Singleton`/`@Scoped`. See `OpaqueTypesSupport.md`.
+    package let explicitIdentity: String?
     package let dependencies: [DependencyParameter]
     /// Position of the type-name identifier in source — what the user
     /// would navigate to from a diagnostic.
@@ -327,6 +336,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         qualifiedTypeName: String? = nil,
         typeKind: String,
         genericParameterNames: [String],
+        explicitIdentity: String? = nil,
         dependencies: [DependencyParameter],
         location: SourceLocation,
         scopeKey: ScopeKey? = nil,
@@ -346,6 +356,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.qualifiedTypeName = qualifiedTypeName ?? typeName
         self.typeKind = typeKind
         self.genericParameterNames = genericParameterNames
+        self.explicitIdentity = explicitIdentity
         self.dependencies = dependencies
         self.location = location
         self.scopeKey = scopeKey

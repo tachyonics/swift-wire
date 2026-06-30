@@ -54,6 +54,28 @@ final class SingletonMacroTests: XCTestCase {
         )
     }
 
+    func test_singletonWithAs_generatesSameMembers() {
+        // The `as:` argument sets graph identity for the build plugin; the macro
+        // ignores it and synthesises the usual init + key.
+        assertMacroExpansion(
+            """
+            @Singleton(as: TaskRepository.self)
+            struct A {
+            }
+            """,
+            expandedSource: """
+                struct A {
+
+                    init() {
+                    }
+
+                    static let key = BindingKey<A>()
+                }
+                """,
+            macros: macros
+        )
+    }
+
     // MARK: - Single @Inject property
 
     func test_singletonWithOneInject_generatesParameterisedInit() {
