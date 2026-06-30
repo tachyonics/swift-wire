@@ -627,6 +627,11 @@ extension BindingDiscovery {
             )
         )
         let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
+        let genericParameterConstraints = Dictionary(
+            uniqueKeysWithValues: (generics?.parameters ?? []).compactMap { parameter in
+                parameter.inheritedType.map { (parameter.name.text, $0.trimmedDescription) }
+            }
+        )
         let injectResult = extractInjectDependencies(
             from: members,
             hostTypeKind: typeKind,
@@ -656,6 +661,7 @@ extension BindingDiscovery {
                     qualifiedTypeName: qualified,
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
+                    genericParameterConstraints: genericParameterConstraints,
                     explicitIdentity: explicitIdentity,
                     dependencies: injectResult.dependencies,
                     location: location(of: nameToken),

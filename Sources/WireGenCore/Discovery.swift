@@ -190,6 +190,24 @@ extension DiscoveredBinding {
         }
     }
 
+    /// Per-generic-parameter protocol constraints, for the constrained-parameter
+    /// bridge. Only `@Singleton`/`@Scoped` types carry them; providers and
+    /// aggregates have none (a generic `@Provides func` specialises instead).
+    package var genericParameterConstraints: [String: String] {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.genericParameterConstraints
+        case .provider, .aggregate: return [:]
+        }
+    }
+
+    /// Whether the binding declares an explicit opaque graph identity via
+    /// `@Singleton(as: P.self)` — an opaque lift node rather than a binding
+    /// keyed by its concrete type.
+    package var hasExplicitIdentity: Bool {
+        if case .scopeBound(let scopeBound) = self { return scopeBound.explicitIdentity != nil }
+        return false
+    }
+
     package var location: SourceLocation {
         switch self {
         case .scopeBound(let scopeBound): return scopeBound.location
@@ -271,6 +289,11 @@ package struct DiscoveredScopeBoundType: Sendable {
     package let qualifiedTypeName: String
     package let typeKind: String
     package let genericParameterNames: [String]
+    /// The protocol constraint on each generic parameter that declares one
+    /// (`Table: P & Sendable` → `["Table": "P & Sendable"]`), for the
+    /// constrained-parameter bridge that resolves a bare-parameter dependency to
+    /// the matching `some P` binding. Empty when no parameter is constrained.
+    package let genericParameterConstraints: [String: String]
     /// When the type carries `@Singleton(as: P.self)`, the declared opaque
     /// graph identity `P` — so the binding is keyed as `some P` rather than its
     /// concrete type, while construction still uses the concrete type. `nil` for
@@ -336,6 +359,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         qualifiedTypeName: String? = nil,
         typeKind: String,
         genericParameterNames: [String],
+        genericParameterConstraints: [String: String] = [:],
         explicitIdentity: String? = nil,
         dependencies: [DependencyParameter],
         location: SourceLocation,
@@ -356,6 +380,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.qualifiedTypeName = qualifiedTypeName ?? typeName
         self.typeKind = typeKind
         self.genericParameterNames = genericParameterNames
+        self.genericParameterConstraints = genericParameterConstraints
         self.explicitIdentity = explicitIdentity
         self.dependencies = dependencies
         self.location = location

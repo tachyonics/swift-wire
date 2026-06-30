@@ -207,6 +207,67 @@ struct GraphTests {
         #expect(cIndex < aIndex)
     }
 
+    // MARK: - Constrained-parameter bridge (`@Singleton(as:)` lift nodes)
+
+    /// An `@Singleton(as: Identity.self)` lift node: generic over one
+    /// constrained parameter, injecting it as a bare dependency. Its graph
+    /// identity is `some Identity`; the bare dependency bridges to `some
+    /// constraint`.
+    private func liftNode(
+        _ name: String,
+        identity: String,
+        paramName: String,
+        constraint: String,
+        depName: String
+    ) -> DiscoveredBinding {
+        .scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: name,
+                typeKind: "struct",
+                genericParameterNames: [paramName],
+                genericParameterConstraints: [paramName: constraint],
+                explicitIdentity: identity,
+                dependencies: [
+                    DependencyParameter(
+                        name: depName,
+                        type: paramName,
+                        kind: .injectProperty,
+                        location: mockLocation("\(name).swift")
+                    )
+                ],
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
+            )
+        )
+    }
+
+    @Test func constrainedParameterBridgeResolvesOpaqueChain() throws {
+        // table (some DBTable & Sendable) <- Repo<Table: DBTable & Sendable>
+        // (some TaskRepo) <- Controller<Repository: TaskRepo> (some API). Each
+        // lift node injects its collaborator as a bare constrained parameter,
+        // bridged to the matching `some P` binding — resolved by identity, never
+        // specialised.
+        let result = buildDependencyGraph(from: [
+            liftNode(
+                "Controller", identity: "API", paramName: "Repository",
+                constraint: "TaskRepo", depName: "repository"
+            ),
+            liftNode(
+                "Repo", identity: "TaskRepo", paramName: "Table",
+                constraint: "DBTable & Sendable", depName: "table"
+            ),
+            providerProperty("table", boundType: "some DBTable & Sendable"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(
+            order.map { $0.boundType }
+                == ["some DBTable & Sendable", "some TaskRepo", "some API"]
+        )
+        // No specialisation artifact: lift nodes resolve as real nodes, not
+        // templates.
+        #expect(result.genericTemplates.isEmpty)
+    }
+
     // MARK: - Cycle detection
 
     @Test func twoNodeCycleDetected() throws {
