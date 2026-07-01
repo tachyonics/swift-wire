@@ -328,6 +328,112 @@ can't resolve by identity, so the chain is held together by a concrete request
 (CompositionRoot) driving specialisation. The target model is lift +
 resolve-by-identity; the stopgap goes away when opaque identities land.
 
+Iteration 9 lifts *every* `some P` binding as its own parameter (flat lifting);
+iteration 10 refines this to lift only what's consumed abstractly — see below.
+
+## Iteration 10 — lift the minimum (parameters for bridge targets, structural spelling for the rest)
+
+> **Status:** planned. Iteration 9 shipped *flat* lifting — every binding with a
+> `some P` identity gets its own `_WireGraph` generic parameter. This refines it
+> to lift only bindings consumed abstractly, and records the plan.
+
+### The problem with flat lifting
+
+A self-producer that is only *read off the graph* — a root, like task-cluster's
+controller handed to `buildApplication(controller: some APIProtocol)` — is
+forced to declare `@Singleton(as: APIProtocol.self)` purely to get lifted, and
+is then exposed as an anonymous `some APIProtocol`, hiding its real type. But
+nothing *resolves* the controller abstractly; only its dependencies (the leaf
+and the repository) are consumed through the constrained-parameter bridge. So
+the controller shouldn't need an opaque identity, or a parameter, at all.
+
+### The refined model
+
+**A binding has one identity:**
+
+- `@Singleton(as: P.self)` → `some P`.
+- plain `@Singleton` → **structural**: `TypeName<…>` with each generic argument
+  replaced by its resolved dependency's identity. `TaskController<Repository>`
+  whose `Repository` resolves to the `some TaskRepository` binding has identity
+  `TaskController<some TaskRepository>` (property `taskControllerOfSomeTaskRepository`).
+
+(A binding carrying *both* `some APIProtocol` **and**
+`TaskController<some TaskRepository>` is **aliasing** — the separate deferred
+feature in *Multiple explicit identities*, not part of this.)
+
+**A `_WireGraph` parameter is materialised only for a bare `some P` identity** —
+the bindings consumers bridge to. A structural identity is *spelled* with those
+parameters substituted for its `some P` sub-terms; it gets no parameter of its
+own. So `some TaskRepository` becomes parameter `T1`, and the controller's field
+is `TaskController<T1>` — its identity `TaskController<some TaskRepository>` with
+that sub-term written as its parameter. Same identity, two spellings (graph
+token vs generated Swift), not two identities.
+
+For task-cluster this drops the controller's `as:` and one parameter:
+
+```swift
+// iteration 9 (flat): three parameters, controller anonymous `some APIProtocol`
+struct _WireGraph<T0: …, T1: TaskRepository, T2: APIProtocol> {
+    let someDynamoDBCompositePrimaryKeyTableSendable: T0
+    let someTaskRepository: T1
+    let someAPIProtocol: T2
+}
+
+// iteration 10 (minimal): two parameters, controller keeps its real type
+struct _WireGraph<T0: DynamoDBCompositePrimaryKeyTable & Sendable, T1: TaskRepository> {
+    let someDynamoDBCompositePrimaryKeyTableSendable: T0
+    let someTaskRepository: T1
+    let taskControllerOfSomeTaskRepository: TaskController<T1>
+}
+```
+
+`graph.taskControllerOfSomeTaskRepository` is a real `TaskController<…>`, and
+`TaskController` is a plain `@Singleton` again.
+
+### What it requires
+
+1. **Non-bridge-target generic `@Singleton`s become nodes spelled `TypeName<args>`**,
+   each generic argument substituted by its resolved dependency's identity —
+   not given an opaque identity, and not specialised to a concrete stack.
+2. **Single-identity computation.** Resolution computes each binding's identity:
+   `some P` when declared, else the substituted structural spelling; property
+   names derive from it as usual.
+3. **Codegen materialises `some P` identities as `_WireGraph` parameters** and
+   renders every other identity with those parameters substituted for their
+   `some P` sub-terms. Parameters are introduced in dependency order (a
+   structural field references only parameters already declared).
+4. **The bootstrap return erases only the parameter slots** (`_WireGraph<some P0,
+   …>`); structural fields are inferred from the constructed values.
+
+This is the *nested-position lifting* the codegen section defers, generalised
+from "`Foo<some P>` within one binding" to "reuse another binding's parameter."
+
+### De-risk first
+
+Spike the shape before building (as spike-6 did for flat lifting): confirm
+
+```swift
+struct _WireGraph<T0, T1: TaskRepository> { let c: TaskController<T1> }
+func _wireBootstrap() -> _WireGraph<some …, some TaskRepository> {
+    let repo = …; let c = TaskController(repository: repo)
+    return _WireGraph(…, c: c)
+}
+```
+
+typechecks — the compiler should unify `T1` from the `repo` argument and match
+`TaskController<T1>` against the concrete value, but opaque unification in a
+nested position is the thing to prove first.
+
+### Deferred / adjacent
+
+- **Conformance-derived identity.** Could the *repository* also drop `as:`,
+  deriving `some TaskRepository` from its sole `: TaskRepository` conformance?
+  That reads a declaration rather than searching conformers, but reintroduces the
+  ambiguity `as:` sidesteps (multiple conformances, marker protocols like
+  `Sendable`). Separate decision; `as:` stays the explicit form.
+- **Aliasing** (one binding under more than one identity) — the existing deferred
+  *Multiple explicit identities* feature.
+
 ## Multiple opaque bindings via keying
 
 Keys disambiguate same-identity bindings exactly as elsewhere:
