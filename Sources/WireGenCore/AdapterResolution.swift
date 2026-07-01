@@ -145,7 +145,8 @@ private func resolveUseSite(
         // reference so a lifted `@Singleton(as: P.self)` node (keyed `some P`) is
         // found even though its identity isn't its concrete type. Other
         // placeholders match by their declared type through the graph.
-        let selfIdentity = parameter.placeholder == "Self"
+        let selfIdentity =
+            parameter.placeholder == "Self"
             ? identityByReference[canonicalTypeName(concreteType)] : nil
         switch selfIdentity.map(DependencyMatch.resolved) ?? matchProducer(for: identity, in: producers) {
         case .resolved(let producerIdentity):
