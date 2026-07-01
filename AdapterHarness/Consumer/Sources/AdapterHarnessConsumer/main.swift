@@ -14,13 +14,25 @@ protocol RoutingController {}
 protocol Backend: Sendable {}
 struct InMemoryBackend: Backend {}
 
-/// A *lifted* controller: keyed in the graph as `some RoutingController` via
-/// `@Singleton(as:)`, generic over a constrained backend injected as a bare
-/// parameter (bridged to the `some Backend` leaf). Proves `@RoutedBy` resolves
-/// its instance by the opaque identity, not the concrete `LiftedController`.
+/// A *fully lifted* controller: `@Singleton(as:)` keys it by an opaque identity
+/// `some RoutingController`, so it lifts a `_WireGraph` parameter of its own.
+/// Generic over a constrained backend injected as a bare parameter (bridged to
+/// the `some Backend` leaf). Proves `@RoutedBy` resolves an opaque bare-`some P`
+/// node — read via the concrete-reference map, not the opaque key.
 @Singleton(as: RoutingController.self)
 @RoutedBy(Router.self)
 struct LiftedController<B: Backend>: RoutingController {
+    @Inject init(backend: B) {}
+}
+
+/// A *partially lifted* (lift-the-minimum) controller: a plain generic
+/// `@Singleton` keyed by its structural identity `StructuralController<some
+/// Backend>`, so it lifts no parameter of its own — it's a nested
+/// `StructuralController<T0>` field reusing the backend's parameter. Proves
+/// `@RoutedBy` resolves a structural node through the same concrete-reference map.
+@Singleton
+@RoutedBy(Router.self)
+struct StructuralController<B: Backend>: RoutingController {
     @Inject init(backend: B) {}
 }
 
@@ -48,10 +60,15 @@ precondition(
     graph.router.routes.contains("SimpleController"),
     "concrete @RoutedBy registration did not run"
 )
-// The lifted controller records under its concrete type (`LiftedController<…>`),
+// Each lifted controller records under its concrete type — the fully-lifted
+// (`LiftedController<…>`) and the partially-lifted (`StructuralController<…>`) —
 // so match on the prefix.
 precondition(
     graph.router.routes.contains { $0.hasPrefix("LiftedController") },
-    "lifted @RoutedBy registration did not run"
+    "fully-lifted @RoutedBy registration did not run"
 )
-print("OK: @RoutedBy registration emitted, validated, and executed (concrete + lifted)")
+precondition(
+    graph.router.routes.contains { $0.hasPrefix("StructuralController") },
+    "partially-lifted @RoutedBy registration did not run"
+)
+print("OK: @RoutedBy registration emitted, validated, and executed (concrete + full + partial lifting)")
