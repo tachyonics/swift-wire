@@ -1,7 +1,5 @@
 // Emit `_WireKeyChecks.swift` — compile-time type assertions that unify each
-// keyed binding's `BindingKey<T>` against the consuming type. Split from
-// `CodeEmission.swift` (which emits `_WireGraph.swift`); shares its identifier
-// and location helpers.
+// keyed binding's `BindingKey<T>` against the consuming type. 
 
 /// Render the `_WireKeyChecks.swift` source the build plugin writes
 /// alongside `_WireGraph.swift`. Contains one `_wireTypeCheck_*`
