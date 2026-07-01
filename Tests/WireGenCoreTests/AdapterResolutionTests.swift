@@ -51,6 +51,22 @@ struct AdapterResolutionTests {
         )
     }
 
+    /// A lifted `@Singleton(as: opaqueIdentity.self)` producer — concrete type
+    /// `concreteType`, but keyed in the graph as `some opaqueIdentity`.
+    private func liftedProducer(_ concreteType: String, opaqueIdentity: String) -> DiscoveredBinding {
+        .scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: concreteType,
+                typeKind: "struct",
+                genericParameterNames: [],
+                explicitIdentity: opaqueIdentity,
+                dependencies: [],
+                location: mockLocation("\(concreteType).swift"),
+                originModule: testModule
+            )
+        )
+    }
+
     @Test func resolvesInstanceAndTypeArgument() throws {
         let result = resolveAdapterRegistrations(
             useSites: [useSite("RoutedBy", on: "SimpleController", typeArguments: ["Router<BasicRequestContext>"])],
@@ -66,6 +82,31 @@ struct AdapterResolutionTests {
             registration.arguments == [
                 .init(label: "instance", localName: identifierName(forType: "SimpleController", key: nil)),
                 .init(label: "router", localName: identifierName(forType: "Router<BasicRequestContext>", key: nil)),
+            ]
+        )
+    }
+
+    @Test func resolvesInstanceForLiftedOpaqueNode() throws {
+        // `@RoutedBy` on a lifted `@Singleton(as: APIProtocol.self)` node. Its
+        // concrete type is `TaskController` but its graph identity is
+        // `some APIProtocol`; `instance: Self` must resolve to that identity so
+        // the registration references the lifted local (`someAPIProtocol`), not
+        // a nonexistent `taskController`. The callee stays the concrete type.
+        let result = resolveAdapterRegistrations(
+            useSites: [useSite("RoutedBy", on: "TaskController", typeArguments: ["Router"])],
+            definitions: [definition("RoutedBy", signature: "(instance: Self, router: $0)")],
+            producers: [
+                liftedProducer("TaskController", opaqueIdentity: "APIProtocol"),
+                producer("Router"),
+            ]
+        )
+        #expect(result.diagnostics.isEmpty)
+        let registration = try #require(result.registrations.first)
+        #expect(registration.calleeType == "TaskController")
+        #expect(
+            registration.arguments == [
+                .init(label: "instance", localName: identifierName(forType: "some APIProtocol", key: nil)),
+                .init(label: "router", localName: identifierName(forType: "Router", key: nil)),
             ]
         )
     }
