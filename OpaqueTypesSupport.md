@@ -1,12 +1,15 @@
 # Support for Opaque Types — design note
 
-> **Status:** design spec for deferred work, revised after iteration 7's
-> incremental task-cluster adoption surfaced a concrete forcing case.
-> The feature is still unimplemented and scheduled around iteration 9,
-> but the demand is no longer hypothetical — see *Forcing function* below.
-> The model here deliberately stops short of conformance-based resolution
-> (see *Identity model*); it is opaque *nominal identity* plus a small,
-> closed set of promotion rules.
+> **Status:** implemented in iteration 9 — `@Singleton(as: P.self)` opaque
+> identities, the constrained-parameter bridge, and `_WireGraph` lifting ship,
+> and task-cluster's chain is migrated (its `CompositionRoot` collapsed).
+> Consumers inject **constrained generic parameters**, not `some P` at the
+> injection site (see *The closure invariant*); the literal `some P` init/var
+> form does not compile. The model deliberately stops short of conformance-based
+> resolution (see *Identity model*); it is opaque *nominal identity* plus a
+> small, closed set of promotion rules. Deferred within it: the `some P`
+> satisfies `any P` promotion, nested-position lifting, and multi-identity
+> aliasing (each marked below).
 
 ## The pattern
 
@@ -84,35 +87,49 @@ abstract consumer can only be fed by a producer that declares the *same*
 abstract identity. You cannot splice a concrete-identity producer into a
 `some P` slot — that hop is exactly the conformance lookup we rejected.
 
-So opacity is **contagious upward**: if `CompositionRoot` wants
-`some APIProtocol`, then the controller, the repository, *and* the leaf
-all declare opaque identities. The chain is `some` from top to bottom and
-bottoms out at a single concrete initialiser:
+So opacity is **contagious upward**: the controller, the repository, *and*
+the leaf all declare opaque identities, and the chain stays abstract from
+top to bottom, bottoming out at a single concrete initialiser. Each hop
+injects its collaborator as a **constrained generic parameter**, which Wire
+bridges to the matching `some P` binding (see *Resolving consumers* rule 2
+and *Self-production: lift, don't specialise*):
 
 ```swift
-@Provides let table: some DynamoDBCompositePrimaryKeyTable
+@Provides let table: some DynamoDBCompositePrimaryKeyTable & Sendable
     = InMemoryDynamoDBCompositePrimaryKeyTable()
 
 @Singleton(as: TaskRepository.self)
 struct DynamoDBTaskRepository<Table: DynamoDBCompositePrimaryKeyTable & Sendable>: TaskRepository {
-    @Inject init(table: some DynamoDBCompositePrimaryKeyTable) { … }
+    @Inject init(table: Table) { … }
 }
 
 @Singleton(as: APIProtocol.self)
 struct TaskController<Repository: TaskRepository>: APIProtocol {
-    @Inject init(repository: some TaskRepository) { … }
+    @Inject init(repository: Repository) { … }
 }
 
-@Singleton struct CompositionRoot {
-    @Inject var controller: some APIProtocol
-}
+// No composition root: the controller is already a graph node under its
+// `some APIProtocol` identity — read it straight off the bootstrapped graph.
+let controller = graph.someAPIProtocol
 ```
+
+**Injection uses a constrained generic parameter, not `some P` at the
+injection site.** `@Inject init(table: some P)` does *not* compile: `some P`
+in a parameter opens a fresh implicit generic (SE-0341) decoupled from the
+type's own `<Table>`, so it can't be stored into the `Table` field; and a
+stored `var x: some P` has no initialiser expression from which to infer its
+underlying type. The shape that compiles keeps the type generic
+(`<Table: P>`) and injects the bare parameter; Wire passes a `some P` value
+and the compiler infers the argument. This is the constrained-parameter
+bridge — Swift's opaque-type semantics, not a Wire quirk. The leaf's
+constraint must match the parameter's *exactly*, `& Sendable` included, since
+matching is textual (`some DynamoDBCompositePrimaryKeyTable & Sendable` here).
 
 The concrete type `InMemoryDynamoDBCompositePrimaryKeyTable` appears
 **exactly once**, as the leaf initialiser — the genuine composition-root
 choice, not a wart. The nested spelling
 `TaskController<DynamoDBTaskRepository<InMemoryDynamoDBCompositePrimaryKeyTable>>`
-that today's `CompositionRoot` is forced into collapses entirely.
+that the pre-lift `CompositionRoot` was forced into collapses entirely.
 
 **The leaf must be `some`, not the bare protocol (`any`).** Writing
 `@Provides let table: DynamoDBCompositePrimaryKeyTable = …` makes it an
@@ -173,8 +190,11 @@ identities, where the wrapper boilerplate starts to grate.
 
 Three rules, in precedence order. None require conformance search.
 
-1. **Exact token.** `@Inject … some P` resolves to the binding with
-   identity `some P`. Standard exact match.
+1. **Exact token.** `some P` is one graph slot: two producers declaring the
+   same `some P` identity collide as a duplicate, and a dependency already
+   carrying the `some P` token resolves to it directly. But a consumer can't
+   *write* `some P` at an injection site (SE-0341, above), so in practice
+   consumers reach a `some P` binding through rule 2, not this one.
 
 2. **Constrained-parameter bridge.** A generic dependency whose type is a
    bare type parameter constrained to `P` — `repository: Repository`
