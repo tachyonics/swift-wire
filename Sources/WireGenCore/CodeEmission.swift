@@ -383,7 +383,15 @@ private func appendStruct(
         }
         let local = propertyName(for: binding)
         let construction = constructionExpression(for: binding)
-        lines.append("    let \(local) = \(construction)")
+        // A specialised generic `@Provides func` can't be called with explicit
+        // type arguments, so annotate the local with the concrete return type
+        // and let Swift infer them (`let repo: Repository<DynamoDBTable> =
+        // makeRepo()`). Harmless when the value arguments already determine them.
+        if case .provider(let provider) = binding, !provider.concreteGenericArguments.isEmpty {
+            lines.append("    let \(local): \(binding.boundTypeReference) = \(construction)")
+        } else {
+            lines.append("    let \(local) = \(construction)")
+        }
     }
 
     // Post-init member injection block — emits after all locals
@@ -588,19 +596,11 @@ private func constructionExpression(
             return prefix + provider.accessPath
         case .function:
             let args = renderArguments(provider.dependencies, consumer: binding, resolvingLocal: resolvingLocal)
-            // A specialised generic provider function carries the
-            // concrete type arguments to splice in at the call site.
-            // The bare call `makeRepo()` couldn't infer T from
-            // context here (the local has no type annotation), so we
-            // emit them explicitly: `makeRepo<DynamoDBTable>()`.
-            // Non-specialised provider functions have an empty
-            // arguments list and call through as `accessPath(args)`.
-            if !provider.concreteGenericArguments.isEmpty {
-                let generics =
-                    provider.concreteGenericArguments
-                    .joined(separator: ", ")
-                return "\(prefix)\(provider.accessPath)<\(generics)>(\(args))"
-            }
+            // Always a bare call: Swift forbids explicit specialisation of a
+            // function (`makeRepo<DynamoDBTable>()` is illegal — unlike a type
+            // initialiser). A specialised generic provider function infers its
+            // type arguments instead — from its value arguments, or from the
+            // concrete-return-typed local `appendStruct` annotates.
             return "\(prefix)\(provider.accessPath)(\(args))"
         }
     case .aggregate(let aggregate):
