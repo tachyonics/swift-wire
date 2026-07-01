@@ -233,10 +233,23 @@ For this case:
 
 `BuilderKey<B>` and OpaqueTypesSupport are coupled in the design
 space because the opaque-shape `BuilderKey` declaration reuses
-OpaqueTypesSupport's parameter-lifting mechanism verbatim. They
-land together for this case. The non-opaque cases (path 1 above
-and the explicit-`any P<…>` form of path 2) ship in iteration 5
-without needing this spec.
+OpaqueTypesSupport's parameter-lifting mechanism verbatim. The result
+type is declared *explicitly* at the key (not inferred from
+`buildBlock`) precisely because the builder may live in a
+non-activated package — Wire references the builder type but never
+parses it, so it can't derive the return type, and the producer must
+state `some P<…>` at the key.
+
+Scope: iteration 9 landed opaque-types for plain `some P`;
+**iteration 10** extends lifting to `some P<A,B,C>` (spike first) and
+adds the `.opaque(P<…>.self)` fold form, with the type arguments
+written explicitly at the key. Making those arguments come from the
+**bootstrap** (a request-context config) and wiring the folded value
+into the router is **M2 / WireHummingbird** — see
+`OpaqueTypesSupport.md`, *Iteration 10* and *Second forcing
+condition*. The non-opaque cases (path 1 above and the
+explicit-`any P<…>` form of path 2) shipped in iteration 5 without
+needing any of this.
 
 ## Iteration 5 scope and forward-compat
 
@@ -251,10 +264,11 @@ Iteration 5 ships:
   (`withOrder:` only on `CollectedKey`, `atKey:` required on
   `MappedKey`, no mixing)
 
-The deferred-to-OpaqueTypesSupport case (path 2, parameterized
-opaque returns) is documented as a deferred decision in
-`M1_PLAN.md` and lands when OpaqueTypesSupport itself does. The
-forward-compat shape:
+The deferred case (path 2, parameterized opaque returns) is
+iteration-10 work: opaque-types landed in iteration 9 for plain
+`some P`, and the `some P<A,B,C>` extension plus the
+`.opaque(P<…>.self)` form follow there (bootstrap-supplied type
+arguments are M2). The forward-compat shape held:
 
 - The `BuilderKey<B>` runtime type and `@Contributes(to:)` surface
   don't change between the iteration-5 and post-OpaqueTypesSupport
@@ -269,17 +283,12 @@ forward-compat shape:
 
 ## Forcing conditions for OpaqueTypesSupport
 
-`OpaqueTypesSupport.md` originally named iteration 9 (task-cluster
-migration) as the forcing condition. `BuilderKey<B>` adds a second
-trigger: if an iteration-5 `BuilderKey<B>` adopter wants to express
-a parameterized-protocol middleware chain (or similar
-type-transforming builder) with generic preservation, that's an
-independent reason to move OpaqueTypesSupport forward.
-
-Plan-level note: leave the iteration-9 timing as-is; pulling it
-forward is a reactive decision based on whichever adopter (task-
-cluster migration *or* a `BuilderKey` adopter) hits the case
-first.
+The task-cluster migration was the forcing condition, and opaque-types
+landed with it in iteration 9 (plain `some P`). `BuilderKey<B>`'s
+parameterized-opaque case is the second trigger, and it now sets part
+of iteration 10's scope: extending lifting to `some P<A,B,C>` and
+adding the `.opaque(P<…>.self)` fold form (bootstrap-supplied type
+arguments remain M2 / WireHummingbird).
 
 ## Design axes settled by the result-builder-attribute approach
 
