@@ -285,6 +285,31 @@ private func appendSeedScopeStruct(
     lines.append("}")
 }
 
+/// The stored-property type for a binding on the generated `_WireGraph` struct:
+/// - a bare `some P` lift node uses its own lifted parameter (`T0`);
+/// - a structural lift node reuses its dependencies' parameters, spelled
+///   `Controller<T1>` — each `some <constraint>` sub-term replaced by the lifted
+///   parameter of the matching bridge target;
+/// - everything else uses its concrete `boundTypeReference` (qualified for a
+///   nested `@Singleton`).
+private func wireGraphFieldType(
+    for binding: DiscoveredBinding,
+    liftedParameterForIdentity: [String: String]
+) -> String {
+    if let parameter = liftedParameterForIdentity[canonicalTypeName(binding.boundType)] {
+        return parameter
+    }
+    guard binding.allGenericParametersDetermined else {
+        return binding.boundTypeReference
+    }
+    let arguments = binding.genericParameterNames.map { parameter -> String in
+        let constraint = binding.genericParameterConstraints[parameter] ?? ""
+        return liftedParameterForIdentity[canonicalTypeName("some \(constraint)")]
+            ?? "some \(constraint)"
+    }
+    return "\(binding.boundTypeReference)<\(arguments.joined(separator: ", "))>"
+}
+
 /// Emit one `_<Name>WireGraph` struct + matching `_wireBootstrap<Name>`
 /// free function pair. Called once for the default graph and once per
 /// container; the same shape carries through for both.
@@ -304,9 +329,11 @@ private func appendStruct(
     // concrete value and the structural opaque return type binds it.
     let opaqueBindings = topologicalOrder.filter { $0.boundType.hasPrefix("some ") }
     let liftedConstraints = opaqueBindings.map { String($0.boundType.dropFirst("some ".count)) }
-    var liftedParameterForProperty: [String: String] = [:]
+    // Map each bare `some P` identity to its lifted parameter (`some TaskRepo`
+    // → `T1`) so a structural lift node can reuse it, spelled `Controller<T1>`.
+    var liftedParameterForIdentity: [String: String] = [:]
     for (index, binding) in opaqueBindings.enumerated() {
-        liftedParameterForProperty[propertyName(for: binding)] = "T\(index)"
+        liftedParameterForIdentity[canonicalTypeName(binding.boundType)] = "T\(index)"
     }
     let genericClause =
         liftedConstraints.isEmpty
@@ -343,13 +370,17 @@ private func appendStruct(
 
     // Stored properties — one per binding, type-derived name, no
     // prefix. Users access these as `graph.logger`, `graph.userService`.
-    // Opaque bindings use their lifted generic parameter (`T0`, …); the rest
+    // A bare `some P` lift node uses its lifted parameter (`T0`); a structural
+    // lift node reuses its dependencies' parameters (`Controller<T1>`); the rest
     // use `boundTypeReference` so nested `@Singleton`s inside a `@Container`
     // qualify with the enclosing path (`TestContainer.MockService`) — required
     // because this struct lives at module scope.
     for binding in topologicalOrder {
         let property = propertyName(for: binding)
-        let type = liftedParameterForProperty[property] ?? binding.boundTypeReference
+        let type = wireGraphFieldType(
+            for: binding,
+            liftedParameterForIdentity: liftedParameterForIdentity
+        )
         lines.append("    let \(property): \(type)")
     }
     lines.append("}")
@@ -836,163 +867,4 @@ package func sanitizeIdentifier(_ raw: String) -> String {
 private func lowerCamelCased(_ name: String) -> String {
     guard let first = name.first else { return name }
     return first.lowercased() + name.dropFirst()
-}
-
-// MARK: - Key check emission
-
-/// Render the `_WireKeyChecks.swift` source the build plugin writes
-/// alongside `_WireGraph.swift`. Contains one `_wireTypeCheck_*`
-/// function per unique `(keyExpression, declaredType)` pair the
-/// discovery found; inside each function, one `_check` call per
-/// source-level usage of that pair, wrapped in `#sourceLocation`
-/// directives so any compile failure is attributed back to the user's
-/// source line.
-///
-/// The generic helper `_check<T>(_: BindingKey<T>, _: T.Type)` forces
-/// Swift's type inference to unify `T` against both arguments. A
-/// mismatch — `@Inject(Database.primary) var db: Cache` where
-/// `Database.primary: BindingKey<Database>` — fails to compile because
-/// no single `T` satisfies both. The compiler emits one error per
-/// failing `_check` call, each attributed via `#sourceLocation` to the
-/// originating user-source line.
-///
-/// Dedup: each `(keyExpression, declaredType)` pair gets one function.
-/// All sites using the same pair are emitted as separate `_check`
-/// calls inside that function. The success case (consistent
-/// pair-usage) keeps the file size bounded; the failure case (the
-/// pair mismatches) produces one Swift compile error per affected
-/// site so the user can fix them all in one editing pass.
-///
-/// `any P` / `some P` existential property types are skipped — the
-/// generic helper needs concrete `T` equality and existentials don't
-/// satisfy it cleanly. Mismatches at those sites are still caught
-/// later by the build plugin's missing-binding diagnostic at codegen.
-///
-/// The file is emitted even when there are no keyed bindings (just a
-/// header comment) so SPM's declared-output-file contract holds
-/// without conditional logic in the plugin.
-package func renderWireKeyChecks(
-    imports: [String],
-    allBindings: [DiscoveredBinding],
-    multibindingKeyReferences: Set<String> = []
-) -> String {
-    var lines: [String] = []
-
-    lines.append("// Generated by WireGen — do not edit.")
-    lines.append("//")
-    lines.append("// Compile-time type assertions for keyed @Inject / @Provides")
-    lines.append("// annotations. The functions below are never called; they")
-    lines.append("// exist purely so the compiler unifies each key's `BindingKey<T>`")
-    lines.append("// generic parameter with the consuming binding's type. A")
-    lines.append("// mismatch surfaces as a Swift compile error attributed via")
-    lines.append("// #sourceLocation to the user's source line.")
-
-    let sortedImports = Array(Set(imports)).sorted()
-    if !sortedImports.isEmpty {
-        lines.append("")
-        for line in sortedImports {
-            lines.append(line)
-        }
-    }
-
-    // Walk every binding, both keyed providers and keyed dependencies,
-    // gathering (keyExpression, declaredType, location) for each.
-    var groupedSites: [KeyCheckPair: [KeyCheckSite]] = [:]
-    for site in collectKeyCheckSites(allBindings, excludingKeys: multibindingKeyReferences) {
-        let pair = KeyCheckPair(key: site.keyExpression, type: site.declaredType)
-        groupedSites[pair, default: []].append(site)
-    }
-
-    // Emit functions in deterministic (sorted) order — sort by type
-    // first, then key — so the file is stable across runs.
-    for (index, pair) in groupedSites.keys.sorted().enumerated() {
-        let sites = (groupedSites[pair] ?? []).sorted { $0.location < $1.location }
-        let functionName = "_wireTypeCheck_\(index + 1)"
-        lines.append("")
-        lines.append("private func \(functionName)() {")
-        lines.append("    func _check<T>(_: BindingKey<T>, _: T.Type) {}")
-        for site in sites {
-            lines.append("")
-            lines.append(
-                "    #sourceLocation(file: \"\(site.location.file)\", line: \(site.location.line))"
-            )
-            lines.append("    _check(\(pair.key), \(pair.type).self)")
-            lines.append("    #sourceLocation()")
-        }
-        lines.append("}")
-    }
-
-    lines.append("")
-    return lines.joined(separator: "\n")
-}
-
-/// One source-level usage of a `(keyExpression, declaredType)` pair —
-/// either a keyed `@Provides` site or a keyed `@Inject` site.
-private struct KeyCheckSite {
-    let keyExpression: String
-    let declaredType: String
-    let location: SourceLocation
-}
-
-/// Deduplication key for emitted check functions. Two sites with the
-/// same `(key, type)` share a function; each contributes its own
-/// `_check` call inside.
-private struct KeyCheckPair: Hashable, Comparable {
-    let key: String
-    let type: String
-
-    static func < (lhs: Self, rhs: Self) -> Bool {
-        if lhs.type != rhs.type { return lhs.type < rhs.type }
-        return lhs.key < rhs.key
-    }
-}
-
-/// Walk every binding and pull out the keyed sites we need to check.
-/// Two sources: the binding side (a keyed `@Provides` claims a slot
-/// `(type, key)`) and the consumer side (each keyed dependency
-/// requests a slot `(type, key)`). Both must type-check against the
-/// same key declaration; both contribute sites.
-private func collectKeyCheckSites(
-    _ bindings: [DiscoveredBinding],
-    excludingKeys multibindingKeyReferences: Set<String>
-) -> [KeyCheckSite] {
-    var sites: [KeyCheckSite] = []
-    for binding in bindings {
-        if case .provider(let provider) = binding,
-            let key = provider.keyIdentifier,
-            !multibindingKeyReferences.contains(key),
-            shouldEmitCheck(forType: provider.boundType)
-        {
-            sites.append(
-                KeyCheckSite(
-                    keyExpression: key,
-                    declaredType: provider.boundType,
-                    location: provider.location
-                )
-            )
-        }
-        for dependency in binding.dependencies {
-            guard let key = dependency.keyIdentifier else { continue }
-            guard !multibindingKeyReferences.contains(key) else { continue }
-            guard shouldEmitCheck(forType: dependency.type) else { continue }
-            sites.append(
-                KeyCheckSite(
-                    keyExpression: key,
-                    declaredType: dependency.type,
-                    location: dependency.location
-                )
-            )
-        }
-    }
-    return sites
-}
-
-/// `any P` / `some P` existential types break the generic helper's
-/// `T == T` unification — `BindingKey<P>` (concrete) and `(any P).Type`
-/// don't share a `T`. We skip these and rely on the build plugin's
-/// missing-binding diagnostic to catch real mismatches at codegen.
-/// Documented limitation; revisit if existential-typed bindings become
-/// common enough that the loss of compile-time coverage hurts.
-private func shouldEmitCheck(forType type: String) -> Bool {
-    !type.hasPrefix("any ") && !type.hasPrefix("some ")
 }
