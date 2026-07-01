@@ -61,6 +61,36 @@ struct DeadBindingDiagnosticsTests {
         )
     }
 
+    /// An `@Singleton(as: Identity.self)` lift node: generic over one
+    /// constrained parameter, injecting it as a bare dependency (which bridges
+    /// to the matching `some P` binding).
+    private func liftNode(
+        _ typeName: String,
+        identity: String,
+        parameter: String,
+        constraint: String
+    ) -> DiscoveredBinding {
+        .scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: typeName,
+                typeKind: "struct",
+                genericParameterNames: [parameter],
+                genericParameterConstraints: [parameter: constraint],
+                explicitIdentity: identity,
+                dependencies: [
+                    DependencyParameter(
+                        name: "d",
+                        type: parameter,
+                        kind: .injectProperty,
+                        location: mockLocation("\(typeName).swift")
+                    )
+                ],
+                location: mockLocation("\(typeName).swift"),
+                originModule: testModule
+            )
+        )
+    }
+
     private func warnings(_ bindings: [DiscoveredBinding]) -> [Diagnostic] {
         deadBindingDiagnostics(in: bindings)
     }
@@ -304,6 +334,37 @@ struct DeadBindingDiagnosticsTests {
                     adapterDefinitions: []
                 ).map(\.location.file)
             ) == ["SimpleController.swift"]
+        )
+    }
+
+    // MARK: - Opaque lift nodes
+
+    @Test func opaqueLiftChainProducesNoDeadBindingWarnings() {
+        // leaf (some DBTable & Sendable) <- Repo (some TaskRepo) <- Controller
+        // (some API). The leaf is consumed via the constrained-parameter bridge;
+        // the lift nodes are generic, so they're skipped like any generic (the
+        // controller is read off the graph as a root). Nothing warns.
+        let partitions: [Partition: [DiscoveredBinding]] = [
+            Partition(container: nil, scope: nil): [
+                provider("table", boundType: "some DBTable & Sendable"),
+                liftNode("Repo", identity: "TaskRepo", parameter: "Table", constraint: "DBTable & Sendable"),
+                liftNode("Controller", identity: "API", parameter: "Repository", constraint: "TaskRepo"),
+            ]
+        ]
+        #expect(deadBindingDiagnostics(across: partitions).isEmpty)
+    }
+
+    @Test func unconsumedOpaqueProviderStillWarns() {
+        // An opaque `@Provides let x: some P` that nothing consumes is dead like
+        // any other provider — the `some P` identity doesn't suppress the check.
+        #expect(
+            Set(
+                deadBindingDiagnostics(across: [
+                    Partition(container: nil, scope: nil): [
+                        provider("orphan", boundType: "some DBTable & Sendable")
+                    ]
+                ]).map(\.location.file)
+            ) == ["orphan.swift"]
         )
     }
 
