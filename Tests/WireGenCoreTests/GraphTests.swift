@@ -274,6 +274,63 @@ struct GraphTests {
         #expect(result.genericTemplates.isEmpty)
     }
 
+    /// Like `liftNode` but without an explicit `@Singleton(as:)` identity — a
+    /// plain constrained generic `@Singleton`, keyed by its structural identity.
+    private func structuralLiftNode(
+        _ name: String,
+        paramName: String,
+        constraint: String,
+        depName: String
+    ) -> DiscoveredBinding {
+        .scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: name,
+                typeKind: "struct",
+                genericParameterNames: [paramName],
+                genericParameterConstraints: [paramName: constraint],
+                dependencies: [
+                    DependencyParameter(
+                        name: depName,
+                        type: paramName,
+                        kind: .injectProperty,
+                        location: mockLocation("\(name).swift")
+                    )
+                ],
+                location: mockLocation("\(name).swift"),
+                originModule: testModule
+            )
+        )
+    }
+
+    @Test func determinedGenericSingletonResolvesAsStructuralLiftNode() throws {
+        // A plain constrained `@Singleton Controller<Repository: TaskRepo>` (no
+        // `as:`) over a `some TaskRepo` repo is a structural lift node: identity
+        // `Controller<some TaskRepo>`, its `repository` dep bridges to the repo,
+        // and it's a real node — not a specialise template.
+        let result = buildDependencyGraph(from: [
+            structuralLiftNode(
+                "Controller",
+                paramName: "Repository",
+                constraint: "TaskRepo",
+                depName: "repository"
+            ),
+            liftNode(
+                "Repo",
+                identity: "TaskRepo",
+                paramName: "Table",
+                constraint: "DBTable & Sendable",
+                depName: "table"
+            ),
+            providerProperty("table", boundType: "some DBTable & Sendable"),
+        ])
+        let order = try #require(result.outcome.topologicalOrder)
+        #expect(
+            order.map { $0.boundType }
+                == ["some DBTable & Sendable", "some TaskRepo", "Controller<some TaskRepo>"]
+        )
+        #expect(result.genericTemplates.isEmpty)
+    }
+
     // MARK: - Cycle detection
 
     @Test func twoNodeCycleDetected() throws {
@@ -680,14 +737,17 @@ struct GraphTests {
 
     // MARK: - Generic types are skipped
 
-    @Test func genericSingletonIsSkippedFromGraph() throws {
+    @Test func genericSingletonWithUndeterminedParameterIsError() throws {
+        // A generic `@Singleton Repository<Model>` can't be a single instance —
+        // `Model` is unconstrained and unbound. That's an error steering to
+        // `@Provides func`, not a silently-skipped template (the provider case).
         let result = buildDependencyGraph(from: [
             singleton("Repository", dependencies: [], generics: ["Model"]),
             singleton("App"),
         ])
-        #expect(result.genericTemplates.map { $0.boundType } == ["Repository"])
-        let order = try #require(result.outcome.topologicalOrder)
-        #expect(order.map { $0.boundType } == ["App"])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.invalidGenericSingletons.count == 1)
+        #expect(errors.invalidGenericSingletons.first?.undeterminedParameters == ["Model"])
     }
 
     @Test func genericProviderFunctionIsSkippedFromGraph() throws {
@@ -710,7 +770,12 @@ struct GraphTests {
         // bindings aren't in the resolved graph, so this is a missing
         // binding rather than a successful match.
         let result = buildDependencyGraph(from: [
-            singleton("Repository", dependencies: [], generics: ["Model"]),
+            providerFunction(
+                "makeRepository",
+                boundType: "Repository<Model>",
+                dependencies: [],
+                generics: ["Model"]
+            ),
             singleton("App", dependencies: [(name: "repo", type: "Repository")]),
         ])
         #expect(result.genericTemplates.count == 1)
@@ -1082,15 +1147,16 @@ struct GraphTests {
 
     // MARK: - Generic specialisation
 
-    @Test func singleParamGenericSingletonSpecialisedForConcreteConsumer() throws {
-        // A generic `Repository<T>` singleton with a dep of type `T`
+    @Test func singleParamGenericProviderSpecialisedForConcreteConsumer() throws {
+        // A generic `@Provides func makeRepository<T>(table: T) -> Repository<T>`
         // matched against a consumer asking for `Repository<DynamoDBTable>`.
         // Specialisation substitutes T → DynamoDBTable in the dep,
         // emits a concrete `Repository<DynamoDBTable>` binding, and
         // resolves the consumer's dep against it.
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Repository",
+            providerFunction(
+                "makeRepository",
+                boundType: "Repository<T>",
                 dependencies: [(name: "table", type: "T")],
                 generics: ["T"]
             ),
@@ -1115,12 +1181,13 @@ struct GraphTests {
         #expect(repoIdx < appIdx)
     }
 
-    @Test func multiParamGenericSingletonSpecialisedForConcreteConsumer() throws {
-        // Two-parameter generic — `Pair<A, B>` with deps `first: A`,
-        // `second: B`. Each parameter substitutes independently.
+    @Test func multiParamGenericProviderSpecialisedForConcreteConsumer() throws {
+        // Two-parameter generic — `makePair<A, B>(first: A, second: B) ->
+        // Pair<A, B>`. Each parameter substitutes independently.
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Pair",
+            providerFunction(
+                "makePair",
+                boundType: "Pair<A, B>",
                 dependencies: [
                     (name: "first", type: "A"),
                     (name: "second", type: "B"),
@@ -1189,8 +1256,9 @@ struct GraphTests {
         // (real ambiguity) from "specialisation just added an entry
         // and now a second consumer finds it" (legitimate dedup).
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Repository",
+            providerFunction(
+                "makeRepository",
+                boundType: "Repository<T>",
                 dependencies: [(name: "table", type: "T")],
                 generics: ["T"]
             ),
@@ -1218,8 +1286,8 @@ struct GraphTests {
     }
 
     @Test func concreteAndGenericForSameInstantiationIsAmbiguous() throws {
-        // A concrete `@Provides static let r: Repository<DynamoDBTable>`
-        // exists alongside a generic `Repository<T>` scopeBound. Both
+        // A concrete `@Singleton Repository<DynamoDBTable>` exists alongside
+        // a generic `@Provides func makeRepository<T> -> Repository<T>`. Both
         // could satisfy a consumer's `Repository<DynamoDBTable>` dep,
         // which is ambiguous — Wire surfaces this as a duplicate-
         // binding error (consistent with how two concrete bindings for
@@ -1227,12 +1295,13 @@ struct GraphTests {
         // over the other. User disambiguates by adding a key to one
         // side, or by removing one of the bindings.
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Repository",
+            providerFunction(
+                "makeRepository",
+                boundType: "Repository<T>",
                 dependencies: [(name: "table", type: "T")],
                 generics: ["T"]
             ),
-            providerProperty("explicit", boundType: "Repository<DynamoDBTable>"),
+            singleton("Repository<DynamoDBTable>"),
             singleton(
                 "App",
                 dependencies: [(name: "repo", type: "Repository<DynamoDBTable>")]
@@ -1249,8 +1318,8 @@ struct GraphTests {
         // identity carries that canonical form through.
         #expect(duplicate.boundType == "Repository<DynamoDBTable>")
         #expect(duplicate.keyIdentifier == nil)
-        // Both the concrete provider and the generic singleton appear
-        // in the duplicates list.
+        // Both the concrete singleton and the specialised generic provider
+        // appear in the duplicates list.
         #expect(duplicate.bindings.count == 2)
         let kinds = Set(
             duplicate.bindings.map { binding -> String in
@@ -1272,8 +1341,9 @@ struct GraphTests {
         // requests via specialisation. No ambiguity because the
         // identities differ.
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Repository",
+            providerFunction(
+                "makeRepository",
+                boundType: "Repository<T>",
                 dependencies: [(name: "table", type: "T")],
                 generics: ["T"]
             ),
@@ -1319,13 +1389,15 @@ struct GraphTests {
         // specialisation. The iteration-to-fixpoint logic should
         // handle this — both `Outer<Inner<X>>` and `Inner<X>` resolve.
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Outer",
+            providerFunction(
+                "makeOuter",
+                boundType: "Outer<T>",
                 dependencies: [(name: "inner", type: "T")],
                 generics: ["T"]
             ),
-            singleton(
-                "Inner",
+            providerFunction(
+                "makeInner",
+                boundType: "Inner<U>",
                 dependencies: [(name: "value", type: "U")],
                 generics: ["U"]
             ),
@@ -1352,8 +1424,9 @@ struct GraphTests {
         // binding error. Documented limitation; nested substitution
         // is deferred to a later iteration.
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Wrapper",
+            providerFunction(
+                "makeWrapper",
+                boundType: "Wrapper<T>",
                 dependencies: [(name: "box", type: "Box<T>")],
                 generics: ["T"]
             ),
@@ -1464,8 +1537,9 @@ struct GraphTests {
         // without (or vice versa). The canonicalised identity should
         // make them match, just as for non-generic bindings.
         let result = buildDependencyGraph(from: [
-            singleton(
-                "Pair",
+            providerFunction(
+                "makePair",
+                boundType: "Pair<A, B>",
                 dependencies: [
                     (name: "first", type: "A"),
                     (name: "second", type: "B"),

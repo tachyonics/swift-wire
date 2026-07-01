@@ -123,17 +123,34 @@ package enum OptionalMismatchHint: Sendable, Equatable {
 
 /// Translate a dependency to the identity it resolves against, applying the
 /// constrained-parameter bridge (Rule 2 of the opaque model): when `binding` is
-/// an `@Singleton(as:)` lift node and `dependency` is one of its bare generic
-/// parameters constrained to a protocol `C`, the dependency resolves to the
-/// `some C` binding. Every other dependency keeps its own identity. This is the
-/// single conformance-*aware* step — it reads the declared constraint, it does
-/// not search conformers — and it only fires for lift nodes, so a non-`as:`
-/// generic template's parameters still specialise as before.
+/// a lift node (`@Singleton(as:)` or a determined generic `@Singleton`) and
+/// `dependency` is one of its bare generic parameters constrained to a protocol
+/// `C`, the dependency resolves to the `some C` binding. Every other dependency
+/// keeps its own identity. This is the single conformance-*aware* step — it
+/// reads the declared constraint, it does not search conformers — and it only
+/// fires for lift nodes, so a generic `@Provides func` template's parameters
+/// still specialise as before.
+/// Protocols that don't identify a single binding. A generic parameter
+/// constrained *only* to these isn't "determined" — `some Sendable` (etc.) is
+/// never a meaningful graph identity, so such a parameter is effectively
+/// unconstrained.
+let markerConstraintProtocols: Set<String> = ["Sendable", "AnyObject", "Any"]
+
+/// Whether a generic-parameter constraint identifies a binding: `true` if, after
+/// dropping marker protocols, at least one protocol remains. `TaskRepository` and
+/// `DBTable & Sendable` determine; `Sendable` alone does not.
+func constraintIsDetermining(_ constraint: String) -> Bool {
+    constraint
+        .split(separator: "&")
+        .map { canonicalTypeName(String($0)) }
+        .contains { !markerConstraintProtocols.contains($0) }
+}
+
 func bridgedDependencyIdentity(
     _ dependency: DependencyParameter,
     in binding: DiscoveredBinding
 ) -> BindingIdentity {
-    guard binding.hasExplicitIdentity,
+    guard binding.isLiftNode,
         let constraint = binding.genericParameterConstraints[canonicalTypeName(dependency.type)]
     else { return dependency.identity }
     let split = optionalityStripped(canonicalTypeName("some \(constraint)"))
