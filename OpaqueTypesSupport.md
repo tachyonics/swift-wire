@@ -1,15 +1,19 @@
 # Support for Opaque Types — design note
 
-> **Status:** implemented in iteration 9 — `@Singleton(as: P.self)` opaque
-> identities, the constrained-parameter bridge, and `_WireGraph` lifting ship,
-> and task-cluster's chain is migrated (its `CompositionRoot` collapsed).
-> Consumers inject **constrained generic parameters**, not `some P` at the
-> injection site (see *The closure invariant*); the literal `some P` init/var
-> form does not compile. The model deliberately stops short of conformance-based
-> resolution (see *Identity model*); it is opaque *nominal identity* plus a
-> small, closed set of promotion rules. Deferred within it: the `some P`
-> satisfies `any P` promotion, nested-position lifting, and multi-identity
-> aliasing (each marked below).
+> **Status:** iteration 9 shipped `@Singleton(as: P.self)` opaque identities, the
+> constrained-parameter bridge, and *flat* `_WireGraph` lifting; iteration 10
+> refined it with **lift the minimum** (a parameter only for bridge targets; roots
+> keep their real type via a structural identity spelled as a nested field) and
+> made a generic `@Singleton` mean **one instance** — an undetermined generic
+> parameter is an error steering to `@Provides func`, never specialisation.
+> Task-cluster's chain is migrated (its `CompositionRoot` collapsed; the controller
+> keeps its real `TaskController<some TaskRepository>`). Consumers inject
+> **constrained generic parameters**, not `some P` at the injection site (see *The
+> closure invariant*); the literal `some P` init/var form does not compile. The
+> model deliberately stops short of conformance-based resolution (see *Identity
+> model*); it is opaque *nominal identity* plus a small, closed set of promotion
+> rules. Deferred within it: the `some P` satisfies `any P` promotion and
+> multi-identity aliasing (each marked below).
 
 ## The pattern
 
@@ -312,8 +316,10 @@ The distinction that matters:
   arg — which Wire lifts onto `_WireGraph<…>`. Resolution by identity +
   compiler inference + lifting, never Wire-computed specialisation.
 - **`@Provides func` is the only thing Wire specialises** — a parameterised
-  factory, where Wire computes the concrete type args and spells
-  `makeRepo<InMemoryTable>()`.
+  factory. Wire computes the concrete type args, but Swift forbids explicit
+  function specialisation (`makeRepo<InMemoryTable>()` is illegal), so it
+  annotates the constructed local (`let repo: Repository<InMemoryTable> =
+  makeRepo()`) and lets inference apply them.
 
 Because a generic `@Singleton` just exists (like every singleton), nothing
 needs to *demand* it into the graph by spelling its concrete type. Consumers —
@@ -333,9 +339,17 @@ iteration 10 refines this to lift only what's consumed abstractly — see below.
 
 ## Iteration 10 — lift the minimum (parameters for bridge targets, structural spelling for the rest)
 
-> **Status:** planned. Iteration 9 shipped *flat* lifting — every binding with a
-> `some P` identity gets its own `_WireGraph` generic parameter. This refines it
-> to lift only bindings consumed abstractly, and records the plan.
+> **Status:** landed in iteration 10. Iteration 9 shipped *flat* lifting — every
+> binding with a `some P` identity got its own `_WireGraph` generic parameter.
+> This refinement lifts only bindings consumed abstractly (bridge targets); every
+> other generic `@Singleton` keeps its real type via a structural identity,
+> spelled as a nested field reusing those parameters. It also made `@Singleton`
+> mean a single instance: a generic `@Singleton` whose parameters aren't all
+> *determined* — constrained (excluding markers like `Sendable`) **and** injected
+> as bare-parameter dependencies — is an error steering to `@Provides func`;
+> generic `@Singleton`s never specialise. (Fixing the `@Provides func` specialise
+> codegen to infer type arguments — Swift forbids explicit function specialisation
+> — came along for the ride.) The model below matches what shipped.
 
 ### The problem with flat lifting
 
