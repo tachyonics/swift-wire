@@ -25,7 +25,7 @@ enum Wiring {
 // `SimpleController._wireRegister(instance:router:)` in the bootstrap. Running
 // it proves the adapter contract end-to-end: definition discovery across the
 // package boundary, use-site resolution, and post-construction registration.
-let graph = try await _WireGraph.bootstrap()
+let graph = try await _Wire.bootstrap()
 precondition(
     graph.router.routes.contains("SimpleController"),
     "adapter registration did not run"

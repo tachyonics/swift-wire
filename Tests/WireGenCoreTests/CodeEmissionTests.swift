@@ -168,10 +168,6 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let view: View
                 let coordinator: Coordinator
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -179,6 +175,12 @@ struct CodeEmissionTests {
                 let coordinator = Coordinator(view: view)
                 view.coordinator = coordinator
                 return _WireGraph(view: view, coordinator: coordinator)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -215,10 +217,6 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let view: View
                 let coordinator: Coordinator
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -226,6 +224,12 @@ struct CodeEmissionTests {
                 let coordinator = Coordinator(view: view)
                 view.receiveCoordinator(coordinator)
                 return _WireGraph(view: view, coordinator: coordinator)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -261,10 +265,6 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let view: View
                 let database: Database
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -272,6 +272,12 @@ struct CodeEmissionTests {
                 let database = Database()
                 try await view.setup(db: database)
                 return _WireGraph(view: view, database: database)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -309,10 +315,6 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let view: View
                 let coordinator: Coordinator
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -325,6 +327,12 @@ struct CodeEmissionTests {
             extension View {
                 func _wireSetCoordinator(_ value: Coordinator) {
                     self.coordinator = value
+                }
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
                 }
             }
 
@@ -363,10 +371,6 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let view: View
                 let coordinator: Coordinator
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -374,6 +378,12 @@ struct CodeEmissionTests {
                 let coordinator = Coordinator(view: view)
                 await view.receiveCoordinator(coordinator)
                 return _WireGraph(view: view, coordinator: coordinator)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -409,10 +419,6 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let validator: Validator
                 let policy: Policy
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -420,6 +426,12 @@ struct CodeEmissionTests {
                 let policy = Policy()
                 try await validator.applyPolicy(policy)
                 return _WireGraph(validator: validator, policy: policy)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -453,16 +465,18 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let b: B
                 let a: A
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let b = B()
                 let a = A(b: b)
                 return _WireGraph(b: b, a: a)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -478,20 +492,23 @@ struct CodeEmissionTests {
 
     @Test func emptyGraphProducesBareBootstrap() {
         // Empty graph still emits a valid struct so consumers can call
-        // `_WireGraph.bootstrap()` unconditionally. The free function
+        // `_Wire.bootstrap()` unconditionally. The free function
         // is also emitted (returning the empty memberwise init) so the
         // delegation shape is uniform across empty and non-empty graphs.
         let expected = """
             // Generated by WireGen — do not edit.
 
             internal struct _WireGraph {
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 _WireGraph()
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -507,15 +524,17 @@ struct CodeEmissionTests {
 
             internal struct _WireGraph {
                 let a: A
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let a = A()
                 return _WireGraph(a: a)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -534,10 +553,6 @@ struct CodeEmissionTests {
                 let c: C
                 let b: B
                 let a: A
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -545,6 +560,12 @@ struct CodeEmissionTests {
                 let b = B(c: c)
                 let a = A(b: b)
                 return _WireGraph(c: c, b: b, a: a)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -568,16 +589,18 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let a: A
                 let x: X
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let a = A()
                 let x = X(a)
                 return _WireGraph(a: a, x: x)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -599,10 +622,6 @@ struct CodeEmissionTests {
                 let a: A
                 let b: B
                 let x: X
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -610,6 +629,12 @@ struct CodeEmissionTests {
                 let b = B()
                 let x = X(a, second: b)
                 return _WireGraph(a: a, b: b, x: x)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -635,15 +660,17 @@ struct CodeEmissionTests {
 
             internal struct _WireGraph {
                 let dynamoDBTaskRepository: DynamoDBTaskRepository
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let dynamoDBTaskRepository = DynamoDBTaskRepository()
                 return _WireGraph(dynamoDBTaskRepository: dynamoDBTaskRepository)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -667,15 +694,17 @@ struct CodeEmissionTests {
 
             internal struct _WireGraph {
                 let logger: Logger
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let logger = logger
                 return _WireGraph(logger: logger)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -693,15 +722,17 @@ struct CodeEmissionTests {
 
             internal struct _WireGraph {
                 let database: Database
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let database = Config.databaseURL
                 return _WireGraph(database: database)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -723,16 +754,18 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let taskTable: TaskTable
                 let repository: Repository
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let taskTable = taskTable
                 let repository = makeRepo(table: taskTable)
                 return _WireGraph(taskTable: taskTable, repository: repository)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -759,16 +792,18 @@ struct CodeEmissionTests {
             internal struct _WireGraph {
                 let logger: Logger
                 let userService: UserService
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let logger = logger
                 let userService = UserService(logger: logger)
                 return _WireGraph(logger: logger, userService: userService)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -795,15 +830,17 @@ struct CodeEmissionTests {
 
             internal struct _WireGraph {
                 let repositoryOfTaskTable: Repository<TaskTable>
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let repositoryOfTaskTable = makeRepo()
                 return _WireGraph(repositoryOfTaskTable: repositoryOfTaskTable)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -823,15 +860,17 @@ struct CodeEmissionTests {
 
             internal struct _WireGraph {
                 let pairOfLeftAndRight: Pair<Left, Right>
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 let pairOfLeftAndRight = makePair()
                 return _WireGraph(pairOfLeftAndRight: pairOfLeftAndRight)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -855,13 +894,16 @@ struct CodeEmissionTests {
             import Foo
 
             internal struct _WireGraph {
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 _WireGraph()
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -883,13 +925,16 @@ struct CodeEmissionTests {
             import Foundation
 
             internal struct _WireGraph {
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
                 _WireGraph()
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
             }
 
             """
@@ -915,9 +960,6 @@ struct CodeEmissionTests {
             // Generated by WireGen — do not edit.
 
             internal struct _WireGraph {
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -926,15 +968,20 @@ struct CodeEmissionTests {
 
             internal struct _TestContainerWireGraph {
                 let logger: Logger
-
-                static func bootstrap() async throws -> _TestContainerWireGraph {
-                    try await _wireBootstrapTestContainer()
-                }
             }
 
             private func _wireBootstrapTestContainer() async throws -> _TestContainerWireGraph {
                 let logger = TestContainer.logger
                 return _TestContainerWireGraph(logger: logger)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
+                static func bootstrapTestContainer() async throws -> _TestContainerWireGraph {
+                    try await _wireBootstrapTestContainer()
+                }
             }
 
             """
@@ -957,10 +1004,6 @@ struct CodeEmissionTests {
 
             internal struct _WireGraph {
                 let logger: Logger
-
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -970,15 +1013,20 @@ struct CodeEmissionTests {
 
             internal struct _TestContainerWireGraph {
                 let logger: Logger
-
-                static func bootstrap() async throws -> _TestContainerWireGraph {
-                    try await _wireBootstrapTestContainer()
-                }
             }
 
             private func _wireBootstrapTestContainer() async throws -> _TestContainerWireGraph {
                 let logger = TestContainer.mockLogger
                 return _TestContainerWireGraph(logger: logger)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
+                static func bootstrapTestContainer() async throws -> _TestContainerWireGraph {
+                    try await _wireBootstrapTestContainer()
+                }
             }
 
             """
@@ -1003,9 +1051,6 @@ struct CodeEmissionTests {
             // Generated by WireGen — do not edit.
 
             internal struct _WireGraph {
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -1014,15 +1059,20 @@ struct CodeEmissionTests {
 
             internal struct _TestContainerWireGraph {
                 let mockService: TestContainer.MockService
-
-                static func bootstrap() async throws -> _TestContainerWireGraph {
-                    try await _wireBootstrapTestContainer()
-                }
             }
 
             private func _wireBootstrapTestContainer() async throws -> _TestContainerWireGraph {
                 let mockService = TestContainer.MockService()
                 return _TestContainerWireGraph(mockService: mockService)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
+                static func bootstrapTestContainer() async throws -> _TestContainerWireGraph {
+                    try await _wireBootstrapTestContainer()
+                }
             }
 
             """
@@ -1049,9 +1099,6 @@ struct CodeEmissionTests {
             // Generated by WireGen — do not edit.
 
             internal struct _WireGraph {
-                static func bootstrap() async throws -> _WireGraph {
-                    try await _wireBootstrap()
-                }
             }
 
             private func _wireBootstrap() async throws -> _WireGraph {
@@ -1060,10 +1107,6 @@ struct CodeEmissionTests {
 
             internal struct _AlphaWireGraph {
                 let a: A
-
-                static func bootstrap() async throws -> _AlphaWireGraph {
-                    try await _wireBootstrapAlpha()
-                }
             }
 
             private func _wireBootstrapAlpha() async throws -> _AlphaWireGraph {
@@ -1073,15 +1116,23 @@ struct CodeEmissionTests {
 
             internal struct _BravoWireGraph {
                 let b: B
-
-                static func bootstrap() async throws -> _BravoWireGraph {
-                    try await _wireBootstrapBravo()
-                }
             }
 
             private func _wireBootstrapBravo() async throws -> _BravoWireGraph {
                 let b = Bravo.b
                 return _BravoWireGraph(b: b)
+            }
+
+            internal enum _Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
+                static func bootstrapAlpha() async throws -> _AlphaWireGraph {
+                    try await _wireBootstrapAlpha()
+                }
+                static func bootstrapBravo() async throws -> _BravoWireGraph {
+                    try await _wireBootstrapBravo()
+                }
             }
 
             """
