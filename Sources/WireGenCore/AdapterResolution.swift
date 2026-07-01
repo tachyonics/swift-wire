@@ -55,13 +55,26 @@ package func resolveAdapterRegistrations(
         producers.map { ($0.identity, $0) },
         uniquingKeysWith: { first, _ in first }
     )
+    // Map each producer's concrete type reference to its graph identity, so an
+    // adapter's `Self` placeholder resolves to the annotated binding even when
+    // that identity is opaque (a lifted `@Singleton(as: P.self)` is keyed
+    // `some P`, not by its concrete type name).
+    let identityByReference = Dictionary(
+        producers.map { (canonicalTypeName($0.boundTypeReference), $0.identity) },
+        uniquingKeysWith: { first, _ in first }
+    )
     let (definitionsByName, definitionDiagnostics) = indexAdapterDefinitions(definitions)
 
     var registrations: [ResolvedAdapterRegistration] = []
     var diagnostics = definitionDiagnostics
     for useSite in useSites {
         guard let definition = definitionsByName[useSite.annotationName] else { continue }
-        let resolved = resolveUseSite(useSite, against: definition, producers: resolvedProducers)
+        let resolved = resolveUseSite(
+            useSite,
+            against: definition,
+            producers: resolvedProducers,
+            identityByReference: identityByReference
+        )
         if let registration = resolved.registration { registrations.append(registration) }
         diagnostics.append(contentsOf: resolved.diagnostics)
     }
@@ -105,7 +118,8 @@ private func indexAdapterDefinitions(
 private func resolveUseSite(
     _ useSite: AdapterUseSite,
     against definition: DiscoveredAdapterAnnotation,
-    producers: [BindingIdentity: DiscoveredBinding]
+    producers: [BindingIdentity: DiscoveredBinding],
+    identityByReference: [String: BindingIdentity]
 ) -> (registration: ResolvedAdapterRegistration?, diagnostics: [Diagnostic]) {
     var arguments: [ResolvedAdapterRegistration.Argument] = []
     var diagnostics: [Diagnostic] = []
@@ -127,7 +141,13 @@ private func resolveUseSite(
         }
         let split = optionalityStripped(canonicalTypeName(concreteType))
         let identity = BindingIdentity(base: split.base, isOptional: split.isOptional, key: nil)
-        switch matchProducer(for: identity, in: producers) {
+        // `Self` is the annotated binding itself; resolve it by concrete type
+        // reference so a lifted `@Singleton(as: P.self)` node (keyed `some P`) is
+        // found even though its identity isn't its concrete type. Other
+        // placeholders match by their declared type through the graph.
+        let selfIdentity = parameter.placeholder == "Self"
+            ? identityByReference[canonicalTypeName(concreteType)] : nil
+        switch selfIdentity.map(DependencyMatch.resolved) ?? matchProducer(for: identity, in: producers) {
         case .resolved(let producerIdentity):
             let binding = producers[producerIdentity]
             arguments.append(
