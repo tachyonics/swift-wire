@@ -841,14 +841,22 @@ private func renderMemberInjections(
 /// then the recommended fix is a typealias.
 package func sanitizeIdentifier(_ raw: String) -> String {
     var result = ""
+    // Upper-camel the first letter after an `Of`/`And` boundary so the segment
+    // reads as camelCase — `Controller<some TaskRepo>` →
+    // `ControllerOfSomeTaskRepo`, not `...OfsomeTaskRepo`. Concrete type
+    // arguments already start uppercase, so only `some`/`any` change.
+    var capitalizeNext = false
     for char in raw {
         switch char {
         case "<":
             result += "Of"
+            capitalizeNext = true
         case ",":
             result += "And"
+            capitalizeNext = true
         case _ where char.isLetter || char.isNumber || char == "_":
-            result.append(char)
+            result += capitalizeNext ? char.uppercased() : String(char)
+            capitalizeNext = false
         default:
             // Everything else (whitespace, `>`, `?`, `!`, `[`, `]`,
             // `&`, `:`, `.`, `(`, `)`, `->`) is dropped silently.
