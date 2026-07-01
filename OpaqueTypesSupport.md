@@ -424,6 +424,34 @@ typechecks — the compiler should unify `T1` from the `repo` argument and match
 `TaskController<T1>` against the concrete value, but opaque unification in a
 nested position is the thing to prove first.
 
+### Also in iteration 10: the parameterized-opaque `BuilderKey`
+
+A second, independent iteration-10 thread — extending opaque support from
+`some P` to `some P<A, B, C>` (parameterized protocols with primary associated
+types), which unblocks the `BuilderKey.opaque(…)` fold the *Second forcing
+condition* section parks. The motivating case is a middleware builder whose
+result is `some MiddlewareProtocol<Input, Output, Context>`:
+
+- **The builder may live in a non-activated package.** A `BuilderKey`
+  *references* its builder type; it doesn't discover the builder's
+  implementation, so the package needn't be Wire-aware. But that also means Wire
+  can't *infer* the fold's result type from the builder — so it must be declared
+  explicitly at the key, which is exactly the parameterized-opaque form.
+- **The lifting is likely already textual-enough.** `some P<A,B,C>` would lift to
+  `<T: P<A,B,C>>` and return `some P<A,B,C>` — valid Swift (SE-0346), and the
+  iteration-9 lifting is textual. **Spike it first** (it was proven only for
+  `some P` / `some P & Q`); a passing spike means the rest is mostly the
+  `BuilderKey.opaque(P<…>.self)` fold form on top.
+
+Scope boundary: iteration 10 delivers this with the type arguments written
+**explicitly at the key** (concrete `A,B,C`) — a complete, framework-agnostic,
+Hummingbird-free capability (a harness folding contributors into
+`some SomeProto<A,B,C>`). Making `A,B,C` come from the **bootstrap** (the app's
+request-context config) and wiring the folded value into the router is **M2 /
+WireHummingbird** — see *Second forcing condition*. Ordered: spike `some P<A,B,C>`
+first, then the `BuilderKey.opaque` form (against whichever lifting model, flat
+or minimal, is current).
+
 ### Deferred / adjacent: conformance-derived aliasing
 
 The repository still declares `@Singleton(as: TaskRepository.self)` so consumers
@@ -508,10 +536,26 @@ static let middleware = BuilderKey<MiddlewareBuilder>.opaque(
 )
 ```
 
-`_WireGraph` lifts a generic parameter for the opaque slot; consumers
-reference it via their generic constraint. Iteration 5 ships `BuilderKey<B>`
-with the non-opaque cases (implicit result type derived from the builder,
-and the explicit `any P<…>` form); the parameterized-opaque case lands
-when this spec does. See
-[`BuilderKeyDesign.md`](Documentation/Notes/BuilderKeyDesign.md) for the
+`_WireGraph` lifts a generic parameter for the opaque slot; consumers reference
+it via their generic constraint. The result type is declared *explicitly* at the
+key because a `BuilderKey` references its builder type but doesn't discover the
+builder's implementation — the builder may sit in a non-activated package (e.g.
+Hummingbird's middleware builder) — so Wire can't infer the fold's return type,
+and for a typed middleware stack that statement is `some P<…>`.
+
+Iteration 5 shipped `BuilderKey<B>`'s non-opaque cases (implicit result type,
+explicit `any P<…>`). Iteration 9 landed opaque-types for plain `some P`, which
+**unblocks** this. The remaining work splits:
+
+- **Iteration 10** — extend lifting from `some P` to `some P<A,B,C>` (spike
+  first) and build the `BuilderKey.opaque(P<…>.self)` fold form, with the type
+  arguments written **explicitly at the key**. Framework-agnostic; see
+  *Iteration 10 — lift the minimum* above.
+- **M2 / WireHummingbird** — make `A,B,C` (`Input`/`Output`/`Context`) come from
+  the **bootstrap** (the app's request-context config) rather than a literal key,
+  and wire the folded middleware into the router (a framework adapter, same
+  contract surface as `@RoutedBy`). This is the framework-integration half,
+  downstream of both the opaque lifting and the adapter contract.
+
+See [`BuilderKeyDesign.md`](Documentation/Notes/BuilderKeyDesign.md) for the
 coupling in full.
