@@ -1765,14 +1765,14 @@ struct CodeEmissionTests {
             internal struct _WireGraph<T0: DBTable & Sendable, T1: TaskRepo> {
                 let someDBTableSendable: T0
                 let someTaskRepo: T1
-                let controllerOfsomeTaskRepo: Controller<T1>
+                let controllerOfSomeTaskRepo: Controller<T1>
             }
 
             private func _wireBootstrap() async throws -> _WireGraph<some DBTable & Sendable, some TaskRepo> {
                 let someDBTableSendable = Wiring.table
                 let someTaskRepo = DynamoRepo(table: someDBTableSendable)
-                let controllerOfsomeTaskRepo = Controller(repository: someTaskRepo)
-                return _WireGraph(someDBTableSendable: someDBTableSendable, someTaskRepo: someTaskRepo, controllerOfsomeTaskRepo: controllerOfsomeTaskRepo)
+                let controllerOfSomeTaskRepo = Controller(repository: someTaskRepo)
+                return _WireGraph(someDBTableSendable: someDBTableSendable, someTaskRepo: someTaskRepo, controllerOfSomeTaskRepo: controllerOfSomeTaskRepo)
             }
 
             internal enum _Wire {
@@ -1815,14 +1815,14 @@ struct CodeEmissionTests {
             internal struct _WireGraph<T0: TaskRepo, T1: Logger> {
                 let someTaskRepo: T0
                 let someLogger: T1
-                let pairOfsomeTaskRepoAndsomeLogger: Pair<T0, T1>
+                let pairOfSomeTaskRepoAndSomeLogger: Pair<T0, T1>
             }
 
             private func _wireBootstrap() async throws -> _WireGraph<some TaskRepo, some Logger> {
                 let someTaskRepo = Wiring.repo
                 let someLogger = Wiring.log
-                let pairOfsomeTaskRepoAndsomeLogger = Pair(repository: someTaskRepo, log: someLogger)
-                return _WireGraph(someTaskRepo: someTaskRepo, someLogger: someLogger, pairOfsomeTaskRepoAndsomeLogger: pairOfsomeTaskRepoAndsomeLogger)
+                let pairOfSomeTaskRepoAndSomeLogger = Pair(repository: someTaskRepo, log: someLogger)
+                return _WireGraph(someTaskRepo: someTaskRepo, someLogger: someLogger, pairOfSomeTaskRepoAndSomeLogger: pairOfSomeTaskRepoAndSomeLogger)
             }
 
             internal enum _Wire {
