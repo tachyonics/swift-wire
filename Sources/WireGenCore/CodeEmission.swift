@@ -36,31 +36,6 @@
 /// migrations don't ripple through every consumer's `try await
 /// _Wire.bootstrap()` call site. Swift accepts an `async throws`
 /// function body that doesn't actually use those capabilities.
-/// One entry point aggregated onto the `_Wire` façade: the method signature
-/// (name, parameters, return type) and the call into the private bootstrap free
-/// function. Collected as each graph struct is emitted, then rendered as a
-/// single non-generic `_Wire` enum so the call site never changes shape when a
-/// graph type becomes generic (opaque lifting).
-private struct BootstrapEntry {
-    let signature: String
-    let body: String
-}
-
-/// Emit the `_Wire` façade — every graph's bootstrap entry point as a static
-/// method on one non-generic enum, so `_Wire.bootstrap()` (and the container/
-/// scope variants) is the uniform call site regardless of whether the
-/// underlying graph type carries lifted generic parameters.
-private func appendWireFacade(_ entries: [BootstrapEntry], into lines: inout [String]) {
-    lines.append("")
-    lines.append("internal enum _Wire {")
-    for entry in entries {
-        lines.append("    static func \(entry.signature) {")
-        lines.append("        \(entry.body)")
-        lines.append("    }")
-    }
-    lines.append("}")
-}
-
 package func renderWireGraph(
     imports: [String],
     topologicalOrder: [DiscoveredBinding],
@@ -322,12 +297,38 @@ private func appendStruct(
     into lines: inout [String],
     entries: inout [BootstrapEntry]
 ) {
+    // Bindings whose graph identity is opaque (`some P`) each lift a generic
+    // parameter onto the struct, so a stored `some P` property refers to one
+    // concrete type rather than a fresh opaque type per access. The parameter's
+    // constraint is the binding's declared protocol; the bootstrap builds the
+    // concrete value and the structural opaque return type binds it.
+    let opaqueBindings = topologicalOrder.filter { $0.boundType.hasPrefix("some ") }
+    let liftedConstraints = opaqueBindings.map { String($0.boundType.dropFirst("some ".count)) }
+    var liftedParameterForProperty: [String: String] = [:]
+    for (index, binding) in opaqueBindings.enumerated() {
+        liftedParameterForProperty[propertyName(for: binding)] = "T\(index)"
+    }
+    let genericClause =
+        liftedConstraints.isEmpty
+        ? ""
+        : "<"
+            + liftedConstraints.enumerated()
+            .map { "T\($0.offset): \($0.element)" }
+            .joined(separator: ", ") + ">"
+    // The `_wireBootstrap` free function and the `_Wire` façade both return the
+    // opaque-erased form `\(structName)<some P0, …>`; Swift infers each parameter
+    // from the concrete values the bootstrap returns.
+    let openReturnType =
+        liftedConstraints.isEmpty
+        ? structName
+        : "\(structName)<" + liftedConstraints.map { "some \($0)" }.joined(separator: ", ") + ">"
+
     // The bootstrap entry point lives on the `_Wire` façade, not on the struct
     // — a non-generic call site that stays `_Wire.\(bootstrapMethod)()` whether
-    // or not the struct is generic (opaque lifting).
+    // or not the struct carries lifted parameters.
     entries.append(
         BootstrapEntry(
-            signature: "\(bootstrapMethod)() async throws -> \(structName)",
+            signature: "\(bootstrapMethod)() async throws -> \(openReturnType)",
             body: "try await \(bootstrapFunction)()"
         )
     )
@@ -338,17 +339,18 @@ private func appendStruct(
     // handles the conformance when all bindings are Sendable; the
     // user gets compile-time feedback at their use site if one
     // isn't.
-    lines.append("internal struct \(structName) {")
+    lines.append("internal struct \(structName)\(genericClause) {")
 
     // Stored properties — one per binding, type-derived name, no
     // prefix. Users access these as `graph.logger`, `graph.userService`.
-    // The annotated type uses `boundTypeReference` so nested
-    // `@Singleton`s inside a `@Container` qualify with the enclosing
-    // path (`TestContainer.MockService`) — required because this
-    // struct lives at module scope.
+    // Opaque bindings use their lifted generic parameter (`T0`, …); the rest
+    // use `boundTypeReference` so nested `@Singleton`s inside a `@Container`
+    // qualify with the enclosing path (`TestContainer.MockService`) — required
+    // because this struct lives at module scope.
     for binding in topologicalOrder {
         let property = propertyName(for: binding)
-        lines.append("    let \(property): \(binding.boundTypeReference)")
+        let type = liftedParameterForProperty[property] ?? binding.boundTypeReference
+        lines.append("    let \(property): \(type)")
     }
     lines.append("}")
 
@@ -358,7 +360,7 @@ private func appendStruct(
     // bypassing the type-member shadow that would happen inside
     // the struct's `static func bootstrap()` directly.
     lines.append("")
-    lines.append("private func \(bootstrapFunction)() async throws -> \(structName) {")
+    lines.append("private func \(bootstrapFunction)() async throws -> \(openReturnType) {")
 
     guard !topologicalOrder.isEmpty else {
         // Empty graph — no bindings, return the empty memberwise init.
@@ -570,7 +572,7 @@ private func constructionExpression(
         // prefix (e.g. `TestContainer.MockService`) so a `@Singleton`
         // nested inside a `@Container` resolves correctly when called
         // from the module-scope `_wireBootstrap...` free function.
-        let args = renderArguments(scopeBound.dependencies, resolvingLocal: resolvingLocal)
+        let args = renderArguments(scopeBound.dependencies, consumer: binding, resolvingLocal: resolvingLocal)
         let call = "\(scopeBound.qualifiedTypeName)(\(args))"
         return effectPrefix(
             isAsync: scopeBound.initIsAsync,
@@ -585,7 +587,7 @@ private func constructionExpression(
         case .property:
             return prefix + provider.accessPath
         case .function:
-            let args = renderArguments(provider.dependencies, resolvingLocal: resolvingLocal)
+            let args = renderArguments(provider.dependencies, consumer: binding, resolvingLocal: resolvingLocal)
             // A specialised generic provider function carries the
             // concrete type arguments to splice in at the call site.
             // The bare call `makeRepo()` couldn't infer T from
@@ -696,11 +698,17 @@ private func effectPrefix(isAsync: Bool, isThrowing: Bool) -> String {
 /// behaviour.
 private func renderArguments(
     _ dependencies: [DependencyParameter],
+    consumer: DiscoveredBinding? = nil,
     resolvingLocal: ((String) -> String?)? = nil
 ) -> String {
     dependencies
         .map { dependency in
-            let localName = identifierName(forType: dependency.type, key: dependency.keyIdentifier)
+            // Resolve against the bridged identity so a constrained-parameter
+            // dependency (`table: Table`) references its `some P` producer's
+            // local (`someDBTable`), not a `table` local that doesn't exist.
+            // For every other dependency this is its own identity, unchanged.
+            let identity = consumer.map { bridgedDependencyIdentity(dependency, in: $0) } ?? dependency.identity
+            let localName = identifierName(forType: identity.displayType, key: identity.key)
             let value = resolvingLocal?(localName) ?? localName
             if let label = dependency.name {
                 return "\(label): \(value)"
@@ -745,7 +753,7 @@ private func renderMemberInjections(
         let consumerLocal = propertyName(for: binding)
         if skipConsumers.contains(consumerLocal) { continue }
         for injection in binding.memberInjections {
-            let args = renderArguments(injection.parameters, resolvingLocal: resolvingLocal)
+            let args = renderArguments(injection.parameters, consumer: binding, resolvingLocal: resolvingLocal)
             switch injection.shape {
             case .propertyAssignment(let propertyName):
                 // Sugar form for `@Inject weak var`. For class
