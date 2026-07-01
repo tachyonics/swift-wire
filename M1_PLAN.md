@@ -290,20 +290,60 @@ Risk #6's mitigation lives here. Builds the contract surface that M3, M4, and M5
 
 **Deferred (M1 is unkeyed):** keyed adapter dependencies — referencing a *keyed* binding from an adapter use-site via a `keyed(Type.self, with: Key)` slot, consumer-chosen and macro-agnostic. It's another member of the keyed-reference family, designed in [`ScopeAndKeyModelEvolution.md`](Documentation/Notes/ScopeAndKeyModelEvolution.md) ("Adapter dependencies"); the resolution seam (`BindingIdentity.key`, `nil` for bare slots) is in place so it's additive when a real case appears.
 
-## Iteration 9 — output, diagnostics polish, task-cluster migration
+## Iteration 9 — task-cluster migration + opaque-type support
 
-Tail-end work scope-bounded by what earlier iterations surfaced.
+The substantive tail-end of M1. **Done.**
 
-**Scope:**
-- `_WireGraph.json` build-time dump (the runtime `Resolver.introspect()` API is M2, not M1)
-- Diagnostic-quality pass: re-read every error message that fires across the test suite; fix the worst ones; tighten fix-it text
-- **Missing-transitive-activation hint** (deferred from 7e/7g): when a cross-module `@Inject` is unsatisfied and the type is declared in a non-activated transitive Wire-aware dependency, name that library and suggest depending on it. Needs the plugin to read non-activated transitive Wire-aware deps as hint candidates (beyond the activated set) and a three-package harness under `CompositionHarness/`; the base "no binding produces X" error already fires cross-module, so this is the fix-it polish on top.
-- task-cluster migration completion (most of it should already be migrated incrementally — this iteration is the cleanup)
-- Linux CI configured (matrix: macOS Swift 6.3, Linux Swift 6.3.1, both producing identical bootstraps for the same input). The `CompositionHarness/` gate (`run-harness.sh`) already runs as its own CI job from 7g; iteration 9 extends it with a three-package fixture for the transitive-activation hint above.
-- **Opaque-type support** (demand-driven by the migration): opaque nominal identities ([`OpaqueTypesSupport.md`](OpaqueTypesSupport.md)). Removes the generic-`@Singleton` CompositionRoot stopgap — a generic singleton becomes a graph node by *lifting* its parameter onto `_WireGraph` and resolving its deps by identity, rather than being specialised against a concrete request — and lets `@RoutedBy` consume the abstract controller chain.
-- **Adapter extensions** ([`Documentation/Notes/AdapterModel.md`](Documentation/Notes/AdapterModel.md)): the producer-level form (peer macro on a single-instance `@Provides`, for wiring an existing instance) and keyed adapter dependencies (`keyed(Type.self, with: Key)`; see [`Documentation/Notes/ScopeAndKeyModelEvolution.md`](Documentation/Notes/ScopeAndKeyModelEvolution.md)). Each lands if the migration surfaces the case.
+**Delivered:**
+- **Opaque-type support** ([`OpaqueTypesSupport.md`](OpaqueTypesSupport.md)):
+  opaque nominal identities (`@Singleton(as:)`), the constrained-parameter
+  bridge, `_WireGraph` generic-parameter lifting, and the uniform
+  `_Wire.bootstrap()` façade. Removes the generic-`@Singleton` CompositionRoot
+  stopgap — a generic singleton becomes a graph node by *lifting* its parameter
+  and resolving deps by identity, not by specialising against a concrete request
+  — and lets `@RoutedBy` consume the abstract controller chain (validated by
+  AdapterHarness). Iteration-10 refinements (lift the minimum, conformance-derived
+  aliasing, parameterized-opaque `BuilderKey`) are planned in that note.
+- **task-cluster migration**: `TaskCluster.swift` / `Application+build.swift` are
+  Wire-driven; `CompositionRoot` and the nested concrete spelling are gone, the
+  concrete leaf named once; all task-cluster tests pass.
 
-**Validation gate:** task-cluster builds with Wire, produces correct output (existing tests still pass), framework integration is still manual per the README's M1 scope. `_WireGraph.json` is produced and inspectable. CI passes on both platforms with no skipped tests.
+**Moved to pre-1.0 polish** (next section): the `_WireGraph.json` dump, the
+dedicated diagnostic-quality sweep, and the missing-transitive-activation hint —
+output/DX niceties, not correctness, and two are better done once the error and
+model surface stabilise across M2–M6.
+
+**Deferred (not surfaced):** adapter extensions — the producer-level `@Provides`
+form and keyed adapter deps
+([`AdapterModel.md`](Documentation/Notes/AdapterModel.md),
+[`ScopeAndKeyModelEvolution.md`](Documentation/Notes/ScopeAndKeyModelEvolution.md))
+were "if the migration surfaces the case," and it went the opaque route instead.
+
+**Validation gate (met):** task-cluster builds with Wire and its existing tests
+pass; CI is green on macOS and Linux; framework integration stays manual per the
+README's M1 scope.
+
+## Pre-1.0 polish (M6 → 1.0)
+
+Output and developer-experience items lifted out of iteration 9. None are
+correctness or milestone blockers, and doing them late is deliberate:
+
+- **`_WireGraph.json` build-time dump.** An inspectable JSON of the wired graph
+  alongside `_WireGraph.swift`. Deferred because the schema wants the fuller
+  model (adapter registrations, opaque identities, containers/scopes) that lands
+  through M2–M6; it also pairs with M6's manifest/metadata emission, and the
+  runtime `Resolver.introspect()` counterpart is already M2.
+- **Diagnostic-quality sweep.** Re-read every error the suite fires, fix the
+  worst wording, tighten fix-it text. Best done against a *stable* error surface
+  — M2–M6 add new paths (adapters, `some P<…>`, manifest generation), so a sweep
+  now would be partly re-done. Diagnostics stay maintained incrementally
+  meanwhile (iteration 3's standard, re-checked each iteration).
+- **Missing-transitive-activation hint** (deferred from 7e/7g). When a
+  cross-module `@Inject` is unsatisfied and the type is declared in a
+  *non-activated* transitive Wire-aware dependency, name that library and suggest
+  depending on it. The base "no binding produces X" error already fires
+  cross-module, so this is fix-it polish; it also needs a three-package fixture
+  under `CompositionHarness/`. Slot in with a broader cross-module DX pass.
 
 ## Cross-cutting concerns
 
@@ -701,10 +741,13 @@ Concrete done-criteria:
 
 - task-cluster's `TaskCluster.swift` and `Application+build.swift` no longer manually construct `DynamoDBTaskRepository`, `TaskController`, or thread their dependencies — Wire does it.
 - All existing task-cluster tests still pass.
-- `_WireGraph.json` is produced as part of the build and accurately reflects the wired graph.
 - The diagnostic gallery passes on both platforms.
 - CI runs on macOS Swift 6.3 and Linux Swift 6.3.1.
 - No public 0.x tag yet — the README's "Status: pre-alpha" stays loud per Risk #2.
+
+The `_WireGraph.json` build-time dump — previously listed here — is moved to
+pre-1.0 polish (see *Pre-1.0 polish (M6 → 1.0)*); it's an inspectable output, not
+a correctness criterion for M1.
 
 The 0.x tag itself is a calendar gate, not an iteration: per the README, "used in one of my own services for at least a month before any 0.x release." So M1 ending and 0.1 shipping are different events; M1 ends when the iterations above are done, and 0.1 ships after a month of using it in task-cluster development without fundamental issues surfacing.
 
