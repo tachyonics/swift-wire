@@ -424,15 +424,23 @@ typechecks — the compiler should unify `T1` from the `repo` argument and match
 `TaskController<T1>` against the concrete value, but opaque unification in a
 nested position is the thing to prove first.
 
-### Deferred / adjacent
+### Deferred / adjacent: conformance-derived aliasing
 
-- **Conformance-derived identity.** Could the *repository* also drop `as:`,
-  deriving `some TaskRepository` from its sole `: TaskRepository` conformance?
-  That reads a declaration rather than searching conformers, but reintroduces the
-  ambiguity `as:` sidesteps (multiple conformances, marker protocols like
-  `Sendable`). Separate decision; `as:` stays the explicit form.
-- **Aliasing** (one binding under more than one identity) — the existing deferred
-  *Multiple explicit identities* feature.
+The repository still declares `@Singleton(as: TaskRepository.self)` so consumers
+can bridge to `some TaskRepository`. **Aliasing** — one binding under more than
+one identity (the deferred *Multiple explicit identities* feature) — subsumes
+that `as:` if aliases are **auto-derived from the type's declared conformances**:
+`struct DynamoDBTaskRepository<…>: TaskRepository` gains a `some TaskRepository`
+alias for free, alongside its structural primary identity, and the controller's
+bridge resolves against it.
+
+This is what makes it work where a standalone "conformance-derived identity" rule
+would stall: a type conforming to several protocols doesn't have to *pick* one —
+it gains a `some P` alias for **each**, so a consumer bridging to any of them
+resolves. Caveats: filter marker protocols (`Sendable`) from auto-aliasing, and
+two bindings that would alias the same `some P` are the ordinary duplicate error
+(disambiguate with keys). With this, `as:` becomes optional — needed only to name
+an identity that *isn't* a declared conformance.
 
 ## Multiple opaque bindings via keying
 
