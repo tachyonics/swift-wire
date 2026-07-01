@@ -7,14 +7,14 @@ struct BootstrapTests {
         // proves the generated `_WireGraph.swift` constructed each
         // binding in dependency order and threaded the right local
         // through each subsequent constructor.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.greeter.greet("alice") == "alice: [log] UserRepository")
     }
 
     @Test func storedPropertiesAreNamedByLowerCamelCasedTypeName() async throws {
         // Confirms WireGen's naming convention round-trips: the
         // accessor on the generated struct is lowerCamelCased(typeName).
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.logger.log("hello") == "[log] hello")
         #expect(graph.userRepository.describe() == "[log] UserRepository")
     }
@@ -29,7 +29,7 @@ struct BootstrapTests {
         // The two property-form providers are constructed first, then
         // makeBanner is invoked with both as resolved arguments, then
         // BannerService (a @Singleton) injects the produced Banner.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.bannerService.display() == "IntegrationTests #42")
     }
 
@@ -37,7 +37,7 @@ struct BootstrapTests {
         // Each @Provides binding gets a stored property on _WireGraph
         // named by the bound type — `appName` for AppName, `banner` for
         // Banner — independent of the source-level declaration name.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.appName.value == "IntegrationTests")
         #expect(graph.buildNumber.value == 42)
         #expect(graph.banner.text == "IntegrationTests #42")
@@ -47,7 +47,7 @@ struct BootstrapTests {
 
     @Test func testContainerProducesWiredGraphFromOwnBindings() async throws {
         // Exercises the per-container codegen end-to-end:
-        //   - `_TestContainerWireGraph.bootstrap()` resolves
+        //   - `_Wire.bootstrapTestContainer()` resolves
         //   - `@Provides static let banner` (primary declaration)
         //   - nested `@Singleton struct MockBannerService` (also primary)
         //     with `qualifiedTypeName` "TestContainer.MockBannerService"
@@ -55,7 +55,7 @@ struct BootstrapTests {
         //     extension`)
         // All bindings come from the container — module-scope @Provides
         // and module-scope @Singletons do not leak in.
-        let graph = try await _TestContainerWireGraph.bootstrap()
+        let graph = try await _Wire.bootstrapTestContainer()
         #expect(graph.banner.text == "test container")
         #expect(graph.testMode.value == "integration-test")
         #expect(graph.mockBannerService.display() == "mock: test container")
@@ -67,8 +67,8 @@ struct BootstrapTests {
         // `makeBanner(appName:, buildNumber:)`, while the container
         // provides a fixed value. Proves the two graphs are atomic
         // and live side-by-side without conflict.
-        let defaultGraph = try await _WireGraph.bootstrap()
-        let testGraph = try await _TestContainerWireGraph.bootstrap()
+        let defaultGraph = try await _Wire.bootstrap()
+        let testGraph = try await _Wire.bootstrapTestContainer()
 
         #expect(defaultGraph.banner.text == "IntegrationTests #42")
         #expect(testGraph.banner.text == "test container")
@@ -86,7 +86,7 @@ struct BootstrapTests {
         // phase wires through end-to-end (graph specialisation +
         // codegen with the concrete type expression at the call
         // site).
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.genericConsumer.describe() == "Container(DataPoint(value: 42))")
         // The specialised binding is reachable from the graph under
         // the type-derived accessor name.
@@ -104,7 +104,7 @@ struct BootstrapTests {
         // file accepts the matching pairing without compile failure,
         // and (c) the keyed accessor on `_WireGraph` doesn't collide
         // with the unkeyed `appName`.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.keyedConsumer.describe() == "consumer with alternate")
         // Both unkeyed and keyed AppName bindings are reachable from
         // the graph under distinct property names. The keyed accessor
@@ -125,7 +125,7 @@ struct BootstrapTests {
         // `try await makeAsyncToken()`; if the prefix is missing the
         // file wouldn't compile, if the runtime semantics are wrong
         // the assertion fails.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.asyncToken.value == "async-token-resolved")
         #expect(graph.asyncTokenConsumer.describe() == "consumer holds async-token-resolved")
     }
@@ -137,7 +137,7 @@ struct BootstrapTests {
         // emits `let asyncMessage = try await AsyncFactories.asyncMessage`
         // — the property reference itself is the call site of the
         // effectful getter.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.asyncMessage.payload == "computed-property-resolved")
     }
 
@@ -148,7 +148,7 @@ struct BootstrapTests {
         // `let asyncInitConsumer = try await AsyncInitConsumer(token:, message:)`.
         // The init's body performs real async work (Task.sleep) so
         // the suspension propagates through bootstrap evaluation.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(
             graph.asyncInitConsumer.describe()
                 == "init received async-token-resolved + computed-property-resolved"
@@ -162,7 +162,7 @@ struct BootstrapTests {
         // binding type, bootstrap allocates the wrapper, the factory
         // closure inside doesn't run until someone calls `.get()`.
         // Counter at zero after bootstrap = factory deferred correctly.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(await graph.lazyResourceCallCount.value == 0)
     }
 
@@ -170,7 +170,7 @@ struct BootstrapTests {
         // First `.get()` runs the factory exactly once; counter goes
         // from zero to one. Pins the "deferred until first use" half
         // of the Lazy semantics.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         let materialised = try await graph.lazyResourceConsumer.materialise()
         #expect(materialised.value == "materialised")
         #expect(await graph.lazyResourceCallCount.value == 1)
@@ -181,7 +181,7 @@ struct BootstrapTests {
         // re-invoke the factory. Pins the "cached after first use" half
         // of the Lazy semantics — the first-use-singleton pattern's
         // load-bearing property.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         let consumer = graph.lazyResourceConsumer
         let first = try await consumer.materialise()
         let second = try await consumer.materialise()
@@ -200,7 +200,7 @@ struct BootstrapTests {
         // actions but emits no teardown calls — so the only observable
         // behaviour is that bootstrap constructs everything and the
         // consumer injects the honest (un-wrapped) types directly.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.teardownConsumer.pool.dsn == "memory://pool")
         #expect(graph.teardownConsumer.client.label == "live")
     }
@@ -214,7 +214,7 @@ struct BootstrapTests {
         // mutates the consumer's own state. Asserting the post-
         // bootstrap state proves the method ran with the right
         // resolved argument.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.noteBoard.current() == "wire said: hello from @Inject func")
     }
 
@@ -224,7 +224,7 @@ struct BootstrapTests {
         // site (even though `bump(by:)` isn't itself `async`) — the
         // await pays for the isolation crossing. After bootstrap,
         // the actor's state reflects the injected increment.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(await graph.tickCounter.ticks == 7)
     }
 
@@ -238,7 +238,7 @@ struct BootstrapTests {
         // takes View at init, then the generated bootstrap's post-
         // init block runs `view.coordinator = coordinator`. Without
         // this feature, the build would fail with a cycle error.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.coordinator.view === graph.view)
         #expect(graph.view.describeCoordinator() == "coordinator owns this view: true")
     }
@@ -249,7 +249,7 @@ struct BootstrapTests {
         // is observable through the consumer's own API. Pins the
         // contract that codegen's post-init assignment produces a
         // live weak reference, not just structural compilation.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.view.coordinator === graph.coordinator)
     }
 
@@ -261,7 +261,7 @@ struct BootstrapTests {
         // compiles against `weak var hub: Hub!` storage and the matcher's
         // `T!` normalization resolves the edge; the runtime assertions
         // pin the IUO non-optional access.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.hub.spoke === graph.spoke)
         #expect(graph.spoke.hub === graph.hub)
         #expect(graph.spoke.describeHub() == "hub owns this spoke: true")
@@ -276,7 +276,7 @@ struct BootstrapTests {
         // the mutual reference is established post-init via
         // `await`, and the runtime relationship is observable
         // through the actor's isolated property reads.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         let toolbeltWorkshop = await graph.toolbelt.workshop
         #expect(toolbeltWorkshop === graph.workshop)
         let workshopToolbelt = graph.workshop.toolbelt
@@ -293,7 +293,7 @@ struct BootstrapTests {
         // to compile against `weak let` storage. At runtime the graph
         // retains the `@Singleton Telemetry` strongly, so the weak hold
         // stays valid and resolves to the same instance.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.dashboard.telemetry === graph.telemetry)
         #expect(graph.dashboard.describeTelemetry() == "telemetry id: telemetry")
     }
@@ -304,7 +304,7 @@ struct BootstrapTests {
         // generated `init(sensor: Sensor) { self.sensor = sensor }`
         // compiles against `unowned let` storage; the graph retains the
         // `@Singleton Sensor` strongly, so the unowned hold stays valid.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.monitor.sensor === graph.sensor)
         #expect(graph.monitor.describeSensor() == "sensor id: sensor")
     }
@@ -312,15 +312,15 @@ struct BootstrapTests {
     // MARK: - `@Scoped(seed:)` end-to-end
 
     @Test func seedScopeBootstrapInjectsSeedAndBorrowsSingleton() async throws {
-        // The generated `_TestRequestSeedWireScope.bootstrap(seed:wireGraph:)`
+        // The generated `_Wire.bootstrapTestRequestSeedScope(seed:wireGraph:)`
         // takes the seed value and the singletons graph; `RequestLogger`
         // (`@Scoped(seed: TestRequestSeed.self)`) injects both the
         // seed and the singleton `Logger`. The seed lands on the
         // scope struct as a stored property; the singleton is
         // borrowed (inlined at `RequestLogger`'s constructor site,
         // not stored).
-        let graph = try await _WireGraph.bootstrap()
-        let scope = try await _TestRequestSeedWireScope.bootstrap(
+        let graph = try await _Wire.bootstrap()
+        let scope = try await _Wire.bootstrapTestRequestSeedScope(
             seed: TestRequestSeed(id: "req-1"),
             wireGraph: graph
         )
@@ -335,8 +335,8 @@ struct BootstrapTests {
         // into `RequestHandler`'s init. The handler reads through to
         // the same scope's seed and singleton via the in-scope
         // logger.
-        let graph = try await _WireGraph.bootstrap()
-        let scope = try await _TestRequestSeedWireScope.bootstrap(
+        let graph = try await _Wire.bootstrap()
+        let scope = try await _Wire.bootstrapTestRequestSeedScope(
             seed: TestRequestSeed(id: "req-2"),
             wireGraph: graph
         )
@@ -348,8 +348,8 @@ struct BootstrapTests {
         // `@Provides` — a function reading the seed and borrowing the
         // `Logger` singleton, and a property constant — both resolve
         // inside the scope and feed the scope-bound `OrderProcessor`.
-        let graph = try await _WireGraph.bootstrap()
-        let scope = try await _OrderSeedWireScope.bootstrap(
+        let graph = try await _Wire.bootstrap()
+        let scope = try await _Wire.bootstrapOrderSeedScope(
             seed: OrderSeed(orderID: "A-1"),
             wireGraph: graph
         )
@@ -359,14 +359,14 @@ struct BootstrapTests {
     @Test func containerScopeBootstrapBorrowsFromContainerWireGraph() async throws {
         // `TestContainer.JobRunner` is `@Scoped(seed: TestJobSeed.self)`
         // and lives inside `@Container TestContainer`. The generated
-        // `_TestContainer_TestJobSeedWireScope.bootstrap(seed:testContainerWireGraph:)`
+        // `_Wire.bootstrapTestContainer_TestJobSeedScope(seed:testContainerWireGraph:)`
         // takes the container's graph (not `_WireGraph`) and borrows
         // its `banner` from there. Exercises the (container, scope)
         // partition cell end-to-end: distinct struct name from any
         // default-graph scope, distinct parent-graph parameter type,
         // borrow path resolves against the container's graph.
-        let containerGraph = try await _TestContainerWireGraph.bootstrap()
-        let scope = try await _TestContainer_TestJobSeedWireScope.bootstrap(
+        let containerGraph = try await _Wire.bootstrapTestContainer()
+        let scope = try await _Wire.bootstrapTestContainer_TestJobSeedScope(
             seed: TestJobSeed(queue: "high"),
             testContainerWireGraph: containerGraph
         )
@@ -386,12 +386,12 @@ struct BootstrapTests {
         // scope-bound instances and distinct seed-derived behaviour.
         // Singletons are shared (same `graph` passed in both calls),
         // so the underlying logger is the same instance both times.
-        let graph = try await _WireGraph.bootstrap()
-        let scopeA = try await _TestRequestSeedWireScope.bootstrap(
+        let graph = try await _Wire.bootstrap()
+        let scopeA = try await _Wire.bootstrapTestRequestSeedScope(
             seed: TestRequestSeed(id: "a"),
             wireGraph: graph
         )
-        let scopeB = try await _TestRequestSeedWireScope.bootstrap(
+        let scopeB = try await _Wire.bootstrapTestRequestSeedScope(
             seed: TestRequestSeed(id: "b"),
             wireGraph: graph
         )
@@ -407,7 +407,7 @@ struct BootstrapTests {
         // LoggingPlugin (withOrder: 1) and MetricsPlugin (withOrder: 2)
         // contribute to PluginRegistry.ordered; the injected `[any Plugin]`
         // is in rank order despite the source declaring metrics first.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.pluginHost.plugins.map { $0.label() } == ["logging", "metrics"])
     }
 
@@ -415,7 +415,7 @@ struct BootstrapTests {
         // Alpha/Bravo/Charlie declared in source order contribute to
         // ServiceGate.ranked with withOrder 3/1/2 — a 3-way sort, not a
         // pair swap, so the aggregate is [bravo, charlie, alpha].
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.serviceGateHost.ranked.map { $0.name() } == ["bravo", "charlie", "alpha"])
     }
 
@@ -423,12 +423,12 @@ struct BootstrapTests {
         // The same three contributors fan into ServiceGate.sourceOrdered
         // with no withOrder: anywhere, so the aggregate falls back to
         // source-declaration order.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.serviceGateHost.sourceOrdered.map { $0.name() } == ["alpha", "bravo", "charlie"])
     }
 
     @Test func mappedMultibindingKeysContributorsByAtKey() async throws {
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         let strategies = graph.strategyHost.strategies
         #expect(strategies.count == 2)
         #expect(strategies["fast"]?.run() == "fast")
@@ -439,34 +439,34 @@ struct BootstrapTests {
     @Test func builderMultibindingFoldsToConcreteResultInRankOrder() async throws {
         // AuthMiddleware (withOrder: 1) and LoggingMiddleware (withOrder: 2)
         // fold through PipelineBuilder's buildBlock into a concrete Pipeline.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.middlewareHost.pipeline.steps == ["auth", "log"])
     }
 
     @Test func builderMultibindingFoldsToCollectionResult() async throws {
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.middlewareHost.list.map(\.step) == ["auth", "log"])
     }
 
     @Test func builderMultibindingFoldsToExistentialResult() async throws {
         // The builder folds the contributors into a single `any Middleware`
         // — exercises a result type whose string carries an `any ` prefix.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.middlewareHost.composed.step == "auth>log")
     }
 
     @Test func containerMultibindingAggregatesContainerContributors() async throws {
         // The key, contributors, and consumer all live in PluginContainer,
         // so the aggregate is built in the container's own graph.
-        let graph = try await _PluginContainerWireGraph.bootstrap()
+        let graph = try await _Wire.bootstrapPluginContainer()
         #expect(graph.pluginConsumer.plugins.map { $0.id() } == ["alpha", "beta"])
     }
 
     @Test func seedScopeMultibindingAggregatesScopeContributors() async throws {
         // HeaderSection and BodySection are @Scoped contributors; the
         // aggregate is built per scope (HeaderSection even reads the seed).
-        let graph = try await _WireGraph.bootstrap()
-        let scope = try await _ReportSeedWireScope.bootstrap(
+        let graph = try await _Wire.bootstrap()
+        let scope = try await _Wire.bootstrapReportSeedScope(
             seed: ReportSeed(name: "Q3"),
             wireGraph: graph
         )
@@ -475,7 +475,7 @@ struct BootstrapTests {
 
     @Test func emptyMultibindingBootstrapsToEmptyCollection() async throws {
         // HookRegistry.all has no contributors; the consumer gets `[]`.
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.hookHost.hooks.isEmpty)
     }
 
@@ -483,10 +483,10 @@ struct BootstrapTests {
         // ServiceRegistry.all is a module-scope key; ProdContainer and
         // TestEnvContainer each contribute their own service and build
         // their own aggregate — the production/test container pattern.
-        let prod = try await _ProdContainerWireGraph.bootstrap()
+        let prod = try await _Wire.bootstrapProdContainer()
         #expect(prod.serviceHost.services.map { $0.name() } == ["real"])
 
-        let test = try await _TestEnvContainerWireGraph.bootstrap()
+        let test = try await _Wire.bootstrapTestEnvContainer()
         #expect(test.serviceHost.services.map { $0.name() } == ["mock"])
     }
 
@@ -495,10 +495,10 @@ struct BootstrapTests {
         // seed scope) both contribute to WidgetContainer.widgets with
         // withOrder: 2. They don't conflict, and each partition's aggregate
         // contains only its own contributor.
-        let containerGraph = try await _WidgetContainerWireGraph.bootstrap()
+        let containerGraph = try await _Wire.bootstrapWidgetContainer()
         #expect(containerGraph.singletonView.render() == ["singleton"])
 
-        let scope = try await _WidgetContainer_WidgetSeedWireScope.bootstrap(
+        let scope = try await _Wire.bootstrapWidgetContainer_WidgetSeedScope(
             seed: WidgetSeed(theme: "dark"),
             widgetContainerWireGraph: containerGraph
         )

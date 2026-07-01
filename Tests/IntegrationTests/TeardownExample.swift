@@ -8,7 +8,7 @@ import Wire
 /// What this fixture proves (the M1 validation gate): the producer's
 /// return type stays the honest `TeardownHTTPClient` (no wrapper, no
 /// unwrap step), the consumer `@Inject`s both honest types, and
-/// `_WireGraph.bootstrap()` constructs them. M1 records the teardown
+/// `_Wire.bootstrap()` constructs them. M1 records the teardown
 /// actions but emits no teardown calls — nothing here is ever torn down
 /// by Wire (that's M4).
 

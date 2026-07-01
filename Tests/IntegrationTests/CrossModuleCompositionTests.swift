@@ -11,7 +11,7 @@ import WireTestLibrary
 @Suite("CrossModuleComposition")
 struct CrossModuleCompositionTests {
     @Test func samePackageLibraryBindingIsComposedAndConstructed() async throws {
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.libraryService.name == "library")
     }
 
@@ -23,7 +23,7 @@ struct CrossModuleCompositionTests {
     /// binding would be rejected; a `package` binding across a *package* boundary
     /// (the external harness) would need `public`.
     @Test func samePackagePackageVisibleBindingIsComposed() async throws {
-        let graph = try await _WireGraph.bootstrap()
+        let graph = try await _Wire.bootstrap()
         #expect(graph.packageVisibleService.label == "package-visible")
     }
 }
