@@ -78,7 +78,24 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
     for collision in errors.identifierCollisions {
         lines.append(contentsOf: collisionLines(collision))
     }
+    for invalid in errors.invalidGenericSingletons {
+        lines.append(invalidGenericSingletonLine(invalid))
+    }
     return lines.joined(separator: "\n")
+}
+
+/// Render an invalid-generic-`@Singleton` error: a `@Singleton` can't be a single
+/// instance when a generic parameter is undetermined, so name the parameter(s)
+/// and steer the fix (constrain it, or move to a `@Provides func` factory).
+private func invalidGenericSingletonLine(_ invalid: InvalidGenericSingleton) -> String {
+    let names = invalid.undeterminedParameters.map { "'\($0)'" }.joined(separator: ", ")
+    let single = invalid.undeterminedParameters.count == 1
+    let subject = single ? "generic parameter \(names) is" : "generic parameters \(names) are"
+    let pronoun = single ? "it" : "them"
+    let prefix = invalid.binding.location.formattedPrefix
+    let message =
+        "'@Singleton \(displayName(invalid.binding))' can't be a single instance: \(subject) unconstrained or unbound, so the type would vary per use. Constrain \(pronoun) to a protocol (so it resolves to one binding), or use '@Provides func' for a parameterised factory."
+    return "\(prefix): error: \(message)"
 }
 
 /// Render one duplicate-binding error: the primary error, "also bound

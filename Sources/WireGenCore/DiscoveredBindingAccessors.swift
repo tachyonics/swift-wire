@@ -12,10 +12,63 @@ extension DiscoveredBinding {
             // `@Singleton(as: P.self)` keys the binding as `some P`; construction
             // still uses the concrete type (`qualifiedTypeName`/`typeName`).
             if let identity = scopeBound.explicitIdentity { return "some \(identity)" }
+            // A determined generic `@Singleton` keys as its structural identity —
+            // each parameter substituted with `some <constraint>`
+            // (`TaskController<Repository: TaskRepository>` → `TaskController<some
+            // TaskRepository>`) — so it reuses its dependencies' lifted parameters
+            // rather than an opaque parameter of its own.
+            if allGenericParametersDetermined {
+                let arguments = scopeBound.genericParameterNames
+                    .map { "some \(scopeBound.genericParameterConstraints[$0]!)" }
+                    .joined(separator: ", ")
+                return "\(scopeBound.typeName)<\(arguments)>"
+            }
             return scopeBound.typeName
         case .provider(let provider): return provider.boundType
         case .aggregate(let aggregate): return aggregate.collectionType
         }
+    }
+
+    /// The generic parameters of a `@Singleton` that are *not* determined — an
+    /// unconstrained parameter, or one that never appears as a bare-parameter
+    /// dependency (so the constrained-parameter bridge can't resolve it to a
+    /// single `some P` binding). Empty for a fully-determined generic
+    /// `@Singleton` and for non-scope-bound or non-generic bindings.
+    package var undeterminedGenericParameters: [String] {
+        guard case .scopeBound(let scopeBound) = self else { return [] }
+        let dependencyTypes = Set(
+            scopeBound.dependencies.map { canonicalTypeName($0.type) }
+                + scopeBound.memberInjections.flatMap {
+                    $0.parameters.map { canonicalTypeName($0.type) }
+                }
+        )
+        return scopeBound.genericParameterNames.filter { parameter in
+            guard let constraint = scopeBound.genericParameterConstraints[parameter],
+                constraintIsDetermining(constraint),
+                dependencyTypes.contains(parameter)
+            else { return true }
+            return false
+        }
+    }
+
+    /// Whether every generic parameter of a generic `@Singleton` is determined
+    /// (see `undeterminedGenericParameters`). Only such a binding can be a
+    /// single-instance lift node; an undetermined one can't be, and the graph
+    /// reports it as an error. `false` for non-generic bindings, providers, and
+    /// aggregates.
+    package var allGenericParametersDetermined: Bool {
+        guard case .scopeBound(let scopeBound) = self,
+            !scopeBound.genericParameterNames.isEmpty
+        else { return false }
+        return undeterminedGenericParameters.isEmpty
+    }
+
+    /// A lift node — a real graph node keyed by an opaque (`some P`) or
+    /// structural identity, never specialised. True for `@Singleton(as:)` nodes
+    /// and determined generic `@Singleton`s; false for non-generic bindings,
+    /// providers, and undetermined generic `@Singleton`s.
+    package var isLiftNode: Bool {
+        hasExplicitIdentity || allGenericParametersDetermined
     }
 
     /// The bound type as referenced from the generated `_WireGraph.swift`

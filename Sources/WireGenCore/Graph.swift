@@ -39,18 +39,35 @@ package struct GraphResult: Sendable {
         package let missingBindings: [MissingBinding]
         package let duplicateBindings: [DuplicateBinding]
         package let identifierCollisions: [IdentifierCollision]
+        package let invalidGenericSingletons: [InvalidGenericSingleton]
 
         package init(
             cycles: [[DiscoveredBinding]],
             missingBindings: [MissingBinding],
             duplicateBindings: [DuplicateBinding],
-            identifierCollisions: [IdentifierCollision] = []
+            identifierCollisions: [IdentifierCollision] = [],
+            invalidGenericSingletons: [InvalidGenericSingleton] = []
         ) {
             self.cycles = cycles
             self.missingBindings = missingBindings
             self.duplicateBindings = duplicateBindings
             self.identifierCollisions = identifierCollisions
+            self.invalidGenericSingletons = invalidGenericSingletons
         }
+    }
+}
+
+/// A generic `@Singleton` that can't be a single instance: at least one generic
+/// parameter is undetermined (unconstrained, or never a dependency), so it would
+/// vary per use. The fix is to constrain the parameter (so it resolves to one
+/// binding) or move to a `@Provides func` parameterised factory.
+package struct InvalidGenericSingleton: Sendable {
+    package let binding: DiscoveredBinding
+    package let undeterminedParameters: [String]
+
+    package init(binding: DiscoveredBinding, undeterminedParameters: [String]) {
+        self.binding = binding
+        self.undeterminedParameters = undeterminedParameters
     }
 }
 
@@ -490,29 +507,12 @@ private func specialiseBinding(
         )
     }
     switch binding {
-    case .scopeBound(let scopeBound):
-        // The specialised concrete type expression replaces both
-        // `typeName` and `qualifiedTypeName` so codegen renders the
-        // construction call as `Repository<DynamoDBTable>(...)` and
-        // the stored-property type annotation matches.
-        let concreteType = "\(scopeBound.typeName)<\(concreteArguments.joined(separator: ", "))>"
-        let enclosingPrefix =
-            scopeBound.qualifiedTypeName.hasSuffix(scopeBound.typeName)
-            ? String(
-                scopeBound.qualifiedTypeName.dropLast(scopeBound.typeName.count)
-            )
-            : ""
-        return .scopeBound(
-            DiscoveredScopeBoundType(
-                typeName: concreteType,
-                qualifiedTypeName: enclosingPrefix + concreteType,
-                typeKind: scopeBound.typeKind,
-                genericParameterNames: [],
-                dependencies: substitutedDependencies,
-                location: scopeBound.location,
-                teardown: scopeBound.teardown,
-                originModule: scopeBound.originModule
-            )
+    case .scopeBound:
+        // Generic `@Singleton`s are lift nodes or errors (see
+        // `partitionBindings`), never specialise templates, so they never reach
+        // here — only generic `@Provides func` factories do.
+        preconditionFailure(
+            "generic @Singleton reached specialiseBinding; it should be a lift node or an error"
         )
     case .provider(let provider):
         // For functions, splice the concrete arguments at the call
@@ -618,6 +618,7 @@ private func parseGenericType(_ expression: String) -> (base: String, params: [S
 private func earlyValidationFailure(
     duplicateBindings: [DuplicateBinding] = [],
     identifierCollisions: [IdentifierCollision] = [],
+    invalidGenericSingletons: [InvalidGenericSingleton] = [],
     genericTemplates: [DiscoveredBinding]
 ) -> GraphResult {
     GraphResult(
@@ -626,7 +627,8 @@ private func earlyValidationFailure(
                 cycles: [],
                 missingBindings: [],
                 duplicateBindings: duplicateBindings,
-                identifierCollisions: identifierCollisions
+                identifierCollisions: identifierCollisions,
+                invalidGenericSingletons: invalidGenericSingletons
             )
         ),
         genericTemplates: genericTemplates
@@ -651,6 +653,13 @@ package func buildDependencyGraph(
         )
     let partition = partitionBindings(allBindings)
     let genericTemplates = partition.genericTemplates
+
+    if !partition.invalidGenericSingletons.isEmpty {
+        return earlyValidationFailure(
+            invalidGenericSingletons: partition.invalidGenericSingletons,
+            genericTemplates: genericTemplates
+        )
+    }
 
     let (uniqueByIdentity, duplicates) = splitUniqueFromDuplicates(
         partition.groupedByIdentity
@@ -725,21 +734,34 @@ private func partitionBindings(
     _ bindings: [DiscoveredBinding]
 ) -> (
     groupedByIdentity: [BindingIdentity: [DiscoveredBinding]],
-    genericTemplates: [DiscoveredBinding]
+    genericTemplates: [DiscoveredBinding],
+    invalidGenericSingletons: [InvalidGenericSingleton]
 ) {
     var groupedByIdentity: [BindingIdentity: [DiscoveredBinding]] = [:]
     var genericTemplates: [DiscoveredBinding] = []
+    var invalidGenericSingletons: [InvalidGenericSingleton] = []
     for binding in bindings {
-        // An `@Singleton(as:)` lift node is a real graph node even when generic
-        // — it lifts its parameter rather than specialising — so it joins the
-        // resolved set keyed by its `some P` identity, not the template pool.
-        if binding.genericParameterNames.isEmpty || binding.hasExplicitIdentity {
+        // A lift node — `@Singleton(as:)` or a determined generic `@Singleton` —
+        // is a real graph node even when generic, keyed by its opaque/structural
+        // identity, so it joins the resolved set rather than the template pool.
+        if binding.genericParameterNames.isEmpty || binding.isLiftNode {
             groupedByIdentity[binding.identity, default: []].append(binding)
+        } else if case .scopeBound = binding {
+            // A generic `@Singleton` that isn't a lift node can't be a single
+            // instance (an undetermined parameter would vary per use) — an error,
+            // not a specialise template.
+            invalidGenericSingletons.append(
+                InvalidGenericSingleton(
+                    binding: binding,
+                    undeterminedParameters: binding.undeterminedGenericParameters
+                )
+            )
         } else {
+            // Generic `@Provides func` — the parameterised factory; specialised.
             genericTemplates.append(binding)
         }
     }
-    return (groupedByIdentity, genericTemplates)
+    return (groupedByIdentity, genericTemplates, invalidGenericSingletons)
 }
 
 /// Split a grouped-by-identity map into uniquely-bound identities
