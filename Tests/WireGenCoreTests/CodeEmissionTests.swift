@@ -1705,12 +1705,18 @@ struct CodeEmissionTests {
             topologicalOrder: [
                 providerProperty("Wiring.table", boundType: "some DBTable & Sendable"),
                 liftNode(
-                    "DynamoRepo", identity: "TaskRepo", parameter: "Table",
-                    constraint: "DBTable & Sendable", depName: "table"
+                    "DynamoRepo",
+                    identity: "TaskRepo",
+                    parameter: "Table",
+                    constraint: "DBTable & Sendable",
+                    depName: "table"
                 ),
                 liftNode(
-                    "Controller", identity: "API", parameter: "Repository",
-                    constraint: "TaskRepo", depName: "repository"
+                    "Controller",
+                    identity: "API",
+                    parameter: "Repository",
+                    constraint: "TaskRepo",
+                    depName: "repository"
                 ),
             ]
         )
