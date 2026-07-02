@@ -417,7 +417,9 @@ package func buildDependencyGraph(
     from bindings: [DiscoveredBinding],
     typealiases: [DiscoveredTypealias] = [],
     multibindingKeys: [DiscoveredMultibindingKey] = [],
-    resultBuilders: [DiscoveredResultBuilder] = []
+    resultBuilders: [DiscoveredResultBuilder] = [],
+    adapterUseSites: [AdapterUseSite] = [],
+    adapterDefinitions: [DiscoveredAdapterAnnotation] = []
 ) -> GraphResult {
     // Fan-in: turn each declared multibinding key into a synthesised
     // aggregate binding (deps = its contributors). Aggregates then flow
@@ -476,10 +478,23 @@ package func buildDependencyGraph(
         )
     }
 
-    let (dependencyEdges, missingBindings) = resolveDependencies(
+    var (dependencyEdges, missingBindings) = resolveDependencies(
         in: resolvedBindings,
         typealiases: typealiases
     )
+
+    // Adapter registrations are ordering edges: a binding consuming an adapted
+    // collaborator is ordered after the registration's `Self`, so codegen emits
+    // the `_wireRegister` call before that consumer is constructed.
+    let orderingEdges = adapterOrderingEdges(
+        useSites: adapterUseSites,
+        definitions: adapterDefinitions,
+        resolvedBindings: resolvedBindings,
+        dependencyEdges: dependencyEdges
+    )
+    for (consumer, extra) in orderingEdges {
+        dependencyEdges[consumer, default: []].append(contentsOf: extra)
+    }
 
     let sortResult = topologicalSort(
         nodes: resolvedBindings,

@@ -260,7 +260,12 @@ struct WireGen {
                 from: singletons,
                 typealiases: aggregate.typealiases,
                 multibindingKeys: aggregate.multibindingKeys,
-                resultBuilders: aggregate.resultBuilders
+                resultBuilders: aggregate.resultBuilders,
+                // Adapter registrations are default-graph-only (matching
+                // `resolveAdapterRegistrations`), so their ordering edges apply
+                // only there.
+                adapterUseSites: containerKey == nil ? aggregate.adapterUseSites : [],
+                adapterDefinitions: containerKey == nil ? aggregate.adapterAnnotations : []
             )
             let graph = enrichMissingBindingsWithCrossScopeHints(
                 rawGraph,
