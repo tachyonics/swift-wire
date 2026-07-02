@@ -240,14 +240,15 @@ non-activated package — Wire references the builder type but never
 parses it, so it can't derive the return type, and the producer must
 state `some P<…>` at the key.
 
-Scope: iteration 9 landed opaque-types for plain `some P`;
-**iteration 10** extends lifting to `some P<A,B,C>` (spike first) and
-adds the `.opaque(P<…>.self)` fold form, with the type arguments
-written explicitly at the key. Making those arguments come from the
-**bootstrap** (a request-context config) and wiring the folded value
-into the router is **M2 / WireHummingbird** — see
-`OpaqueTypesSupport.md`, *Iteration 10* and *Second forcing
-condition*. The non-opaque cases (path 1 above and the
+Scope: iteration 9 landed opaque-types for plain `some P`, and
+iteration 10 landed lift-the-minimum. The parameterized-opaque case —
+extending lifting to `some P<A,B,C>` (shape proven by spike-7) and
+adding the `.opaque(P<…>.self)` fold form — moved to **M2 /
+WireHummingbird**, together with its bootstrap-supplied type arguments
+and router wiring: its only consumer (`router.addMiddleware`) wants the
+bootstrap-driven form, so an intermediate explicit-key one would wire
+the middleware twice. See `OpaqueTypesSupport.md`, *Deferred to M2* and
+*Second forcing condition*. The non-opaque cases (path 1 above and the
 explicit-`any P<…>` form of path 2) shipped in iteration 5 without
 needing any of this.
 
@@ -264,11 +265,11 @@ Iteration 5 ships:
   (`withOrder:` only on `CollectedKey`, `atKey:` required on
   `MappedKey`, no mixing)
 
-The deferred case (path 2, parameterized opaque returns) is
-iteration-10 work: opaque-types landed in iteration 9 for plain
-`some P`, and the `some P<A,B,C>` extension plus the
-`.opaque(P<…>.self)` form follow there (bootstrap-supplied type
-arguments are M2). The forward-compat shape held:
+The deferred case (path 2, parameterized opaque returns) is **M2 /
+WireHummingbird** work: opaque-types landed in iteration 9 for plain
+`some P` and lift-the-minimum in iteration 10, and the `some P<A,B,C>`
+extension plus the `.opaque(P<…>.self)` form follow in M2 alongside the
+bootstrap-supplied type arguments. The forward-compat shape held:
 
 - The `BuilderKey<B>` runtime type and `@Contributes(to:)` surface
   don't change between the iteration-5 and post-OpaqueTypesSupport
@@ -284,11 +285,14 @@ arguments are M2). The forward-compat shape held:
 ## Forcing conditions for OpaqueTypesSupport
 
 The task-cluster migration was the forcing condition, and opaque-types
-landed with it in iteration 9 (plain `some P`). `BuilderKey<B>`'s
-parameterized-opaque case is the second trigger, and it now sets part
-of iteration 10's scope: extending lifting to `some P<A,B,C>` and
-adding the `.opaque(P<…>.self)` fold form (bootstrap-supplied type
-arguments remain M2 / WireHummingbird).
+landed with it in iteration 9 (plain `some P`); iteration 10 refined it
+with lift-the-minimum. `BuilderKey<B>`'s parameterized-opaque case is
+the second trigger, and it sets part of **M2 / WireHummingbird**'s
+scope: extending lifting to `some P<A,B,C>`, adding the
+`.opaque(P<…>.self)` fold form, and supplying the type arguments from
+the bootstrap — deferred there because its only consumer wants that
+final form (an intermediate explicit-key one would wire the middleware
+twice).
 
 ## Design axes settled by the result-builder-attribute approach
 

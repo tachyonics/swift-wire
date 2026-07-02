@@ -1,7 +1,7 @@
 # Iteration 5β — multibindings implementation plan
 
 > **Status:** working implementation plan for iteration 5β. The *what*
-> and the validation gate live in [`M1_PLAN.md`](../../M1_PLAN.md); the
+> and the validation gate live in [`M1_PLAN.md`](../Archive/M1_PLAN.md); the
 > design depth lives in [`BuilderKeyDesign.md`](BuilderKeyDesign.md),
 > [`VisibilityModel.md`](VisibilityModel.md) (dead/empty policy), and
 > [`MultiModuleComposition.md`](MultiModuleComposition.md) (cross-module
