@@ -194,7 +194,9 @@ struct AdapterResolutionTests {
                 genericParameterNames: [],
                 dependencies: deps.map {
                     DependencyParameter(
-                        name: nil, type: $0, kind: .injectInitParameter,
+                        name: nil,
+                        type: $0,
+                        kind: .injectInitParameter,
                         location: mockLocation("\(name).swift")
                     )
                 },
