@@ -162,7 +162,7 @@ live"; both are the sink case.
   dependency identity — not specialised); the adapter just consumes it
   post-construction. This is why `@RoutedBy` doesn't need a CompositionRoot to
   pull the controller in — the singleton already exists. See
-  [`../../OpaqueTypesSupport.md`](../../OpaqueTypesSupport.md).
+  [`OpaqueTypesSupport.md`](OpaqueTypesSupport.md).
 - **Keyed dependencies.** An adapter's declared deps can reference keyed
   bindings via `keyed(Type.self, with: Key)`, a member of the keyed-reference
   family. See [`ScopeAndKeyModelEvolution.md`](ScopeAndKeyModelEvolution.md),
