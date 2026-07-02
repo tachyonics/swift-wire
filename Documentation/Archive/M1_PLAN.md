@@ -301,7 +301,7 @@ Risk #6's mitigation lives here. Builds the contract surface that M3, M4, and M5
 The substantive tail-end of M1. **Done.**
 
 **Delivered:**
-- **Opaque-type support** ([`OpaqueTypesSupport.md`](../../OpaqueTypesSupport.md)):
+- **Opaque-type support** ([`OpaqueTypesSupport.md`](../Notes/OpaqueTypesSupport.md)):
   opaque nominal identities (`@Singleton(as:)`), the constrained-parameter
   bridge, `_WireGraph` generic-parameter lifting, and the uniform
   `_Wire.bootstrap()` façade. Removes the generic-`@Singleton` CompositionRoot
@@ -376,7 +376,7 @@ dynamic `Any.Type` lookup (rejected) and textual type-expression matching
 
 Wire's existing specialisation handles concrete-typed providers and `any P`-typed providers. The middle ground — `some P`, protocol-level abstraction at the source with compile-time identity and no boxing — has two forms: producer-side (`@Provides func makeDB() -> some DatabaseClient`) where the concrete type is hidden in the body, and consumer-side (a self-producing `@Singleton(as: P.self)` injected through `some P`). The model is opaque *nominal identity*: `some P` is another exact-match token, matched the way every identity is, plus a small closed set of qualifier promotions (`some P` satisfies `any P`, alongside `T` satisfies `T?`). It deliberately stops short of conformance-based resolution — no searching conformers — which keeps it from reimplementing the type system. Codegen lifts a generic parameter onto `_WireGraph` for every opaque binding exposed on the graph, and the bootstrap returns `_WireGraph<some P1, some P2, ...>`.
 
-Design spec lives in [`OpaqueTypesSupport.md`](../../OpaqueTypesSupport.md). The doc covers the nominal-identity model and the rejection of conformance resolution, the closure invariant (opacity is viral; the chain is `some` end-to-end, bottoming out at a single `@Provides let x: some P = Concrete()`), the constrained-parameter bridge for generic consumers, producer-side disambiguation, the codegen requirements, and the `BuilderKey` coupling.
+Design spec lives in [`OpaqueTypesSupport.md`](../Notes/OpaqueTypesSupport.md). The doc covers the nominal-identity model and the rejection of conformance resolution, the closure invariant (opacity is viral; the chain is `some` end-to-end, bottoming out at a single `@Provides let x: some P = Concrete()`), the constrained-parameter bridge for generic consumers, producer-side disambiguation, the codegen requirements, and the `BuilderKey` coupling.
 
 Decision point: iteration 7's incremental task-cluster adoption surfaced the forcing case — in the consumer-side `@Singleton(as:)` shape, not `@Provides -> some P`. `CompositionRoot` is forced to spell the full nested `TaskController<DynamoDBTaskRepository<InMemoryDynamoDBCompositePrimaryKeyTable>>` because the self-producing repository and controller have only concrete identities. Support is scheduled around iteration 9's broader migration, now against a concrete case rather than a hypothetical one.
 

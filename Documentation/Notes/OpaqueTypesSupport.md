@@ -223,7 +223,7 @@ Three rules, in precedence order. None require conformance search.
 
    This is the second member of a **closed set** of qualifier promotions,
    alongside `T` satisfies `T?` (see
-   [`OptionalMatchingAndCycles.md`](Documentation/Notes/OptionalMatchingAndCycles.md)).
+   [`OptionalMatchingAndCycles.md`](OptionalMatchingAndCycles.md)).
    The set is deliberately closed — there is no `X` satisfies `any P`
    (that is the conformance lookup we rejected; it is safe for `some P`
    precisely because `some P` already names `P` in its identity, whereas a
@@ -573,5 +573,5 @@ explicit-key one, so building it earlier would wire the middleware twice (see
   and wire the folded middleware into the router (a framework adapter, same
   contract surface as `@RoutedBy`).
 
-See [`BuilderKeyDesign.md`](Documentation/Notes/BuilderKeyDesign.md) for the
+See [`BuilderKeyDesign.md`](BuilderKeyDesign.md) for the
 coupling in full.
