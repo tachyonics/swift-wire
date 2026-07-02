@@ -181,6 +181,53 @@ private func resolveUseSite(
     )
 }
 
+/// Ordering edges so a binding that consumes an adapted collaborator is
+/// constructed *after* the registration that mutates it. For each registration,
+/// every binding depending on a collaborator gets a dependency edge to the
+/// registration's `Self` — placing it after `Self` (it's already after the
+/// collaborator), i.e. after the registration's emission slot. This is the graph
+/// half of "an adapted binding can't be consumed until its adapter has run";
+/// codegen emits the `_wireRegister` call once its argument locals exist, which
+/// then lands before any of those consumers.
+func adapterOrderingEdges(
+    useSites: [AdapterUseSite],
+    definitions: [DiscoveredAdapterAnnotation],
+    resolvedBindings: [BindingIdentity: DiscoveredBinding],
+    dependencyEdges: [BindingIdentity: [BindingIdentity]]
+) -> [BindingIdentity: [BindingIdentity]] {
+    let identityByReference = Dictionary(
+        resolvedBindings.values.map { (canonicalTypeName($0.boundTypeReference), $0.identity) },
+        uniquingKeysWith: { first, _ in first }
+    )
+    let (definitionsByName, _) = indexAdapterDefinitions(definitions)
+
+    var extra: [BindingIdentity: [BindingIdentity]] = [:]
+    for useSite in useSites {
+        guard let definition = definitionsByName[useSite.annotationName] else { continue }
+        var selfIdentity: BindingIdentity?
+        var collaboratorIdentities: [BindingIdentity] = []
+        for parameter in parseRegisterSignature(definition.registerSignature) {
+            guard let concreteType = substitute(parameter.placeholder, in: useSite) else { continue }
+            let split = optionalityStripped(canonicalTypeName(concreteType))
+            let identity = BindingIdentity(base: split.base, isOptional: split.isOptional, key: nil)
+            if parameter.placeholder == "Self" {
+                selfIdentity =
+                    identityByReference[canonicalTypeName(concreteType)]
+                    ?? (resolvedBindings[identity] != nil ? identity : nil)
+            } else if case .resolved(let producerIdentity) = matchProducer(for: identity, in: resolvedBindings) {
+                collaboratorIdentities.append(producerIdentity)
+            }
+        }
+        guard let selfID = selfIdentity, !collaboratorIdentities.isEmpty else { continue }
+        for (consumer, deps) in dependencyEdges where consumer != selfID {
+            if deps.contains(where: { collaboratorIdentities.contains($0) }) {
+                extra[consumer, default: []].append(selfID)
+            }
+        }
+    }
+    return extra
+}
+
 /// The identities of bindings that *carry* an adapter annotation (the `Self` of
 /// a use-site whose name matches a definition). The dead-binding check treats
 /// these as live: the annotation is an explicit declaration that the binding is

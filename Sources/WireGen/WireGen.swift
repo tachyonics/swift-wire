@@ -260,7 +260,15 @@ struct WireGen {
                 from: singletons,
                 typealiases: aggregate.typealiases,
                 multibindingKeys: aggregate.multibindingKeys,
-                resultBuilders: aggregate.resultBuilders
+                resultBuilders: aggregate.resultBuilders,
+                // Adapter registration currently resolves against the default
+                // graph only — an iteration-8 simplification `resolveAdapterRegistrations`
+                // shares — so its ordering edges apply only there. Lifting this to
+                // container- and seeded-scope-bound controllers (a request-scoped
+                // `@HummingbirdRoutes` controller's `Self` lives in a seeded scope,
+                // its `Router` collaborator in the default graph) is M2.3.
+                adapterUseSites: containerKey == nil ? aggregate.adapterUseSites : [],
+                adapterDefinitions: containerKey == nil ? aggregate.adapterAnnotations : []
             )
             let graph = enrichMissingBindingsWithCrossScopeHints(
                 rawGraph,
