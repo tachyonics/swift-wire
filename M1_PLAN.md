@@ -302,8 +302,12 @@ The substantive tail-end of M1. **Done.**
   stopgap — a generic singleton becomes a graph node by *lifting* its parameter
   and resolving deps by identity, not by specialising against a concrete request
   — and lets `@RoutedBy` consume the abstract controller chain (validated by
-  AdapterHarness). Iteration-10 refinements (lift the minimum, conformance-derived
-  aliasing, parameterized-opaque `BuilderKey`) are planned in that note.
+  AdapterHarness). Iteration 10 landed *lift the minimum* — a `_WireGraph`
+  parameter only for bridge targets, roots spelled as nested structural fields,
+  and a generic `@Singleton` that's one instance or an error steering to
+  `@Provides func` (validated end-to-end by the task-cluster migration and both
+  lifting shapes in AdapterHarness). Conformance-derived aliasing and the
+  parameterized-opaque `BuilderKey` remain planned in that note.
 - **task-cluster migration**: `TaskCluster.swift` / `Application+build.swift` are
   Wire-driven; `CompositionRoot` and the nested concrete spelling are gone, the
   concrete leaf named once; all task-cluster tests pass.
