@@ -305,7 +305,6 @@ struct DeadBindingDiagnosticsTests {
         let definition = DiscoveredAdapterAnnotation(
             annotationName: "RoutedBy",
             form: .typeLevel,
-            phase: .postGraph,
             registerSignature: "(instance: Self, router: $0)",
             location: mockLocation("Def.swift"),
             originModule: testModule

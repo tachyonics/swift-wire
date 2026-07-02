@@ -25,12 +25,10 @@ package struct ResolvedAdapterRegistration: Sendable, Equatable {
 
     /// The annotated type, qualified — the callee of the `_wireRegister` call.
     package let calleeType: String
-    package let phase: AdapterPhase
     package let arguments: [Argument]
 
-    package init(calleeType: String, phase: AdapterPhase, arguments: [Argument]) {
+    package init(calleeType: String, arguments: [Argument]) {
         self.calleeType = calleeType
-        self.phase = phase
         self.arguments = arguments
     }
 }
@@ -174,7 +172,6 @@ private func resolveUseSite(
     return (
         ResolvedAdapterRegistration(
             calleeType: useSite.annotatedQualifiedTypeName,
-            phase: definition.phase,
             arguments: arguments
         ),
         diagnostics

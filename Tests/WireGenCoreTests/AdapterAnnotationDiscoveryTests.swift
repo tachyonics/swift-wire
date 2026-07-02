@@ -4,8 +4,8 @@ import Testing
 
 /// Iteration 8a: adapter-annotation definitions. These pin that
 /// `WireAdapterAnnotationV1` declarations are discovered anywhere in source
-/// with their annotation name, form, phase, and register-signature template,
-/// and that non-matching declarations are ignored.
+/// with their annotation name, form, and register-signature template, and that
+/// non-matching declarations are ignored.
 @Suite("Adapter annotation discovery")
 struct AdapterAnnotationDiscoveryTests {
     private func definitions(in source: String) -> [DiscoveredAdapterAnnotation] {
@@ -18,7 +18,6 @@ struct AdapterAnnotationDiscoveryTests {
                 static let routedBy = WireAdapterAnnotationV1(
                     annotation: "RoutedBy",
                     form: .typeLevel,
-                    phase: .postGraph,
                     registerSignature: "(instance: Self, router: $0)"
                 )
             }
@@ -27,7 +26,6 @@ struct AdapterAnnotationDiscoveryTests {
         let definition = try #require(definitions(in: source).first)
         #expect(definition.annotationName == "RoutedBy")
         #expect(definition.form == .typeLevel)
-        #expect(definition.phase == .postGraph)
         #expect(definition.registerSignature == "(instance: Self, router: $0)")
         #expect(definition.originModule == testModule)
     }
@@ -35,7 +33,7 @@ struct AdapterAnnotationDiscoveryTests {
     @Test func moduleScopeDefinitionIsDiscovered() throws {
         let source = """
             let routedBy = WireAdapterAnnotationV1(
-                annotation: "RoutedBy", form: .typeLevel, phase: .postGraph,
+                annotation: "RoutedBy", form: .typeLevel,
                 registerSignature: "(instance: Self)"
             )
             """
@@ -55,12 +53,12 @@ struct AdapterAnnotationDiscoveryTests {
     }
 
     @Test func unknownEnumCaseIsNotDiscovered() {
-        // A form/phase Wire doesn't recognise (a future contract shape) is
-        // dropped rather than mis-mapped.
+        // A form Wire doesn't recognise (a future contract shape) is dropped
+        // rather than mis-mapped.
         let source = """
             enum A {
                 static let x = WireAdapterAnnotationV1(
-                    annotation: "X", form: .perRequest, phase: .postGraph,
+                    annotation: "X", form: .perRequest,
                     registerSignature: "(instance: Self)"
                 )
             }

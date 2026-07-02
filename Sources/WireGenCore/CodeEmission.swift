@@ -310,6 +310,65 @@ private func wireGraphFieldType(
     return "\(binding.boundTypeReference)<\(arguments.joined(separator: ", "))>"
 }
 
+/// The bootstrap's construction body — one `let` per binding in topological
+/// order, with adapter registrations interleaved. Each `_wireRegister` call is
+/// emitted the moment every one of its argument locals (`Self` + collaborators)
+/// has been constructed, so it lands after all its collaborators and (via the
+/// ordering edges) before any binding that consumes one of them. Bare local
+/// names work because Swift resolves a `let x = x` RHS in the outer scope before
+/// binding the local. Returns the lines plus any registration whose arguments
+/// never all appeared (shouldn't happen for a resolved default-graph
+/// registration; the caller emits these as a fallback).
+private func constructionBody(
+    _ topologicalOrder: [DiscoveredBinding],
+    registrations: [ResolvedAdapterRegistration]
+) -> (lines: [String], pending: [ResolvedAdapterRegistration]) {
+    var lines: [String] = []
+    var emittedLocals: Set<String> = []
+    var pending = registrations
+    func emitReadyRegistrations() {
+        pending.removeAll { registration in
+            guard registration.arguments.allSatisfy({ emittedLocals.contains($0.localName) }) else {
+                return false
+            }
+            lines.append("    " + registrationCall(registration))
+            return true
+        }
+    }
+    for binding in topologicalOrder {
+        // A builder aggregate emits a `@resultBuilder`-annotated local function
+        // (capturing the contributor locals) plus its call — the attribute can't
+        // sit on a closure, so it can't be a single expression like the others.
+        if case .aggregate(let aggregate) = binding, aggregate.flavour == .builder {
+            lines.append(contentsOf: builderFoldLines(aggregate))
+        } else {
+            let local = propertyName(for: binding)
+            let construction = constructionExpression(for: binding)
+            // A specialised generic `@Provides func` can't be called with explicit
+            // type arguments, so annotate the local with the concrete return type
+            // and let Swift infer them (`let repo: Repository<DynamoDBTable> =
+            // makeRepo()`). Harmless when the value arguments already determine them.
+            if case .provider(let provider) = binding, !provider.concreteGenericArguments.isEmpty {
+                lines.append("    let \(local): \(binding.boundTypeReference) = \(construction)")
+            } else {
+                lines.append("    let \(local) = \(construction)")
+            }
+        }
+        emittedLocals.insert(propertyName(for: binding))
+        emitReadyRegistrations()
+    }
+    return (lines, pending)
+}
+
+/// Render one adapter registration as its `<calleeType>._wireRegister(<args>)`
+/// call. Each argument is `label: local` (or bare `local` when unlabelled).
+private func registrationCall(_ registration: ResolvedAdapterRegistration) -> String {
+    let arguments = registration.arguments.map { argument in
+        argument.label.map { "\($0): \(argument.localName)" } ?? argument.localName
+    }.joined(separator: ", ")
+    return "\(registration.calleeType)._wireRegister(\(arguments))"
+}
+
 /// Emit one `_<Name>WireGraph` struct + matching `_wireBootstrap<Name>`
 /// free function pair. Called once for the default graph and once per
 /// container; the same shape carries through for both.
@@ -400,45 +459,13 @@ private func appendStruct(
         return
     }
 
-    // Construction body — bare local names. `let logger = logger`
-    // works because Swift resolves the RHS in the outer scope before
-    // binding the LHS local, so the local shadows cleanly.
-    for binding in topologicalOrder {
-        // A builder aggregate emits a `@resultBuilder`-annotated local
-        // function (capturing the contributor locals) plus its call —
-        // the attribute can't sit on a closure, so it can't be a single
-        // expression like the other forms.
-        if case .aggregate(let aggregate) = binding, aggregate.flavour == .builder {
-            lines.append(contentsOf: builderFoldLines(aggregate))
-            continue
-        }
-        let local = propertyName(for: binding)
-        let construction = constructionExpression(for: binding)
-        // A specialised generic `@Provides func` can't be called with explicit
-        // type arguments, so annotate the local with the concrete return type
-        // and let Swift infer them (`let repo: Repository<DynamoDBTable> =
-        // makeRepo()`). Harmless when the value arguments already determine them.
-        if case .provider(let provider) = binding, !provider.concreteGenericArguments.isEmpty {
-            lines.append("    let \(local): \(binding.boundTypeReference) = \(construction)")
-        } else {
-            lines.append("    let \(local) = \(construction)")
-        }
-    }
-
-    // Post-init member injection block — emits after all locals
-    // are bound so each injection's target references are in
-    // scope. Empty when no `@Inject weak var` sugar or
-    // `@Inject func` member injections exist in the graph.
+    // Construction body (with adapter registrations interleaved) + post-init
+    // member injections + any registration whose arguments never all appeared.
+    let construction = constructionBody(topologicalOrder, registrations: adapterRegistrations)
+    lines.append(contentsOf: construction.lines)
     lines.append(contentsOf: renderMemberInjections(for: topologicalOrder))
-
-    // Adapter registrations (post-graph): after every binding is constructed,
-    // call each adapter-generated `_wireRegister` with the matched locals. M1
-    // emits only the post-graph phase, into the default bootstrap.
-    for registration in adapterRegistrations {
-        let arguments = registration.arguments.map { argument in
-            argument.label.map { "\($0): \(argument.localName)" } ?? argument.localName
-        }.joined(separator: ", ")
-        lines.append("    \(registration.calleeType)._wireRegister(\(arguments))")
+    for registration in construction.pending {
+        lines.append("    " + registrationCall(registration))
     }
 
     // Final return — memberwise init takes one argument per stored
