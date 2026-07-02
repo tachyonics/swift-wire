@@ -15,16 +15,9 @@ public struct WireAdapterAnnotationV1: Sendable {
         case typeLevel
     }
 
-    /// When the generated registration runs relative to graph construction.
-    /// M1 supports post-graph only.
-    public enum Phase: Sendable {
-        case postGraph
-    }
-
     /// The attribute's spelling without the leading `@` (e.g. `"RoutedBy"`).
     public let annotation: String
     public let form: Form
-    public let phase: Phase
 
     /// A parenthesised `label: placeholder` list describing the parameters of
     /// the generated `_wireRegister`. Placeholders: `Self` (the annotated
@@ -35,12 +28,10 @@ public struct WireAdapterAnnotationV1: Sendable {
     public init(
         annotation: String,
         form: Form,
-        phase: Phase,
         registerSignature: String
     ) {
         self.annotation = annotation
         self.form = form
-        self.phase = phase
         self.registerSignature = registerSignature
     }
 }

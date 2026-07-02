@@ -13,7 +13,6 @@ struct AdapterResolutionTests {
         DiscoveredAdapterAnnotation(
             annotationName: name,
             form: .typeLevel,
-            phase: .postGraph,
             registerSignature: signature,
             location: mockLocation("\(name)Def.swift"),
             originModule: testModule
@@ -77,7 +76,6 @@ struct AdapterResolutionTests {
         let registration = try #require(result.registrations.first)
         #expect(result.registrations.count == 1)
         #expect(registration.calleeType == "SimpleController")
-        #expect(registration.phase == .postGraph)
         #expect(
             registration.arguments == [
                 .init(label: "instance", localName: identifierName(forType: "SimpleController", key: nil)),
