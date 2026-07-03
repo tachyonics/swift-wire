@@ -15,7 +15,7 @@ struct App {
 // library's. Bootstrapping and reading the values proves the external
 // `.product` activation path (7d), the foreign `import` (7c), and
 // cross-module key resolution (7a/7f) end-to-end across a package boundary.
-let graph = try await _Wire.bootstrap()
+let graph = try await Wire.bootstrap()
 precondition(graph.app.service.name == "external", "unkeyed external binding did not compose")
 precondition(graph.app.primary.name == "external", "keyed external binding did not compose")
 print("OK: composed unkeyed + keyed ExternalService from external package")

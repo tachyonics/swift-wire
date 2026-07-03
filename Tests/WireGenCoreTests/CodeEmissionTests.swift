@@ -236,7 +236,7 @@ struct CodeEmissionTests {
                 return _WireGraph(view: view, coordinator: coordinator)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -285,7 +285,7 @@ struct CodeEmissionTests {
                 return _WireGraph(view: view, coordinator: coordinator)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -333,7 +333,7 @@ struct CodeEmissionTests {
                 return _WireGraph(view: view, database: database)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -389,7 +389,7 @@ struct CodeEmissionTests {
                 }
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -439,7 +439,7 @@ struct CodeEmissionTests {
                 return _WireGraph(view: view, coordinator: coordinator)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -487,7 +487,7 @@ struct CodeEmissionTests {
                 return _WireGraph(validator: validator, policy: policy)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -532,7 +532,7 @@ struct CodeEmissionTests {
                 return _WireGraph(b: b, a: a)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -551,7 +551,7 @@ struct CodeEmissionTests {
 
     @Test func emptyGraphProducesBareBootstrap() {
         // Empty graph still emits a valid struct so consumers can call
-        // `_Wire.bootstrap()` unconditionally. The free function
+        // `Wire.bootstrap()` unconditionally. The free function
         // is also emitted (returning the empty memberwise init) so the
         // delegation shape is uniform across empty and non-empty graphs.
         let expected = """
@@ -564,7 +564,7 @@ struct CodeEmissionTests {
                 _WireGraph()
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -590,7 +590,7 @@ struct CodeEmissionTests {
                 return _WireGraph(a: a)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -621,7 +621,7 @@ struct CodeEmissionTests {
                 return _WireGraph(c: c, b: b, a: a)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -656,7 +656,7 @@ struct CodeEmissionTests {
                 return _WireGraph(a: a, x: x)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -690,7 +690,7 @@ struct CodeEmissionTests {
                 return _WireGraph(a: a, b: b, x: x)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -726,7 +726,7 @@ struct CodeEmissionTests {
                 return _WireGraph(dynamoDBTaskRepository: dynamoDBTaskRepository)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -760,7 +760,7 @@ struct CodeEmissionTests {
                 return _WireGraph(logger: logger)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -788,7 +788,7 @@ struct CodeEmissionTests {
                 return _WireGraph(database: database)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -821,7 +821,7 @@ struct CodeEmissionTests {
                 return _WireGraph(taskTable: taskTable, repository: repository)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -859,7 +859,7 @@ struct CodeEmissionTests {
                 return _WireGraph(logger: logger, userService: userService)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -896,7 +896,7 @@ struct CodeEmissionTests {
                 return _WireGraph(repositoryOfTaskTable: repositoryOfTaskTable)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -926,7 +926,7 @@ struct CodeEmissionTests {
                 return _WireGraph(pairOfLeftAndRight: pairOfLeftAndRight)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -959,7 +959,7 @@ struct CodeEmissionTests {
                 _WireGraph()
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -990,7 +990,7 @@ struct CodeEmissionTests {
                 _WireGraph()
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -1034,7 +1034,7 @@ struct CodeEmissionTests {
                 return _TestContainerWireGraph(logger: logger)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -1079,7 +1079,7 @@ struct CodeEmissionTests {
                 return _TestContainerWireGraph(logger: logger)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -1125,7 +1125,7 @@ struct CodeEmissionTests {
                 return _TestContainerWireGraph(mockService: mockService)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -1182,7 +1182,7 @@ struct CodeEmissionTests {
                 return _BravoWireGraph(b: b)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -1722,7 +1722,7 @@ struct CodeEmissionTests {
                 return _WireGraph(someDBTableSendable: someDBTableSendable, someTaskRepo: someTaskRepo, someAPI: someAPI)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph<some DBTable & Sendable, some TaskRepo, some API> {
                     try await _wireBootstrap()
                 }
@@ -1775,7 +1775,7 @@ struct CodeEmissionTests {
                 return _WireGraph(someDBTableSendable: someDBTableSendable, someTaskRepo: someTaskRepo, controllerOfSomeTaskRepo: controllerOfSomeTaskRepo)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph<some DBTable & Sendable, some TaskRepo> {
                     try await _wireBootstrap()
                 }
@@ -1825,7 +1825,7 @@ struct CodeEmissionTests {
                 return _WireGraph(someTaskRepo: someTaskRepo, someLogger: someLogger, pairOfSomeTaskRepoAndSomeLogger: pairOfSomeTaskRepoAndSomeLogger)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph<some TaskRepo, some Logger> {
                     try await _wireBootstrap()
                 }

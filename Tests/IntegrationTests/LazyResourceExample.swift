@@ -18,7 +18,7 @@ package final class LazyResource: Sendable {
 /// Counts factory invocations so the integration test can assert
 /// the load-bearing semantics of `Lazy<T>`:
 ///   - The factory does NOT run during bootstrap (counter stays
-///     at zero past `_Wire.bootstrap()`).
+///     at zero past `Wire.bootstrap()`).
 ///   - The factory runs exactly once across any number of
 ///     `.get()` calls (counter == 1 after N calls).
 package actor LazyResourceCallCount {
