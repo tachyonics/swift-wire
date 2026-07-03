@@ -110,6 +110,9 @@ final class BindingDiscovery: SyntaxVisitor {
     /// found in this file. Captured name-agnostically; classified against
     /// `adapterAnnotations` later.
     var adapterUseSites: [AdapterUseSite] = []
+    /// Graph-conformance declarations (`WireGraphConformanceV1`) found in this
+    /// file — an adapter asking Wire to emit a graph conformance to its protocol.
+    var graphConformances: [DiscoveredGraphConformance] = []
     /// `@resultBuilder` types found in this file, with their fold result
     /// type — the producer-side result type a `BuilderKey` aggregate has.
     var resultBuilders: [DiscoveredResultBuilder] = []
@@ -399,6 +402,16 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         {
             adapterAnnotations.append(definition)
+        }
+        if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
+            let conformance = graphConformance(
+                from: node,
+                sourcePath: sourcePath,
+                converter: converter,
+                module: module
+            )
+        {
+            graphConformances.append(conformance)
         }
         if hasAttribute(node.attributes, named: "Provides"),
             isAtRecognisedProvidesPosition(modifiers: node.modifiers)
