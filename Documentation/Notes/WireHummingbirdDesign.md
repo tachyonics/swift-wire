@@ -320,13 +320,24 @@ See [M2_PLAN.md](../M2_PLAN.md) for the full iteration breakdown. In brief:
   a routes `CollectedKey` with none is just no routes.
 - **The `(Request, Context) → seed` bridge** (M5) — a WireMVC convention vs a
   user-provided conformance.
-- **Multiple-conformance consumption (M5)** — when WireMVC is also present, whether
-  its `MVCComposable` is consumed *side-by-side* with `HummingbirdComposable` (a
-  WireMVC→Hummingbird bridge renders portable controllers into HB routes) or the
-  bridge makes `@MVCRoute` controllers *also* contribute to `HummingbirdRoutesKey`
-  (so everything surfaces under `HummingbirdComposable`, and `MVCComposable` exists
-  only for portability). The `some (A & B)` return supports the side-by-side model;
-  the decision itself is M5's.
+- **Adapter-collection consolidation (M5)** — the general form of a question every
+  adapter shares, not just WireHummingbird. Each adapter ships **self-contained**:
+  its own keys (`HummingbirdRoutesKey`, `OpenAPIHandlersKey`, …), its own
+  `WireGraphConformanceV1`, and its own bootstrap-side handling — and they already
+  coexist on one graph via the composed `some (A & B)` return (so an app using two
+  adapters isn't blocked on either). **WireMVC (M5) is the single place the
+  *consolidation* question lives**, because it's the common portable layer that
+  *could* subsume the others' collections. For each adapter the choice is the same
+  shape: does WireMVC render *into* that adapter's collection (e.g. `@MVCRoute`
+  controllers also contribute to `HummingbirdRoutesKey`; a WireMVC target that *is*
+  OpenAPI's `ServerTransport` folds `OpenAPIHandlersKey` in) — or sit *side-by-side*
+  under distinct conformances? Consolidation is a later **optimisation** the
+  composed return already enables, not a prerequisite; the decision is M5's, made
+  when WireMVC's rendering target exists to weigh the coupling. The rule this
+  session settled: ship each adapter self-contained, keep its contributor shaped
+  around the framework-agnostic target it registers on (`some RouterMethods`, `some
+  ServerTransport`), so any later fold-in is a re-home, not a rewrite — and don't
+  design M5's target from inside M2/M3.
 
 **Decided** (was open): `Wire<Module>.bootstrap()` returns `some (<composed
 contributed conformances>)` with the concrete graph fully internal — see *Public
