@@ -101,7 +101,7 @@ struct SeedScopeEmissionTests {
                 return _HBRequestSeedWireScope(hBRequestSeed: hBRequestSeed, requestLogger: requestLogger)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }
@@ -168,7 +168,7 @@ struct SeedScopeEmissionTests {
                 return _HBRequestSeedWireScope(hBRequestSeed: hBRequestSeed, requestLogger: requestLogger)
             }
 
-            internal enum _Wire {
+            internal enum Wire {
                 static func bootstrap() async throws -> _WireGraph {
                     try await _wireBootstrap()
                 }

@@ -3,7 +3,7 @@
 ///
 /// - The `_WireGraph` struct with one stored property per binding,
 ///   named by `lowerCamelCased(sanitize(boundType))`.
-/// - A `_Wire` façade enum whose `bootstrap()` delegates to a free
+/// - A `Wire` façade enum whose `bootstrap()` delegates to a free
 ///   `_wireBootstrap()` at module scope (with `bootstrap<Container>()` /
 ///   `bootstrap<Scope>Scope(...)` variants for the other graphs).
 /// - `_wireBootstrap()` performs the actual construction.
@@ -15,7 +15,7 @@
 /// would error with "instance member cannot be used on type." The free
 /// function at module scope has no enclosing type, so bare references
 /// resolve straight to module scope, sidestepping the shadow entirely;
-/// the `_Wire` façade just forwards to it.
+/// the `Wire` façade just forwards to it.
 ///
 /// Inside the free function, bare local names are safe even when they
 /// equal a module-scope identifier — Swift's `let x = x` resolves the
@@ -34,7 +34,7 @@
 /// lifecycle work makes async/throws constructor injection a
 /// first-class option, and locking the signature in now means later
 /// migrations don't ripple through every consumer's `try await
-/// _Wire.bootstrap()` call site. Swift accepts an `async throws`
+/// Wire.bootstrap()` call site. Swift accepts an `async throws`
 /// function body that doesn't actually use those capabilities.
 package func renderWireGraph(
     imports: [String],
@@ -58,7 +58,7 @@ package func renderWireGraph(
     }
 
     // Default graph — always emitted, even when empty, so consumers
-    // can call `_Wire.bootstrap()` unconditionally.
+    // can call `Wire.bootstrap()` unconditionally.
     appendStruct(
         structName: "_WireGraph",
         bootstrapFunction: "_wireBootstrap",
@@ -104,7 +104,7 @@ package func renderWireGraph(
         + seedScopeOrders.flatMap { $0.topologicalOrder }
     lines.append(contentsOf: renderActorWeakSetterExtensions(for: allBindings))
 
-    // The `_Wire` façade — one uniform, non-generic entry point per graph.
+    // The `Wire` façade — one uniform, non-generic entry point per graph.
     // Emitted last so it's a single stable trailing block.
     appendWireFacade(bootstrapEntries, into: &lines)
 
@@ -185,7 +185,7 @@ private func appendSeedScopeStruct(
     let wireGraphExternal = wireGraphParameterLabel(forType: scope.parentGraphType)
     let wireGraphInternal = wireGraphParameterInternalName(forType: scope.parentGraphType)
 
-    // The seed scope's bootstrap entry point on the `_Wire` façade — keeps the
+    // The seed scope's bootstrap entry point on the `Wire` façade — keeps the
     // `(seed:, <parentGraph>:)` parameter shape, forwarding to the private
     // free function.
     entries.append(
@@ -342,7 +342,7 @@ private func appendStruct(
             + liftedConstraints.enumerated()
             .map { "T\($0.offset): \($0.element)" }
             .joined(separator: ", ") + ">"
-    // The `_wireBootstrap` free function and the `_Wire` façade both return the
+    // The `_wireBootstrap` free function and the `Wire` façade both return the
     // opaque-erased form `\(structName)<some P0, …>`; Swift infers each parameter
     // from the concrete values the bootstrap returns.
     let openReturnType =
@@ -350,8 +350,8 @@ private func appendStruct(
         ? structName
         : "\(structName)<" + liftedConstraints.map { "some \($0)" }.joined(separator: ", ") + ">"
 
-    // The bootstrap entry point lives on the `_Wire` façade, not on the struct
-    // — a non-generic call site that stays `_Wire.\(bootstrapMethod)()` whether
+    // The bootstrap entry point lives on the `Wire` façade, not on the struct
+    // — a non-generic call site that stays `Wire.\(bootstrapMethod)()` whether
     // or not the struct carries lifted parameters.
     entries.append(
         BootstrapEntry(
