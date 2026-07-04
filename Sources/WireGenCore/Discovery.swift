@@ -689,6 +689,10 @@ package struct SourceFileDiscovery: Sendable {
     /// type. Matched against `BuilderKey<Builder>` keys so a builder
     /// aggregate knows its producer-side result type.
     package let resultBuilders: [DiscoveredResultBuilder]
+    /// Graph-conformance declarations (`WireGraphConformanceV1`) found in this
+    /// file. Aggregated across the module and emitted as
+    /// `extension _WireGraph: <Protocol>`.
+    package let graphConformances: [DiscoveredGraphConformance]
 
     package init(
         allBindings: [Partition: [DiscoveredBinding]] = [:],
@@ -702,7 +706,8 @@ package struct SourceFileDiscovery: Sendable {
         bindingKeys: [DiscoveredBindingKey] = [],
         adapterAnnotations: [DiscoveredAdapterAnnotation] = [],
         adapterUseSites: [AdapterUseSite] = [],
-        resultBuilders: [DiscoveredResultBuilder] = []
+        resultBuilders: [DiscoveredResultBuilder] = [],
+        graphConformances: [DiscoveredGraphConformance] = []
     ) {
         self.allBindings = allBindings
         self.imports = imports
@@ -716,6 +721,7 @@ package struct SourceFileDiscovery: Sendable {
         self.adapterAnnotations = adapterAnnotations
         self.adapterUseSites = adapterUseSites
         self.resultBuilders = resultBuilders
+        self.graphConformances = graphConformances
     }
 }
 
@@ -773,7 +779,8 @@ package func discover(
         bindingKeys: visitor.bindingKeys,
         adapterAnnotations: visitor.adapterAnnotations,
         adapterUseSites: visitor.adapterUseSites,
-        resultBuilders: visitor.resultBuilders
+        resultBuilders: visitor.resultBuilders,
+        graphConformances: visitor.graphConformances
     )
 }
 
