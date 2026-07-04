@@ -66,8 +66,12 @@ struct GraphConformanceEmissionTests {
             topologicalOrder: [
                 .scopeBound(
                     DiscoveredScopeBoundType(
-                        typeName: "App", typeKind: "struct", genericParameterNames: [],
-                        dependencies: [], location: mockLocation("App.swift"), originModule: testModule
+                        typeName: "App",
+                        typeKind: "struct",
+                        genericParameterNames: [],
+                        dependencies: [],
+                        location: mockLocation("App.swift"),
+                        originModule: testModule
                     )
                 )
             ]
