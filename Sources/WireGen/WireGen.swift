@@ -103,7 +103,8 @@ struct WireGen {
             topologicalOrder: defaultOrder,
             containerTopologicalOrders: containerOrders,
             seedScopeOrders: seedScopeOrders,
-            adapterRegistrations: adapterRegistrations
+            adapterRegistrations: adapterRegistrations,
+            graphConformances: aggregate.graphConformances
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -150,6 +151,7 @@ struct WireGen {
         var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
         var adapterUseSites: [AdapterUseSite] = []
         var resultBuilders: [DiscoveredResultBuilder] = []
+        var graphConformances: [DiscoveredGraphConformance] = []
     }
 
     private static func discoverAllSources(
@@ -196,6 +198,7 @@ struct WireGen {
             aggregate.adapterAnnotations.append(contentsOf: result.adapterAnnotations)
             aggregate.adapterUseSites.append(contentsOf: result.adapterUseSites)
             aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
+            aggregate.graphConformances.append(contentsOf: result.graphConformances)
         }
         return aggregate
     }
