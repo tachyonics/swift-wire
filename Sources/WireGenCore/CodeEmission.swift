@@ -41,7 +41,8 @@ package func renderWireGraph(
     topologicalOrder: [DiscoveredBinding],
     containerTopologicalOrders: [String: [DiscoveredBinding]] = [:],
     seedScopeOrders: [SeedScopeEmission] = [],
-    adapterRegistrations: [ResolvedAdapterRegistration] = []
+    adapterRegistrations: [ResolvedAdapterRegistration] = [],
+    graphConformances: [DiscoveredGraphConformance] = []
 ) -> String {
     var lines: [String] = []
     var bootstrapEntries: [BootstrapEntry] = []
@@ -103,6 +104,10 @@ package func renderWireGraph(
         + containerTopologicalOrders.values.flatMap { $0 }
         + seedScopeOrders.flatMap { $0.topologicalOrder }
     lines.append(contentsOf: renderActorWeakSetterExtensions(for: allBindings))
+
+    // Adapter-declared graph conformances — `extension _WireGraph: <Protocol>`
+    // mapping the protocol's members to the default graph's aggregate bindings.
+    appendGraphConformances(graphConformances, topologicalOrder: topologicalOrder, into: &lines)
 
     // The `Wire` façade — one uniform, non-generic entry point per graph.
     // Emitted last so it's a single stable trailing block.
@@ -459,7 +464,7 @@ private func appendStruct(
 /// declaration name. Keyed bindings append a key-derived suffix so
 /// that two providers of the same type with different keys don't
 /// collide. See `identifierName(forType:key:)` for the rule.
-private func propertyName(for binding: DiscoveredBinding) -> String {
+func propertyName(for binding: DiscoveredBinding) -> String {
     identifierName(forType: binding.boundType, key: binding.keyIdentifier)
 }
 
