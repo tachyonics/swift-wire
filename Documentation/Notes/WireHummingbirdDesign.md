@@ -1,353 +1,386 @@
 # WireHummingbird — design note (M2)
 
-> **Status:** the model settled during M2 design, informed by
-> [spike-8](../../../swift-wire-spikes/spike-8-hummingbird-request-scope/) (request-scope
-> entry) and [spike-9](../../../swift-wire-spikes/spike-9-hummingbird-bootstrap/)
-> (bootstrap shape + collation + context threading), both proven against real
-> Hummingbird. Builds on [WireMVCAbstraction.md](WireMVCAbstraction.md) (Tier-1
-> framework adapters) and [OpaqueTypesSupport.md](OpaqueTypesSupport.md) (lifting).
-> **Supersedes the earlier scope-aware `@RoutedBy` adapter-registration contract**
-> for this adapter (see *What changed* below); [AdapterModel.md](AdapterModel.md)'s
-> side-effect registration model is not the mechanism WireHummingbird uses.
+> **Status:** the model settled during M2 design and was then **refined against the
+> real [hummingbird-examples](https://github.com/hummingbird-project/hummingbird-examples)
+> repo** (the controller survey below). Proven against real Hummingbird via
+> [spike-9](../../../swift-wire-spikes/spike-9-hummingbird-bootstrap/) (bootstrap +
+> collation) and [spike-10](../../../swift-wire-spikes/spike-10-graph-conformance/)
+> (graph conformance); the context-free surface + conformance-extension seam were
+> re-proven in the external `wire-hummingbird` repo.
+>
+> **This note supersedes two earlier drafts of its own:** (1) the `_wireRegister`
+> side-effect `@RoutedBy` contract (collation replaced it — [AdapterModel.md](AdapterModel.md)
+> is not the mechanism here); (2) the *proxy / binding-rewrite* for signature
+> adaptation, the `Wire<Module>` public entry, the composed `some (A & B)` return,
+> and the context-*pinned* `RouteContributor<Context>` — all replaced by the
+> context-free surface, the internal `Wire.bootstrap()` returning the concrete
+> graph, and a conformance-extension macro (below).
 
 ## What M2 is
 
-A **Tier-1 framework adapter** (per WireMVCAbstraction): automate application-level
-wiring — construct controllers from Wire's graph and get their routes/middleware
-onto a Hummingbird `Router` — while controllers keep their native Hummingbird form
-(routes and handler signatures stay framework-shaped). It does **not** abstract
-routes (that's WireMVC, M5) and does **not** cover OpenAPI `registerHandlers`
+A **Tier-1 framework adapter**: automate application-level wiring — construct
+controllers from Wire's graph and get their routes/middleware onto a Hummingbird
+`Router` — while controllers keep their native Hummingbird form. It does **not**
+abstract routes (WireMVC, M5) and does **not** cover OpenAPI `registerHandlers`
 (WireOpenAPI, M3).
 
-The forcing case is task-cluster: its hand-written `buildApplication` (create
-`Router`, add middleware, register the controller, collect services, construct
-`Application`) becomes generated. **App-scoped only** — request-scoped controllers
-need generated routing and are M5/WireMVC (see *Request scope is WireMVC-only*).
-
-## What changed (why this note was rewritten)
-
-The earlier model made the `Router` a **graph binding** that `@HummingbirdRoutes`
-controllers *registered into* via a `_wireRegister` side effect, with a two-sided
-scope-aware contract (`selfScopes`/`collaboratorScopes`, a containment rule). That
-forced ordering machinery (a consumer of the mutated router had to be built after
-registration) and a bespoke adapter-registration contract.
-
-Spike-9 settled a simpler model: **the `Router` is a bootstrap builder that stays
-outside the graph.** The graph only *collates contributions*; a facade applies
-them to a user-provided builder and assembles the `Application`. Nothing in the
-graph consumes a mutated collaborator, so the ordering problem never arises, and
-the whole `_wireRegister` adapter-registration contract is unnecessary here.
+**App-scoped only.** Request-scoped controllers need generated routing and are
+M5/WireMVC (see *The WireHummingbird ↔ WireMVC boundary*). The forcing case is
+task-cluster: its hand-written `buildApplication` becomes generated.
 
 ## The architecture
 
 ### Router outside the graph; the graph collates contributions
 
-- **Routes → a `CollectedKey`.** A controller is a `RouteContributor`:
-  ```swift
-  protocol RouteContributor<Context> {
-      associatedtype Context: RequestContext
-      func addRoutes(to router: some RouterMethods<Context>)   // generic over the router
-  }
-  ```
-  Collated as `[any RouteContributor<Context>]`. Keeping `addRoutes` generic over
-  the router (through the existential) lets the facade apply contributors to a root
-  `Router` **or** a `RouterGroup` — the app context pinned as a primary associated
-  type (spike-9, proven end-to-end). The contributor is either the controller
-  **instance** (when its `addRoutes` already matches the requirement — no proxy) or
-  a small **generated proxy** that conforms and delegates (when the signature
-  doesn't — e.g. `addRoutes(to group: RouterGroup<Ctx>)` or a differently-named
-  method). Both are collated identically; M2 covers both.
-- **Middleware → a `BuilderKey`.** Because Wire knows the contributor set at
-  codegen time, it emits them as *static* expressions inside Hummingbird's
+The `Router` is a **bootstrap builder that stays outside the graph** (spike-9). The
+graph only *collates contributions*; a facade applies them to a user-provided
+router and assembles the `Application`. Nothing in the graph consumes a mutated
+collaborator, so ordering never arises — and the whole `_wireRegister`
+adapter-registration contract is unnecessary.
+
+- **Routes → a `CollectedKey`.** A controller `@Contributes` into
+  `HummingbirdKeys.routes = CollectedKey<any RouteContributor>`. Routes can't fold
+  to a value (each applies its own routes as a side effect) — hence `CollectedKey`.
+- **Middleware → a `BuilderKey`.** Wire knows the contributor set at codegen time,
+  so it emits them as static expressions inside Hummingbird's
   `@MiddlewareFixedTypeBuilder`, fusing them into one `some MiddlewareProtocol`
-  (static composition, one existential boundary for the whole stack — the idiomatic
-  `addMiddleware { … }` shape). This is the parameterized-opaque `BuilderKey`
-  ([BuilderKeyDesign.md](BuilderKeyDesign.md), [OpaqueTypesSupport.md](OpaqueTypesSupport.md)),
-  proven in spike-9. Routes can't fold to a single value (each applies its own
-  routes as a side effect) — hence `CollectedKey`; middleware folds to a value —
-  hence `BuilderKey`.
+  (the idiomatic `addMiddleware { … }` shape). Middleware folds to a value — hence
+  `BuilderKey` ([BuilderKeyDesign.md](BuilderKeyDesign.md)). (M2.4.)
 
-### Plain annotations, existing multibinding + container machinery
+### The collation surface is context-free
 
-`@HummingbirdRoute` / `@HummingbirdMiddleware` are **plain macros** expanding to
-`@Singleton @Contributes(to: HummingbirdRoutesKey)` and
-`@Contributes(to: HummingbirdMiddlewareKey)` — where WireHummingbird ships
-`HummingbirdRoutesKey = CollectedKey<any RouteContributor<Ctx>>` and
-`HummingbirdMiddlewareKey = BuilderKey<…>`. No `WireAdapterAnnotationV1`, no
-`_wireRegister`, no adapter-registration contract.
+`RouteContributor` carries **no `Context`** — its witness is a generic method:
 
-The **container is the app boundary**: `@Container(PublicAPI)` scopes a
-contribution to that app's collections. Multibindings already fan in per partition
-(`MultibindingDiagnostics.swift`: contributions "run per partition", and containers
-*are* partitions), so per-container route/middleware collections fall out of
-existing machinery — multiple Hummingbird apps in one process, each with its own
-collections.
+```swift
+public protocol RouteContributor {
+    func addWireRoutes<Context: RequestContext>(to router: some RouterMethods<Context>)
+}
+public enum HummingbirdKeys {
+    public static let routes = CollectedKey<any RouteContributor>(allowUnused: true)
+}
+```
 
-### The one new Wire Core capability: graph-conforms-to-declared-protocol-via-keys
+So the collection is a plain `[any RouteContributor]` (no free type in the key — a
+key can't be a stored static in a generic type anyway), `HummingbirdComposable` has
+no associated type, and the app's request context binds at the `apply` call:
 
-`_WireGraph` is generated in the consumer module and exposes bindings as
-generated-*named* properties (no generic `graph[Key.self]` accessor), so a
-framework library can't read the collections off it directly. The bridge is
-**generic and framework-ignorant**: an adapter declares a conformance, discovered
-syntactically like a key declaration —
+```swift
+public static func apply<Context: RequestContext>(
+    _ graph: some HummingbirdComposable, to router: some RouterMethods<Context>
+) { for c in graph.routes { c.addWireRoutes(to: router) } }
+```
+
+`addWireRoutes` is Wire-internal (generated, not hand-written); the name avoids
+collision with the author's own `addRoutes` and carries no leading underscore (so
+no SwiftLint `identifier_name` friction in hand-written conformances).
+
+### No proxy — a conformance-extension macro
+
+Adapting a native controller to this surface needs **no separate proxy type**: the
+controller is stateless-to-conform and in-module, so a macro-generated **conformance
+extension** adds `RouteContributor` directly, with a witness that owns the mount and
+delegates to the controller's hand-written `addRoutes`:
+
+```swift
+@Singleton
+@Contributes(to: HummingbirdKeys.routes)
+@HummingbirdRoute("todos")                 // annotation owns the mount
+struct TodoController {
+    @Inject init(repo: Repo) { self.repo = repo }
+    func addRoutes(to router: some RouterMethods<some RequestContext>) { … }   // untouched
+}
+// generated:
+extension TodoController: RouteContributor {
+    func addWireRoutes<Context: RequestContext>(to router: some RouterMethods<Context>) {
+        addRoutes(to: router.group("todos"))     // no-arg @HummingbirdRoute → addRoutes(to: router)
+    }
+}
+```
+
+The Wire-internal witness name means the generated method and the author's
+`addRoutes` never collide (verified — no overload/recursion ambiguity). The
+"proxy / binding-rewrite" concept is **dropped**: it was only ever needed to
+defer-instantiate a *type-generic* `Foo<Context>`, which requiring context-free
+controllers removes. The macro can't add `@Singleton`/`@Contributes` (attributes on
+the type), so those stay explicit until a plugin-side contribution-attribute folds
+`@Contributes` into `@HummingbirdRoute` (the small surviving remnant of the old
+M2.3).
+
+### The one new Wire Core capability (M2.1, shipped): graph-conforms-to-declared-protocol
+
+`_WireGraph` exposes bindings as generated-*named* properties, so a framework
+library can't read the collections directly. The bridge is **generic and
+framework-ignorant** — an adapter declares a conformance, discovered syntactically:
 
 ```swift
 // contributed by WireHummingbird
-WireGraphConformanceV1(
-    conforms: HummingbirdComposable.self,
-    members: [.member("routes",     from: HummingbirdRoutesKey.self),      // CollectedKey product
-              .member("middleware", from: HummingbirdMiddlewareKey.self)]  // BuilderKey product
+public let wireHummingbirdConformance = WireGraphConformanceV1(
+    conformsTo: (any HummingbirdComposable).self,
+    members: [.init("routes", from: HummingbirdKeys.routes)]     // CollectedKey product
 )
 ```
 
-Wire emits `extension WireGraph: HummingbirdComposable { var routes { <collectedProp> } … }`,
-mapping key products to the protocol's requirements — **without knowing the
-protocol is HTTP-shaped**. Associated types (the protocol's `Context`) are inferred
-from the key's element type (`CollectedKey<any RouteContributor<BasicRequestContext>>`
-⇒ `Context = BasicRequestContext`). This replaces "adapter emits a code template"
-with "adapter declares a conformance mapping" — declarative, no arbitrary codegen,
-and reusable (WireOpenAPI surfaces its handler collection the same way).
+Wire emits `extension _WireGraph: HummingbirdComposable { var routes: [any RouteContributor] { <collectedProp> } }`
+— **without knowing the protocol is HTTP-shaped**. (Where a member's key element
+has an associated type, it's inferred from the witness; the context-free surface is
+the simpler non-associated case.) Wire Core = DI graph + multibindings + this
+conformance capability, zero framework knowledge; WireHummingbird = the protocol,
+the conformance declaration, the macro, and `apply`.
 
-**Concern split:** Wire Core = DI graph + multibindings + containers + this generic
-conformance capability, zero framework knowledge. WireHummingbird = the
-`HummingbirdComposable` protocol, the conformance declaration, the two macros, and
-the `apply` library — all HTTP knowledge lives here.
+### Entry: internal `Wire.bootstrap()` returning the concrete graph
 
-### Public entry: `Wire<Module>.bootstrap()`
-
-The bootstrap is consumed by user code and the adapter library, so it's public API
-and shouldn't wear the `_Wire` "generated-internal" underscore. The underscore
-partly existed to avoid clashing with the `Wire` *module* name; `Wire<Module>`
-sidesteps that — the library defines `enum Wire<Module> {}` and generated code
-extends it per module:
+The generated entry is `internal enum Wire { static func bootstrap() … }` — **not**
+the earlier public `Wire<Module>` marker, and **not** a composed `some (A & B)`
+return. It returns the **concrete `_WireGraph`**, which *conforms to every declared
+adapter protocol* (`HummingbirdComposable`, and later `MVCComposable`, …). There's
+no information hiding: the developer keeps member access (`graph.logger`), and each
+adapter's generic facade picks the conformance it needs:
 
 ```swift
-enum TaskClusterModule {}                                    // generated marker
-extension Wire where Module == TaskClusterModule {           // generated
-    public static func bootstrap() async throws -> some HummingbirdComposable { … }
-}
-// user / adapter: try await Wire<TaskClusterModule>.bootstrap()
+let graph = try await Wire.bootstrap()                 // concrete _WireGraph
+let services = WireHummingbird.apply(graph, to: router)  // apply<…>(_ graph: some HummingbirdComposable, …)
 ```
 
-**The bootstrap returns `some (<the composed contributed conformances>)`, and the
-concrete graph type stays fully internal.** With only WireHummingbird present the
-return is `some HummingbirdComposable`; with WireMVC too it's `some
-(HummingbirdComposable & MVCComposable)` — Wire composes the return type from the
-set of contributed `WireGraphConformanceV1` declarations. This keeps the concrete
-`WireGraph` out of the public surface entirely (not "public type, internal
-members" — *not public at all*), exposes exactly the capability set the graph
-offers, and grows by `& NewComposable` as adapters are added. It composes with the
-generic facades: `apply<G: HummingbirdComposable>(_:)` accepts a `some (A & B)`
-value since it satisfies `HummingbirdComposable`, and Tier 1's `let graph = …`
-never names the type. (Associated-type collisions across composed protocols — both
-likely have `Context` — are harmless as long as consumers go through a
-single-protocol-generic facade, where `G.Context` is unambiguous; direct `.Context`
-on the raw composition would need qualification, which consumers shouldn't do.)
+A local `enum Wire` coexists with `import Wire` (verified), so no marker/generic is
+needed. Access is internal because the entry is only referenced intra-module (the
+composition root or a Tier-2 macro's `main`).
 
-### The two integration tiers
+### The two integration tiers, and lifecycle
 
-Both feed from the same collation; only the ergonomic wrapper differs.
+- **Tier 1 — minimal.** `let graph = try await Wire.bootstrap(); let services =
+  WireHummingbird.apply(graph, to: router); return Application(router:, services:, …)`.
+  Two idiomatic touch points.
+- **Tier 2 — `@main @WireHummingbird`.** A composition-root type the macro reads;
+  it generates `main` (bootstrap → build router → apply → construct → run).
 
-- **Tier 1 — minimal.** The user keeps their `buildApplication`, their router,
-  their own `.get`/middleware. Wire integration is:
-  ```swift
-  let graph = try await Wire<TaskClusterModule>.bootstrap()
-  let services = WireHummingbird.apply(graph, to: router)   // applies middleware+routes, returns [any Service]
-  return Application(router: router, configuration: configuration, services: services, logger: logger)
-  ```
-  Two touch points, both already idiomatic in a Hummingbird app.
-- **Tier 2 — full WireMVC (`@main @WireHummingbird`).** A composition-root type
-  whose members the macro reads (spike-2): an `@Inject`ed config value, a
-  `routerBuilder()`, an `applicationConfiguration()`. The macro generates `main`:
-  bootstrap → `routerBuilder()` → apply collated middleware+routes → construct with
-  `applicationConfiguration()` → run. One declaration, no boilerplate.
+`apply` returns one ordered `[any Service]`: collected services (`@Contributes` into
+`CollectedKey<any Service>`) plus the graph teardown modelled as a single `Service`
+placed **first** so it unwinds **last** (verified against Hummingbird's reverse-order
+`ServiceGroup` shutdown). The graph's lifetime is bracketed by the app's
+`ServiceGroup` with no separate handle. (M2.5.)
 
-### Lifecycle: one ordered `[any Service]`
+## What the examples actually look like (the survey that shaped this)
 
-`apply` returns a single `[any Service]` the user hands to `Application(services:)`.
-It carries **two** concerns, ordered correctly:
+Surveying every `addRoutes` in hummingbird-examples pinned the design:
 
-1. **Collected services** — `@Contributes` into a `CollectedKey<any Service>`.
-2. **Graph teardown** — the graph's `@Teardown` unwind (M4) modelled as *one
-   `Service`* whose `run()` is "await graceful shutdown → run teardowns," placed
-   **first** in the array so it unwinds **last**.
+- **`addRoutes(to:)` is a universal convention, not a protocol.** Controllers are
+  bare structs with an `addRoutes` method the app calls directly.
+- **Universal wiring pattern:** `Controller(deps).addRoutes(to: router.group("path"))`
+  — the mount path lives *app-side*, deps are constructor-injected, some controllers
+  mount at root (`addRoutes(to: router)`). This maps 1:1 onto `@Inject` +
+  `@HummingbirdRoute("path")` (the annotation takes over the `router.group` line).
+- **Two axes of variance:** router type (`Router` / `RouterGroup` / `some
+  RouterMethods`) and context (generic `<Context>` / opaque `some RequestContext` /
+  **concrete `typealias Context = AppRequestContext`**).
+- **Correction that mattered:** `typealias Context = AppRequestContext` is
+  context-*specific*, not generic. So the **majority** of real (auth) apps are
+  context-specific — every auth/session example fixes a concrete `AuthRequestContext`
+  to read `context.identity`. Context-free/opaque is the *no-auth* minority.
 
-Verified against Hummingbird (`Application.swift:148`, `self.services + [dateCache,
-serverService]` + reverse-order `ServiceGroup` shutdown): server drains → collected
-services stop → graph tears down last. So the graph's lifetime is bracketed by the
-app's `ServiceGroup` with no separate handle — Tier 1 needs nothing beyond passing
-`services:`. Tier 2's generated `main` passes the same array.
+The context-free surface therefore fits new, context-agnostic controllers written
+*for* WireHummingbird; auth controllers that read a typed context belong on the
+other side of the boundary below. WireHummingbird prescribes the context-free shape
+(self-grouping or `@HummingbirdRoute` owns the mount) — of the 18 example
+controllers only one matches directly, so this is "write controllers *for*
+WireHummingbird," not drop-in adaptation (that was the proxy's job, and it's gone).
+
+## The WireHummingbird ↔ WireMVC boundary
+
+### Three models for request-scoped data
+
+- **Hummingbird** puts it on the typed request **context** (`context.identity`).
+- **Vapor** puts it on the **request** (`req.auth.get(User.self)`).
+- **Wire** puts it in a request-seeded **scope** as **injected bindings** — the DI
+  model (ASP.NET Core scoped services, Spring `@AuthenticationPrincipal User`).
+
+Wire's model is *orthogonal* and *unifying*: the Hummingbird-vs-Vapor difference
+collapses to a single seam — how the scope is seeded (off the HB context vs the
+Vapor request) — and above it the model is identical. Wire doesn't pick a side; it
+makes the sides interchangeable. `requireIdentity()`'s throw becomes a binding that
+throws and propagates out of scope bootstrap to the normal HTTP error handling —
+nothing new to design there.
+
+### The line, and where it sits
+
+- **WireHummingbird (this note)** — app-scoped, native controllers; request data via
+  the closure's `(request, context)` params or a task-local (the OpenAPI escape
+  valve). This is the *simple tier* and the proof vehicle for the collation
+  mechanics that WireMVC reuses.
+- **WireMVC (M5)** — request-scoped **injection** (per-request deps injected into
+  handlers), which needs generated routing. The typed-context auth idiom lands here.
+
+So *wiring to* a controller (collate) and *wiring within* it (request-scoped inject)
+are separable: the former is WireHummingbird and works now; the latter is WireMVC. A
+controller migrates as a unit when it wants injection over context-reading
+(auth-abac is the worked example — a request-seeded scope providing `identity`,
+carried on the context during migration, then controller-by-controller to WireMVC).
+WireHummingbird's *durable* value is the assembly layer (services, middleware fold,
+`Application`, lifecycle), which every Wire+Hummingbird app needs regardless.
+
+### Native vs cross-runtime surfaces (the ServerTransport question)
+
+The future common surface is the OpenAPI generator's **`ServerTransport`** (already
+has Hummingbird/Vapor/Lambda adapters), which WireOpenAPI (M3) uses via
+`registerHandlers(on: some ServerTransport)`. But a native controller **cannot** be
+retrofitted onto it, for a decisive reason: **`ServerTransport` is context-free**
+(http-types handlers), while `RouterMethods<Context>` handlers get the app's real
+per-request context. The bridge is *one-way*:
+
+- **native → transport works** (swift-openapi-hummingbird): the HB router *owns
+  context creation*, builds the `Context` per request, and runs the context-free
+  handler inside it.
+- **transport → native cannot**: a `ServerTransport` only ever yields
+  `(HTTPRequest, HTTPBody?, ServerRequestMetadata)` — there's no channel/source to
+  synthesize the app's `Context`, so a native handler reading `context.identity`
+  would get nothing. Not just wasteful double-translation — semantically impossible.
+
+**The typed `Context` is simultaneously what makes native controllers valuable and
+what makes them un-portable.** So there are permanently **two surfaces**, coexisting
+on one app, bridgeable only native→transport:
+
+| | target | context | portability |
+|---|---|---|---|
+| **native** (WireHummingbird) | `some RouterMethods<Context>` | app's real per-request context, full DSL | HB-only |
+| **cross-runtime** (WireOpenAPI / agnostic WireMVC) | `some ServerTransport` | context-free transport; typed input reconstructed by standard middleware (below) | HB / Vapor / Lambda |
+
+The conformance-extension seam is the same in both; only the target type and the
+(agnostic vs native) *input* differ. Genericity lives in the **controller**, not the
+protocol — `RouteContributor.addWireRoutes` is irreducibly framework-specific.
+
+### Standard middleware makes the cross-runtime handler typed
+
+WireHummingbird's **native** middleware is Hummingbird's own `MiddlewareProtocol`,
+folded via `MiddlewareFixedTypeBuilder` (the `BuilderKey`, M2.4) — framework-specific.
+**WireMVC's** middleware is the ecosystem-standard, proposed
+[`Middleware`](https://github.com/apple/swift-http-api-proposal/blob/main/Sources/Middleware/Middleware.swift)
+— neither framework-specific nor Wire-invented:
+
+```swift
+protocol Middleware {
+    associatedtype Input: ~Copyable, ~Escapable
+    associatedtype NextInput: ~Copyable, ~Escapable = Input
+    func intercept<Return: ~Copyable>(input: consuming Input,
+        next: (consuming NextInput) async throws -> Return) async throws -> Return
+}
+```
+
+`NextInput` can differ from `Input`, so a middleware **transforms the input type** —
+and that dissolves the context-loss problem for the cross-runtime surface. The
+transport is context-free (http-types), but the middleware *pipeline* constructs the
+typed input on top of it: `UserIdentityMiddleware` is `Middleware where Input ==
+Request, NextInput == (Request, Identity)`, so the handler receives an input already
+carrying `Identity` — non-optional, **guaranteed by the type**. auth-abac's
+`context.identity`/`requireIdentity()` becomes a typed value the pipeline builds,
+owned by the ecosystem — not the framework, not Wire.
+
+Two consequences:
+
+- **The security boundary is compile-time.** If `create`'s input is `(Request,
+  Identity)`, the codegen'd chain only produces it when an identity-adding middleware
+  is in the chain; omit the `@Middleware` and the `NextInput → Input` types don't
+  compose — a compile error, not a runtime `requireIdentity()` throw.
+- **Codegen-into-handlers is the fit, and Wire only *wires*.** The macro injects the
+  middleware (graph bindings, with their own deps) and emits the nested `intercept`
+  chain (controller-level outside endpoint-level outside the handler), threading the
+  `Input` types through to the handler. Wire adds nothing to the middleware model; it
+  complements the seeded scope — middleware-provided request data rides the `Input`
+  transformation, deeper request-scoped deps not on the request path come from the
+  scope.
+
+**Caveats:** it's a *proposal* — targeting it is a forward bet on ecosystem
+convergence; and `~Copyable, ~Escapable` + `consuming` mean the input is *consumed*
+down the chain, so the generated nesting must respect single-consumption (spike it
+when WireMVC starts — a codegen constraint, not a blocker).
 
 ## Scope model: bindings + roots (the M5/WireMVC foundation)
 
-> **Request scope is deferred to M5 (WireMVC), not part of M2.** A request-scoped
-> controller needs routing Wire *generates* (see *Request scope is WireMVC-only*
-> below), so it can't ride native hand-written Hummingbird controllers. This
-> section is the model M5 builds on; M2/WireHummingbird is app-scoped only.
+> Request scope is **M5**, not M2. This is the model M5 builds on.
 
-The load-bearing model for request scope. Drop the assumption that *a scope is one
-dependency graph*; that's the degenerate case:
+Drop the assumption that *a scope is one dependency graph*:
 
 > **A scope is a set of bindings + a set of roots. Construction materialises the
 > subgraph reachable from the roots being materialised.**
 
-- **App scope** materialises *all* roots at bootstrap — looks like one graph.
-- **A seeded (request) scope** materialises *one explicitly-marked root* per
-  request — looks like N subgraphs, one per root controller; only the dispatched
-  controller's subgraph is built.
+- **App scope** materialises all roots at bootstrap — one graph.
+- **A seeded (request) scope** materialises *one* explicitly-marked root per request
+  — only the dispatched controller's subgraph is built.
 
-### Why per-root, not eager-whole-scope
+**Per-root, not eager-whole-scope**, because request-scoped bindings do real
+per-request work; materialising the whole request scope would run every route's work
+on every request. When request scope lands in M5 it fits the same collation via the
+**adapter-replaces-the-binding** shape (also what `@Configuration` needs): a
+request-scoped controller becomes an app-scoped **proxy contributor** whose
+*generated* `addRoutes` embeds per-request scope entry (spike-8 mechanism B),
+holding a **weak back-reference to the app graph** to build per-request scopes. The
+back-ref does double duty as the seeded scope's parent
+(`bootstrap<Seed>Scope(seed:, wireGraph:)`). Context and Wire request scope compose:
+the seed is built from `(Request, Context)`, so the scope can read context-populated
+values. (This is the *only* remaining "proxy" in the design — a **request-scope**
+mechanism in M5, distinct from the app-scoped conformance-extension above.)
 
-Request-scoped bindings do real per-request work (a request-derived logger, a
-principal from a token, a transaction), and Wire can't stop a binding being
-expensive. Materialising the *whole* request scope per request would run every
-route's per-request work on every request. Per-root runs only the dispatched
-controller's subgraph. One request dispatches to exactly one controller-root, and
-middleware populates the Hummingbird **context** (a separate channel), not Wire
-request bindings — so no cross-root sharing problem.
+### Prior art
 
-### Request scope is WireMVC-only (why native HB can't have it)
+- **Request-scoped injection** — ASP.NET Core `AddScoped<>`, Spring
+  `@AuthenticationPrincipal User` (guaranteed present; the security filter rejects
+  before the method). This is the model Wire imports; it's the DI-mature standard,
+  not a workaround.
+- **Context-free handlers + task-local** — the Swift OpenAPI generator: spec-driven
+  handlers that know nothing about the framework, request context via task-local.
+  Proof that a framework-agnostic surface works in production (at the cost of native
+  ergonomics).
+- **Compile-time scopes** — Dagger `@Subcomponent`s per entry, SafeDI `@Forwarded`
+  (closest Swift precedent), Needle/Weaver hierarchical scopes, Micronaut's
+  singleton-controller + param-binding (Hummingbird's own idiom). Where Wire differs:
+  it builds the whole reachable subgraph from the selected root **eagerly**
+  (`Lazy`/`Provider` as the opt-out), consistent with its app-scope philosophy.
 
-A native `@HummingbirdRoute` controller has **hand-written** routing in its
-`addRoutes` (`router.group("todos").get(...) { self.list }`, helper calls, nested
-closures — todos-dynamodb). Making it request-scoped would mean a macro *parsing*
-that body, working out which routes map to which handlers, and *rewriting* each to
-wrap per-request scope entry — intractable across the edge cases. So request scope
-needs routing Wire **generates**, which is **WireMVC (M5)**, not native
-Hummingbird. M2/WireHummingbird native controllers are **app-scoped only**.
+## Positioning
 
-When request scope lands in M5, it fits the *same* collation via the
-**adapter-replaces-the-binding** shape (also what `@Configuration` needs):
-
-- **App-scoped controller** — the instance *is* the `RouteContributor` (or a small
-  generated proxy when its `addRoutes` signature doesn't match; see M2.2). `apply`
-  calls `addRoutes(to:)`.
-- **Request-scoped controller (M5)** — the binding is replaced by a **proxy
-  contributor**: an app-scoped `RouteContributor` whose *generated* `addRoutes`
-  embeds the per-request scope entry (spike-8 mechanism B — the opaque per-request
-  graph built and consumed *inside* the handler closure). The proxy holds a
-  **back-reference to the app graph** (populated post-construction, weakly, via the
-  shipped `@Inject weak var` pattern) to build per-request scopes. The graph
-  collates the proxy like any other; `apply` calls `addRoutes(to:)` uniformly — no
-  separate scoped path, no `_wireRegisterScoped`, no two-sided scope contract.
-
-**The back-reference does double duty:** it's also how a seeded scope receives its
-**parent** — `bootstrap<Seed>Scope(seed:, wireGraph:)`'s `wireGraph:` becomes the
-proxy's back-ref rather than an argument threaded through the route wrapper. The
-graph wires it in during construction. `@HummingbirdRoute`/`@MVCRoute` on the
-controller is the explicit per-request root marker (a controller isn't `@Inject`ed
-by anything, so reachability can't find it); per-root bootstrap reuses M6b
-reachability.
-
-### Request scope ↔ Hummingbird context: layered, not competing
-
-- **Context** = framework/middleware-owned state (`context.identity`, sessions, the
-  request logger/id) — populated by Hummingbird's middleware ecosystem.
-- **Wire request scope** = app-composed request services derived from the seed (a
-  request-tagged logger, a per-request client, a tenant object).
-
-They compose: the seed is built from `(Request, Context)`, so the request scope can
-read context-populated values through the seed.
-
-### Prior art — compile-time frameworks especially
-
-Explicit roots + per-scope-instance materialisation is well-trodden compile-time
-ground (reassuring: the scoping isn't where Wire takes a risk — the opaque-type
-lifting underneath it is).
-
-- **Dagger** (annotation processor) — the canonical model: scopes are generated
-  `@Subcomponent`s per entry; roots are explicit provision methods; seeds are
-  `@BindsInstance` (our `RequestSeed`). Dagger-on-server pulls the handler from a
-  per-request subcomponent — the model we're building.
-- **SafeDI** (Swift, macros + build plugin — closest to Wire) — `@Forwarded`
-  provides a runtime value into a per-entry subtree, macro-driven. The Swift-native
-  compile-time precedent for this shape.
-- **Needle** / **Weaver** (Swift codegen) — hierarchical scopes as a tree of
-  components; entering a scope instantiates a child.
-- **Micronaut** (Java AOT) — the other end: compile-time DI but singleton
-  controllers with parameter binding; the exemplar for Hummingbird's own
-  "singleton + request state via params" recommendation.
-
-Runtime frameworks (Guice, ASP.NET Core per-request `IServiceScope`, Spring
-request-scoped proxies) do the same shape dynamically. None materialises a whole
-scope blindly.
-
-**Where Wire differs — eagerness within a materialised scope.** Dagger builds
-bindings lazily within a subcomponent (generated `Provider`/`DoubleCheck`); Wire
-builds the whole reachable subgraph from the selected root eagerly, with
-`Lazy<T>`/`Provider<T>` as the opt-out — its eager-graph philosophy applied
-consistently to request scopes.
-
-## Positioning: opt-in, layered over Hummingbird's idiom
-
-Request-scoped controllers diverge from Hummingbird's recommended singleton +
-context idiom. The divergence is justified and additive:
-
-- **Opt-in.** A `@Singleton` controller reading the context still works and has zero
-  per-request construction cost. The documented default stays singleton + context;
-  request-scoped is the deeper-adoption step.
-- **WireMVC (M5) is where it lands.** Cross-framework portable controllers can't
-  lean on a framework-specific request-state channel, so "a request-scoped binding
-  with injected request deps" is the one framework-agnostic model — and since it
-  needs generated routing, it's WireMVC's, on the spike-8 + seeded-scope foundation.
-- **Matches Wire's audience** (the JVM-DI on-ramp, where request scopes are
-  idiomatic).
+Opt-in, layered over Hummingbird's idiom. A `@Singleton` controller reading the
+context still works with zero per-request cost; the documented default stays
+singleton + context, and request-scoped injection is the deeper-adoption (WireMVC)
+step, matching Wire's JVM-DI on-ramp audience.
 
 ## Suggested sequencing
 
-See [M2_PLAN.md](../M2_PLAN.md) for the full iteration breakdown. In brief:
-
-1. **Wire Core seam** — the framework-agnostic graph-conformance emission + public
-   `Wire<Module>.bootstrap()`.
-2. **App-scoped route slice** — `@HummingbirdRoute` → `CollectedKey`, the `apply`
-   library (instance-conformance + proxy cases). Replaces task-cluster's manual
-   `buildApplication` (Tier 1).
-3. **Middleware `BuilderKey` fold**, then **`[any Service]` lifecycle**, then the
-   **Tier-2 `@WireHummingbird` macro**, then **`introspect()`**.
-
-**Request scope is M5 (WireMVC)**, not M2 — it needs generated routing.
+See [M2_PLAN.md](../M2_PLAN.md). In brief: **M2.1** Wire Core conformance emission +
+`Wire.bootstrap()` (done) → **M2.2** context-free route slice (`RouteContributor`,
+`apply`, the `@HummingbirdRoute` conformance macro) → **M2.4** middleware `BuilderKey`
+→ **M2.5** `[any Service]` lifecycle → **M2.6** Tier-2 macro → **M2.7** introspection.
+The old M2.3 "proxy / binding-rewrite" is **removed**; only a small optional
+plugin-side `@Contributes`-alias remains. Request scope is **M5 (WireMVC)**.
 
 ## Open items to pin
 
-- **The graph-conformance mechanism** (`WireGraphConformanceV1`) — the seam the
-  whole model rests on. The *language shape* is proven (spike-10: a graph conforms
-  to an externally-declared protocol, `Context` inferred and the opaque middleware
-  bound via an associated type, consumed generically). What remains is Wire-side
-  implementation: discover the declaration and *emit* the extension, plus **collect
-  all contributed conformances to compose the bootstrap return type** (`some (A & B)`).
+- **The `@HummingbirdRoute` macro** (M2.2, step two) — an extension macro emitting
+  the conformance witness that groups at the annotation path and delegates; no-arg
+  form for root mount; assumes the author's method is `addRoutes` (convention).
 - **Empty collections** — a middleware `BuilderKey` with zero contributors needs an
-  identity/empty case (does `MiddlewareFixedTypeBuilder` support an empty block?);
-  a routes `CollectedKey` with none is just no routes.
+  identity/empty case (does `MiddlewareFixedTypeBuilder` support an empty block?); a
+  routes `CollectedKey` with none is just no routes.
 - **The `(Request, Context) → seed` bridge** (M5) — a WireMVC convention vs a
   user-provided conformance.
-- **Adapter-collection consolidation (M5)** — the general form of a question every
-  adapter shares, not just WireHummingbird. Each adapter ships **self-contained**:
-  its own keys (`HummingbirdRoutesKey`, `OpenAPIHandlersKey`, …), its own
-  `WireGraphConformanceV1`, and its own bootstrap-side handling — and they already
-  coexist on one graph via the composed `some (A & B)` return (so an app using two
-  adapters isn't blocked on either). **WireMVC (M5) is the single place the
-  *consolidation* question lives**, because it's the common portable layer that
-  *could* subsume the others' collections. For each adapter the choice is the same
-  shape: does WireMVC render *into* that adapter's collection (e.g. `@MVCRoute`
-  controllers also contribute to `HummingbirdRoutesKey`; a WireMVC target that *is*
-  OpenAPI's `ServerTransport` folds `OpenAPIHandlersKey` in) — or sit *side-by-side*
-  under distinct conformances? Consolidation is a later **optimisation** the
-  composed return already enables, not a prerequisite; the decision is M5's, made
-  when WireMVC's rendering target exists to weigh the coupling. The rule this
-  session settled: ship each adapter self-contained, keep its contributor shaped
-  around the framework-agnostic target it registers on (`some RouterMethods`, `some
-  ServerTransport`), so any later fold-in is a re-home, not a rewrite — and don't
-  design M5's target from inside M2/M3.
+- **Adapter-collection consolidation (M5)** — ship each adapter self-contained (its
+  own key + `WireGraphConformanceV1`); the concrete graph conforms to all of them, so
+  two adapters coexist without a composed return. WireMVC is the single place the
+  *consolidation* question lives (does `@MVCRoute` render into `HummingbirdKeys.routes`
+  and/or a `ServerTransport` that folds `OpenAPIHandlersKey` in, or sit side-by-side?).
+  A later optimisation, decided when WireMVC's rendering target exists — don't design
+  M5's target from inside M2/M3. Keep each contributor shaped around the target it
+  registers on (`some RouterMethods`, `some ServerTransport`) so any fold-in is a
+  re-home, not a rewrite.
 
-**Decided** (was open): `Wire<Module>.bootstrap()` returns `some (<composed
-contributed conformances>)` with the concrete graph fully internal — see *Public
-entry* above.
+**Decided** (were open): the graph-conformance mechanism is **shipped** (M2.1);
+the entry is internal `Wire.bootstrap()` returning the **concrete** graph (no
+`Wire<Module>`, no `some (A & B)`); the collation surface is **context-free** (no
+`RouteContributor<Context>`); signature adaptation is a **conformance-extension
+macro**, not a proxy.
 
 ## References
 
-- [spike-9](../../../swift-wire-spikes/spike-9-hummingbird-bootstrap/) — bootstrap shape, collation, `some RouterMethods`, middleware BuilderKey, lifecycle ordering.
-- [spike-8](../../../swift-wire-spikes/spike-8-hummingbird-request-scope/) — request-scope entry, mechanism B.
-- [WireMVCAbstraction.md](WireMVCAbstraction.md) — Tier-1 vs Tier-2, the three-step adoption progression.
-- [OpaqueTypesSupport.md](OpaqueTypesSupport.md) — lifting; the parameterized-opaque `BuilderKey`.
-- [BuilderKeyDesign.md](BuilderKeyDesign.md) — the middleware-fold key.
+- [spike-9](../../../swift-wire-spikes/spike-9-hummingbird-bootstrap/) — bootstrap, collation, `some RouterMethods`, middleware BuilderKey, lifecycle.
+- [spike-10](../../../swift-wire-spikes/spike-10-graph-conformance/) — graph conformance, associated-type inference.
+- [spike-8](../../../swift-wire-spikes/spike-8-hummingbird-request-scope/) — request-scope entry, mechanism B (M5).
+- `wire-hummingbird` (external repo) — the context-free surface + conformance seam, end-to-end against pushed swift-wire main.
+- [BuilderKeyDesign.md](BuilderKeyDesign.md) / [OpaqueTypesSupport.md](OpaqueTypesSupport.md) — the middleware-fold key; lifting.
 - [AdapterModel.md](AdapterModel.md) — the side-effect `@RoutedBy` contract this adapter no longer uses (still relevant to WireOpenAPI/M3).

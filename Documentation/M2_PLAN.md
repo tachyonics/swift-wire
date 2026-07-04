@@ -30,11 +30,11 @@ per-root materialisation are the **foundation M5 builds on**, not M2 work. See
 
 - Each iteration has a *scope*, a *why-now*, and a *validation gate*. Don't move
   on until the gate passes.
-- **Highest-risk first** (M1's philosophy): the riskiest unproven core seam is the
-  **graph-conformance emission** (M2.1) — the shape is proven (spike-10) but the
-  plugin codegen isn't built. Everything else layers on it. It brings the public
-  `Wire<Module>` adapter entry with it (no separate rename step — the internal
-  member-access surface is left untouched; see M2.1).
+- **Highest-risk first** (M1's philosophy): the riskiest core seam was the
+  **graph-conformance emission** (M2.1) — now **shipped and validated end-to-end**
+  (shape proven by spike-10, codegen built, exercised in `wire-hummingbird`).
+  Everything else layers on it. It brought the internal `Wire` adapter entry (the
+  `_Wire`→`Wire` rename; the member-access surface is untouched; see M2.1).
 - **Validation vehicle:** WireHummingbird is an **external repo** depending on
   *pushed* swift-wire main (the task-cluster pattern — see
   [[feedback_adapters_are_external_repos]]), with its own Hummingbird example that
@@ -58,7 +58,7 @@ per-root materialisation are the **foundation M5 builds on**, not M2 work. See
 - **Multibindings** — `CollectedKey` (iteration 5) for routes + the `[any Service]`
   list; `BuilderKey` for the middleware fold.
 - **Bootstrap collation shape** — [spike-9](../../swift-wire-spikes/spike-9-hummingbird-bootstrap/):
-  Router outside the graph; routes as `[any RouteContributor<Context>]`; middleware
+  Router outside the graph; routes as `[any RouteContributor]` (context-free); middleware
   folded via `MiddlewareFixedTypeBuilder`; `some RouterMethods<Context>`; the
   `[any Service]` lifecycle ordering.
 - **Graph-conformance shape** — [spike-10](../../swift-wire-spikes/spike-10-graph-conformance/):
@@ -83,11 +83,11 @@ hand-written `addRoutes(to:)`), **app-scoped only**. Three things are out:
 
 A controller is a **route contributor**: it conforms to `RouteContributor` and is
 `@Contributes`'d to `HummingbirdRoutesKey` (a `CollectedKey`). In M2.2 that's
-written raw (`@Singleton @Contributes(to:) … : RouteContributor`); from M2.3
-`@HummingbirdRoute` is a plugin-recognised **alias for `@Contributes(to:
-HummingbirdRoutesKey)`** (scope stays explicit — the developer still writes
-`@Singleton`), and a signature-mismatched controller is rewritten into a generated
-proxy contributor. `@HummingbirdMiddleware` (M2.4) `@Contributes` to a `BuilderKey`
+written raw (`@Singleton @Contributes(to:) …`) with the conformance the
+`@HummingbirdRoute("path")` **macro** generates — an extension owning the mount and
+delegating to the controller's `addRoutes`, **no proxy type**. (An optional M2.3
+lets `@HummingbirdRoute` also alias `@Contributes` so the developer drops that
+annotation; scope stays explicit via `@Singleton`.) `@HummingbirdMiddleware` (M2.4) `@Contributes` to a `BuilderKey`
 folding via `MiddlewareFixedTypeBuilder` into one `some MiddlewareProtocol`.
 WireHummingbird declares a `WireGraphConformanceV1` mapping those keys onto a
 `HummingbirdComposable` protocol; **Wire emits `extension _WireGraph:
@@ -98,7 +98,7 @@ the collated middleware + routes to a user-owned router and returns `[any Servic
 (M2.5). The user (Tier 1) or a generated `main` (Tier 2) constructs the
 `Application`.
 
-## Iteration M2.1 — Wire Core: `Wire<Module>` entry + graph-conformance emission
+## Iteration M2.1 — Wire Core: `Wire` entry + graph-conformance emission (shipped)
 
 The one new core piece (conformance emission), plus a developer-facing rename. Both
 **internal** and **framework-agnostic** — no Hummingbird knowledge.
@@ -131,82 +131,78 @@ The one new core piece (conformance emission), plus a developer-facing rename. B
   type (a protocol + members-to-keys mapping) + syntactic discovery; emit
   `extension _WireGraph: <Protocol> { … }` mapping each declared key's product to
   its member (`CollectedKey` → array member; `BuilderKey` → opaque member bound to
-  a protocol associated type), inferring associated types from the witnesses (e.g.
-  `Context` from a `CollectedKey<any RouteContributor<Context>>` element type). No
-  composed opaque return needed — the concrete graph conforms to every declared
-  protocol, and each adapter's generic `apply` picks the one it needs.
+  a protocol associated type), inferring any associated types from the witnesses.
+  The `CollectedKey` → array case is **shipped and validated** (WireHummingbird's
+  context-free surface uses exactly it: `var routes: [any RouteContributor]`);
+  associated-type inference is proven (spike-10 / IntegrationTests) and is what a
+  context-*carrying* adapter surface would use. No composed opaque return needed —
+  the concrete graph conforms to every declared protocol, and each adapter's generic
+  `apply` picks the one it needs.
 
 **Why now:** the conformance emission is the seam the whole model rests on,
 framework-agnostic (testable in isolation), and reusable (M3/M5 surface the same
 way). The rename is bundled because both touch the same generated file + goldens.
 
 **Validation gate:** full suite + all harness gates + task-cluster green on the
-`Wire<Module>` surface; plus a *framework-free* conformance check — a consumer
+`Wire` surface; plus a *framework-free* conformance check — a consumer
 declares a protocol, a `CollectedKey`, and a `WireGraphConformanceV1`, the generated
 graph conforms, and a generic function consumes it through the conformance while
 same-module code still reads members. (spike-10 proved the conformance compiles.)
 
-## Iteration M2.2 — WireHummingbird app-scoped routes (instance-is-the-contributor)
+## Iteration M2.2 — WireHummingbird context-free route slice (+ `@HummingbirdRoute` macro)
 
-First generated-code → real-Hummingbird proof, with today's annotations — **no new
-Wire capability**. Built as an **external repo** (see *Validation vehicle*).
+First generated-code → real-Hummingbird proof. Built as an **external repo**
+(`wire-hummingbird`, see *Validation vehicle*).
 
 **Scope:**
-- WireHummingbird library: `RouteContributor<Context>` + `HummingbirdComposable`
-  protocols, `HummingbirdKeys.routes = CollectedKey<any RouteContributor<BasicRequestContext>>`,
-  the `WireGraphConformanceV1` declaration, and `apply(graph, to: router)` (routes
-  only; middleware in M2.4). Context pinned to `BasicRequestContext` — the common
-  case; a custom-context app declares its own key + conformance.
-- Controllers written with **raw** annotations: `@Singleton @Contributes(to:
-  HummingbirdKeys.routes) struct HelloController: RouteContributor { @Inject
-  init(greeter:); func addRoutes(to router: some RouterMethods<BasicRequestContext>)
-  { … } }`. The instance conforms to `RouteContributor` and *is* the contributor —
-  the "instance is the contributor" path. No `@HummingbirdRoute` yet (M2.3).
-- The Router stays outside the graph; `apply(graph, to: router)` applies the
-  collated `graph.routes` via `addRoutes(to:)`.
+- WireHummingbird library: a **context-free** `RouteContributor` (witness
+  `addWireRoutes<Context: RequestContext>(to: some RouterMethods<Context>)`),
+  `HummingbirdComposable` (no associated type), `HummingbirdKeys.routes =
+  CollectedKey<any RouteContributor>`, the `WireGraphConformanceV1` declaration, and
+  `apply<Context>(_ graph: some HummingbirdComposable, to router: some RouterMethods<Context>)`
+  (routes only; middleware in M2.4). No `Context` on the surface — the app's context
+  binds at `apply`.
+- **Step one (done):** controllers with raw `@Singleton @Contributes(to:
+  HummingbirdKeys.routes)` + a hand-written conformance extension; the natural
+  `addRoutes(to: some RouterMethods<some RequestContext>)` is untouched, and the
+  conformance's `addWireRoutes` owns the mount (`router.group("path")`) and delegates.
+- **Step two:** the `@HummingbirdRoute("path")` **extension macro** generates that
+  conformance (no separate proxy type — the controller is stateless-to-conform and
+  in-module). No-arg form → root mount (`addRoutes(to: router)`). It can't add
+  `@Singleton`/`@Contributes` (attributes on the type), so those stay explicit (M2.3).
 
 **Why now:** proves the codegen → real-Hummingbird seam (bootstrap → conformance →
-apply → served request) using only capabilities already on main, so it validates
-M2.1's conformance emission against a real adapter without waiting on new core work.
+apply → served request) using only M2.1 core, on the shape the examples actually use.
 
-**Validation gate:** the external WireHummingbird repo's Hummingbird example — a
-`@Singleton @Contributes` controller holding an `@Inject`ed service; `Wire.bootstrap()`
-→ `WireHummingbird.apply(graph, to: router)` → `Application`; a request via
-`app.test(.router)` resolves through the controller.
+**Validation gate:** the `wire-hummingbird` repo's Hummingbird example — a
+`@Singleton @Contributes` controller with an `@Inject`ed service and a self-grouping
+conformance; `Wire.bootstrap()` → `WireHummingbird.apply(graph, to: router)` →
+`Application`; a request via `app.test(.router)` resolves through it. (Step one is
+green against pushed main; step two swaps the hand-written conformance for the macro.)
 
-## Iteration M2.3 — adapter contribution contract + binding rewrite (`@HummingbirdRoute` + proxy)
+## Iteration M2.3 — *optional*: fold `@Contributes` into `@HummingbirdRoute`
 
-The evolved adapter-annotation contract, and the second consumption path.
+Small, deferrable ergonomic. **No proxy / binding-rewrite** — that concept is
+dropped: it only existed to defer-instantiate a type-generic controller, which the
+context-free surface removes, and signature adaptation is the M2.2 conformance macro,
+not a separate type.
 
 **Scope:**
-- **Contribution-attribute contract.** Evolve `WireAdapterAnnotationV1` from the
-  `_wireRegister` side-effect to a *scoped contribution*: an adapter declares that
-  its annotation **aliases `@Contributes(to: key)`** (plus `contributableScopes` —
-  the scopes it's valid on). The plugin reads `@HummingbirdRoute` generically as a
-  contribution, knowing nothing about HTTP. `registerSignature`/`_wireRegister` and
-  their emission (`AdapterResolution`) retire — the AdapterHarness `@RoutedBy`
-  fixture is rewritten or retired. Delivers `@HummingbirdRoute` for the instance
-  case: the developer writes `@Singleton @HummingbirdRoute` — scope stays explicit,
-  the annotation is a pure `@Contributes` alias.
-- **Binding rewrite (proxy).** Built on the contract: when a controller's
-  `addRoutes` doesn't match `RouteContributor` (`addRoutes(to: RouterGroup<Ctx>)`, a
-  differently-named method — todos-dynamodb), the adapter **rewrites the binding**
-  into a generated proxy contributor that conforms and adapts. An adapter macro
-  fills the framework-specific proxy body — the old `@RoutedBy` member-macro role,
-  producing a `RouteContributor` conformance instead of `_wireRegister`. This is the
-  general "adapter replaces the binding" capability (shared with `@Configuration`).
+- Evolve `WireAdapterAnnotationV1` from the `_wireRegister` side-effect to a *scoped
+  contribution*: an adapter declares that its annotation **aliases `@Contributes(to:
+  key)`** (plus `contributableScopes`). The plugin then reads `@HummingbirdRoute`
+  generically as a contribution, so the developer writes `@Singleton
+  @HummingbirdRoute("path")` instead of *also* writing `@Contributes` — scope stays
+  explicit. `registerSignature`/`_wireRegister` and their emission
+  (`AdapterResolution`) retire; the AdapterHarness `@RoutedBy` fixture is rewritten
+  or retired.
 
-**Why now:** the proxy path genuinely can't be proven with raw annotations — it
-needs the rewrite — and this is where the iteration-8 side-effect contract is
-replaced by the contribution contract.
+**Why (and why optional):** it removes one annotation, nothing more — routes already
+collate via raw `@Contributes` from M2.2. Deferrable behind middleware/lifecycle.
 
-**Validation gate:** the WireHummingbird repo gains `@HummingbirdRoute` + a
-proxy-case controller (mismatched `addRoutes`) auto-adapted; both a conformance-case
-and a proxy-case controller serve through `app.test(.router)`.
-
-**Note:** the *request-scope* proxy (`proxyableScopes` — a `@Scoped` controller
-proxied to an app-scoped contributor that enters the scope per request) is **M5**,
-not here; M2.3's rewrite is app-scoped signature adaptation only.
+**Note:** the *request-scope* case (a `@Scoped` controller entering a per-request
+scope) is **M5/WireMVC** via the adapter-replaces-the-binding proxy — a distinct,
+request-scope mechanism, not this app-scoped contribution-attribute.
 
 ## Iteration M2.4 — middleware fold (`BuilderKey` via `MiddlewareFixedTypeBuilder`)
 
@@ -255,7 +251,7 @@ graph-teardown-as-`Service` wrapper is the M2 piece.
 **Scope:**
 - `@main @WireHummingbird` on a composition-root type. The macro reads its members
   (spike-2): an `@Inject`ed config value, `routerBuilder()`, `applicationConfiguration()`.
-- Generates `main`: `Wire<Module>.bootstrap()` → `routerBuilder()` → `apply`
+- Generates `main`: `Wire.bootstrap()` → `routerBuilder()` → `apply`
   collated middleware+routes → construct `Application(configuration:, services:)`
   → run. Hides the Tier-1 two-call shape (it can name the generated bootstrap).
 
@@ -282,21 +278,19 @@ Request scope leaves M2 entirely, because it needs routing Wire generates:
   `addRoutes` is arbitrary hand-written routing; embedding per-request scope entry
   would mean parsing and rewriting that body — intractable. WireMVC *generates* the
   routing, so it can embed the scope entry cleanly.
-- **The mechanism** *extends M2.3's binding rewrite* (`proxyableScopes`): where
-  M2.3 rewrites an app-scoped, signature-mismatched controller into a proxy, M5 adds
-  the request-scope case — a `@Scoped` controller becomes an app-scoped proxy whose
-  *generated* `addRoutes` embeds the scope entry, holding a **back-reference to the
-  graph** (populated post-construction, weakly, via the shipped `@Inject weak var`
-  pattern) to build per-request scopes. Same rewrite primitive, same uniform
-  `apply` — no separate scoped path.
+- **The mechanism** (the design's *only* proxy — request-scope, not the dropped
+  app-scoped one): a `@Scoped` controller becomes an app-scoped **proxy contributor**
+  whose *generated* `addRoutes` embeds the scope entry, holding a **weak
+  back-reference to the app graph** (the shipped `@Inject weak var` pattern) to build
+  per-request scopes. Collated and applied like any contributor — no separate scoped
+  path.
 - **The back-reference does double duty:** it's also how a seeded scope receives
   its **parent** — `bootstrap<Seed>Scope(seed:, wireGraph:)`'s `wireGraph:` becomes
   the proxy's back-ref rather than an argument threaded through a route wrapper. The
   graph wires it in.
-- **"Adapter replaces the binding" is built in M2.3** as a shared Wire primitive
-  (the same shape `@Configuration` needs — replace `let port: Int` with a
-  config-reading provider), so M5 reuses it rather than inventing a request-scope
-  one-off.
+- **"Adapter replaces the binding" is a shared Wire primitive** (the same shape
+  `@Configuration` needs — replace `let port: Int` with a config-reading provider),
+  built here in M5 and reused rather than reinvented per adapter.
 - **Foundation carried forward, not discarded:** [spike-8](../../swift-wire-spikes/spike-8-hummingbird-request-scope/)
   (request-scope entry, mechanism B), seeded-scope construction
   (`bootstrap<Seed>Scope`, iteration 4), and per-root reachability materialisation
@@ -321,15 +315,19 @@ Request scope leaves M2 entirely, because it needs routing Wire generates:
 
 ## Open decisions to pin
 
-- **The graph-conformance emission details** (M2.1): how associated types are
-  inferred when a member maps to a `BuilderKey`'s opaque product; how the composed
-  `some (A & B)` return is spelled when zero adapters are present (bare graph) vs one
-  vs many.
+- **BuilderKey conformance member** (M2.4): how the associated type is inferred when
+  a `HummingbirdComposable`-style member maps to a `BuilderKey`'s opaque product (the
+  middleware case). (The `CollectedKey`→array case is shipped.)
 - **Empty collections** — a middleware `BuilderKey` with no contributors needs an
   identity witness (does `MiddlewareFixedTypeBuilder` accept an empty block?).
-- **Proxy vs conformance detection** (M2.2) — the macro inspecting the controller's
-  `addRoutes` signature to decide; the fallback (always proxy) if inspection is
-  unreliable.
+- **`@HummingbirdRoute` macro details** (M2.2 step two) — the extension macro
+  emitting the witness that groups at the annotation path (no-arg → root mount); it
+  assumes the author's routing method is `addRoutes` (convention).
+
+**Decided** (were open): the graph conformance is **shipped** (M2.1); the entry is
+internal `Wire.bootstrap()` returning the **concrete** graph (no `Wire<Module>`, no
+composed `some (A & B)`); the route surface is **context-free**; signature adaptation
+is a **conformance-extension macro**, not a proxy.
 
 ## When M2 is "done"
 
