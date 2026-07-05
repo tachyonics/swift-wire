@@ -3,5 +3,5 @@ import SwiftSyntaxMacros
 
 @main
 struct WireRoutingPlugin: CompilerPlugin {
-    let providingMacros: [Macro.Type] = [RoutedByMacro.self]
+    let providingMacros: [Macro.Type] = [HarnessRouteMacro.self]
 }

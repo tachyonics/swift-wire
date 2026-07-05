@@ -681,10 +681,9 @@ package struct SourceFileDiscovery: Sendable {
     /// matched by name against adapter use-sites to resolve the generated
     /// `_wireRegister` calls.
     package let adapterAnnotations: [DiscoveredAdapterAnnotation]
-    /// Adapter-annotation use-sites (adapter-shaped attributes on type decls)
-    /// found in this file. Aggregated across the module by `WireGen` and
-    /// classified against the discovered adapter definitions.
-    package let adapterUseSites: [AdapterUseSite]
+    /// Contribution-alias candidates (every type-decl attribute) found in this
+    /// file. Aggregated and classified against declared aliases.
+    package let aliasUseSites: [ContributionAliasUseSite]
     /// `@resultBuilder` types found in this file, with their fold result
     /// type. Matched against `BuilderKey<Builder>` keys so a builder
     /// aggregate knows its producer-side result type.
@@ -705,7 +704,7 @@ package struct SourceFileDiscovery: Sendable {
         multibindingKeys: [DiscoveredMultibindingKey] = [],
         bindingKeys: [DiscoveredBindingKey] = [],
         adapterAnnotations: [DiscoveredAdapterAnnotation] = [],
-        adapterUseSites: [AdapterUseSite] = [],
+        aliasUseSites: [ContributionAliasUseSite] = [],
         resultBuilders: [DiscoveredResultBuilder] = [],
         graphConformances: [DiscoveredGraphConformance] = []
     ) {
@@ -719,7 +718,7 @@ package struct SourceFileDiscovery: Sendable {
         self.multibindingKeys = multibindingKeys
         self.bindingKeys = bindingKeys
         self.adapterAnnotations = adapterAnnotations
-        self.adapterUseSites = adapterUseSites
+        self.aliasUseSites = aliasUseSites
         self.resultBuilders = resultBuilders
         self.graphConformances = graphConformances
     }
@@ -778,7 +777,7 @@ package func discover(
         multibindingKeys: visitor.multibindingKeys,
         bindingKeys: visitor.bindingKeys,
         adapterAnnotations: visitor.adapterAnnotations,
-        adapterUseSites: visitor.adapterUseSites,
+        aliasUseSites: visitor.aliasUseSites,
         resultBuilders: visitor.resultBuilders,
         graphConformances: visitor.graphConformances
     )

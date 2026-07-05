@@ -1,169 +1,111 @@
 # Adapter model — design note
 
-> **Status:** forward-looking design. The adapter-annotation contract is being
-> built in iteration 8 (type-level, unkeyed). The producer-level forms and
-> keyed dependencies described here land in iteration 9, with the task-cluster
-> migration. Captures the conceptual model so it isn't re-derived.
+> **Status:** the adapter-annotation contract as shipped in **M2.3** — a
+> *contribution alias*. This **supersedes the earlier `_wireRegister` side-effect
+> "sink" model** (post-construction registration, `registerSignature`/`form`/`phase`,
+> `adapterAnnotatedIdentities`), which collation replaced — see *What changed*.
 
 ## What an adapter is
 
 The adapter-annotation contract is swift-wire's extension point: a third-party
-package publishes its own annotation — WireOpenAPI's `@RoutedBy`, a
-hypothetical WireMVC's `@Controller` — that hooks a framework integration into
-the generated bootstrap, without the DI core knowing the framework. The core
-does the wiring; the contract is the published, versioned surface adapters
-build against.
+package publishes its own annotation — WireHummingbird's `@HummingbirdRoute`, the
+harness's `@RoutedBy` — that **aliases `@Contributes(to: key)`**. The annotated
+binding collates into a multibinding key the adapter owns; a facade the adapter
+ships applies the collated products to a framework object (a Hummingbird `Router`, a
+`ServerTransport`) that stays *outside* the graph. The DI core does the collation
+and knows nothing about the framework; the contract is the published, versioned
+surface adapters build against.
 
-## An adapter is a sink
+## The contract
 
-An adapter is a **post-construction sink**: it consumes a single managed
-instance plus Wire-resolved dependencies, performs a side effect (register a
-controller with a router, a consumer with a queue, a job handler with a
-scheduler), and produces no binding. It is consumer-side — the annotated thing
-becomes an additional consumer of its own instance plus whatever deps the
-adapter declares. Construction and this consumption are separate: the instance
-exists because it's a binding; the adapter merely reads it afterwards.
+```swift
+public let routedBy = WireAdapterAnnotationV1(
+    annotation: "RoutedBy",                  // the attribute spelling, without `@`
+    contributesTo: RoutingKeys.controllers   // the multibinding key `@RoutedBy` aliases into
+)
+```
 
-## What an adapter can attach to — a single managed instance
+Read *syntactically* — like a binding-key declaration, never executed:
+`contributesTo` is captured as its written key reference, not its runtime value.
+Versioned by type name (a shape change ships `WireAdapterAnnotationV2`).
 
-A sink acts on *one* instance, so it attaches only to a producer that resolves
-to a single managed instance:
+## How it works
 
-| Producer | One instance? | Adapter | Form |
-|---|---|---|---|
-| `@Singleton` | yes — self-produced | ✓ | type-level (member macro) |
-| `@Provides let`/`var` | yes — externally produced | ✓ | producer-level (peer macro) |
-| non-generic `@Provides func -> Concrete` | yes — factory-built once | ✓ | producer-level (peer macro) |
-| generic `@Provides func -> X<T>` | no — parameterised family | ✗ | — |
-
-The line is **single managed instance vs parameterised factory** — not
-let-vs-func, and not custom-construction-vs-not. A `@Provides func` with a
-custom body returning one concrete type is still one instance (the
-"do setup before constructing, then register it" case). Only *parameterisation*
-— a generic factory specialised per consumer demand — removes the single
-instance, and with it the thing a sink would attach to.
-
-### Prior art
-
-This is the boundary established DI already draws around instance-level
-concerns. The shared concept (not the annotation contract, which is
-swift-wire's) shows up as:
-
-- **Dagger / Guice assisted injection** — parameterised factories **cannot be
-  scoped**; no single instance for a scope to pin.
-- **Spring prototype beans** — **no destruction lifecycle callbacks**; the
-  container hands the object off and keeps no instance to manage.
-- **Spring `@Bean` factory methods** — *are* managed singletons with full
-  lifecycle: custom construction, one instance, hooks apply.
-
-Scope and destruction callbacks are the canonical instance-lifecycle concerns;
-an adapter sink (a once, post-construction registration) is the same category,
-so it attaches exactly where they do — to a single managed instance, never to
-a parameterised factory.
-
-A *per-production* hook is a different animal that **can** apply to a factory
-(Spring's `BeanPostProcessor` runs on every prototype; a decorator wraps each
-produced instance). An adapter is not one of those — it registers once, so it
-needs the one instance.
-
-## Forms
-
-- **Type-level (M1).** The annotation sits on a type (`@Singleton @RoutedBy(…)`);
-  a member macro generates `_wireRegister(instance: Self, …)`; `instance:` is
-  the type's graph binding.
-- **Producer-level (iteration 9).** The annotation sits on a single-instance
-  `@Provides let`/`var` or non-generic `@Provides func -> Concrete`; a peer
-  macro generates the registration for the produced value. This is the case
-  for wiring an existing instance, or one whose type you don't own (and so
-  bind via `@Provides` rather than annotate `@Singleton`).
-
-`@attached(member)` can't sit on a value declaration — that's *why* the
-producer-level form is a peer macro rather than the same member macro. The
-`WireAdapterAnnotationV1.Form` enum carries the form; M1 declares `.typeLevel`.
-
-## How it works (type-level, M1)
-
-1. The adapter package declares a `WireAdapterAnnotationV1` (discovered like a
-   binding key) giving the annotation name, form, phase, and the
-   `_wireRegister` signature template.
-2. The consumer applies the annotation; its build plugin discovers the use-site
-   and, from the manifest, knows the `_wireRegister` signature without expanding
-   the macro (it runs before expansion).
-3. Wire validates each declared dependency against the binding graph (missing →
-   error at the annotation) and emits, post-graph,
-   `Type._wireRegister(instance: <graph member>, router: <resolved dep>)`.
-4. Separately, the adapter's macro (at compiler expansion) generates the actual
-   `_wireRegister` body.
+1. The adapter package declares the `WireAdapterAnnotationV1` alias, **owns the
+   multibinding key** (`RoutingKeys.controllers = CollectedKey<any Controller>`),
+   and ships a **facade** that consumes the key's product (`apply(graph, to:)`).
+2. The consumer applies the annotation (`@Singleton @RoutedBy struct C {}`). The
+   build plugin discovers the alias definition (by re-parsing the adapter's
+   sources) and the use-site — *name-agnostically*, because the defining module may
+   differ from the use module.
+3. After aggregation, the plugin injects a **synthetic `@Contributes(to: key)`**
+   onto each aliased binding, which then flows through the ordinary multibinding
+   fan-in into the key's aggregate. **No bespoke emission** — collation is the
+   whole mechanism.
+4. The aggregate is consumed like any multibinding: a keyed `@Inject(key) var`, or
+   the graph-conformance surface (`extension _WireGraph: HummingbirdComposable`) a
+   facade reads.
 
 ## The macro / Wire split
 
 The framework logic lives in the **adapter's macro**, run by the compiler at
-expansion; Wire does only DI plumbing. WireMVC illustrates it:
+expansion; Wire does only DI plumbing. The Wire-facing surface is *one annotation
+plus its key*.
 
-- `@Get`, `@Middleware`, … are WireMVC's marker macros on controller *methods*.
-  Wire has no definition for them, so its scan never matches them — they're
-  invisible to the DI core.
-- the type-level `@Controller` adapter is Wire's *only* surface. Its macro, at
-  expansion, walks the controller's methods, reads their `@Get`/`@Middleware`
-  attributes, and composes the routing into the `_wireRegister` body it
-  generates.
-- Wire sees `@Controller`, validates its declared deps (the router) against the
-  graph, and emits `Controller._wireRegister(instance: <controller>, router:)`
-  post-construction. It never learns routing or HTTP.
+- The adapter's macro makes the annotated type conform to the collated element type
+  — `@RoutedBy` adds `: Controller`; `@HummingbirdRoute("path")` adds the
+  `RouteContributor` conformance whose witness owns the mount. Wire never reads
+  this; it's the adapter's framework surface.
+- Wire sees `@RoutedBy`/`@HummingbirdRoute` only as the alias — a contribution to
+  the key. It never learns routing or HTTP.
+- An adapter can carry an arbitrarily rich internal vocabulary (`@Get`,
+  `@Middleware`, … as marker macros on controller *methods*); Wire's scan never
+  matches them, so they're invisible to the DI core.
 
-So an adapter package can carry an arbitrarily rich internal vocabulary; the
-Wire-facing surface is one annotation plus its dependency signature.
+## Collation, not registration
 
-## Consumption and the dead-binding check
+The shipped model is **collation**, not side-effect registration:
 
-The dead-binding check asks "does anything consume this binding?" An adapter
-makes some binding live, but *which* binding, and whether Wire can soundly say
-so, depends on the adapter's shape. The dividing line is **derivation edge vs
-side effect**:
+- **Contributors collate.** Each `@X` binding contributes its product into the
+  adapter's `CollectedKey` (routes, controllers) or `BuilderKey` (a middleware
+  fold); the graph fans them in.
+- **A facade applies them.** The framework object (`Router`, `ServerTransport`)
+  stays *outside* the graph; `apply(graph, to: router)` applies the collated
+  products to it. Nothing in the graph consumes a *mutated* collaborator, so there's
+  no ordering problem and no post-graph phase.
 
-- **Side-effect adapter (postGraph sink — `@RoutedBy`, `@Controller`).** There
-  is no derivation edge: the controller is registered *into* the router;
-  neither is derived from the other. The annotation marks its **subject** (the
-  annotated instance) as used — that's the sound, declared fact — so the subject
-  is live. The adapter's other declared dependencies are **collaborators** the
-  side effect touches; what `_wireRegister` does with them is the adapter's own
-  opaque logic, so Wire does *not* claim them consumed. A binding provided
-  solely for such an adapter to use (the router) stays subject to the normal
-  check and carries `allowUnused`.
-- **Derivation-edge adapter (the iteration-9 forms).** The adapter produces a
-  value *from* its declared dependency, so the dependency is a genuine
-  dependency edge — *value ← dep* — and is consumed, soundly, from the
-  declaration. Two shapes:
-  - *Injection customiser* — `@Inject @Configuration(ConfigReader.self, "port")`
-    on a consumer's injection point rewrites that point's dependency from the
-    nominal `Int` to `ConfigReader`; the value is synthesised from it.
-  - *Producer* — the `@Provides`-level form, whose output is derived from its
-    inputs.
+See [`WireHummingbirdDesign.md`](WireHummingbirdDesign.md) for the collation model
+end-to-end (routes as a `CollectedKey`, middleware as a `BuilderKey`, the
+graph-conformance surface).
 
-  The neat consequence: these need **no adapter-specific dead-binding rule**.
-  The declared dependency *is* an effective dependency edge, so Wire's ordinary
-  dependency-edge liveness keeps it live, and the annotated binding (the output)
-  is a normal producer — dead if nobody injects it.
+## Dead-binding check
 
-So only the side-effect sink needs special handling — exempt the annotated
-subject, claim nothing else. `adapterAnnotatedIdentities` computes exactly that
-set (the `Self` of each use-site matching a definition) and the dead-binding
-check folds it into the consumed set, the same way a multibinding contributor
-is live via its aggregate. The treatment is keyed to the manifest's
-`form`/`phase`; M1 ships only the postGraph sink, so that exemption is the whole
-rule. The derivation-edge forms slot in as dependency edges when they land —
-nothing here generalises to "annotated is always live" or "deps are never
-live"; both are the sink case.
+No adapter-specific rule. An aliased binding has a **contribution**, so it's a
+multibinding contributor — live via its aggregate the same way any `@Contributes`
+binding is. (The earlier sink model needed `adapterAnnotatedIdentities` to exempt an
+un-consumed registered subject; collation removes the need — the contribution *is*
+the consumption edge.)
 
-## Relationship to the rest of the model
+## What changed (why this note was rewritten)
 
-- **Self-production.** The annotated `@Singleton` is a graph node like any
-  other (a generic one lifts its parameter onto `_WireGraph`, resolved by
-  dependency identity — not specialised); the adapter just consumes it
-  post-construction. This is why `@RoutedBy` doesn't need a CompositionRoot to
-  pull the controller in — the singleton already exists. See
-  [`OpaqueTypesSupport.md`](OpaqueTypesSupport.md).
-- **Keyed dependencies.** An adapter's declared deps can reference keyed
-  bindings via `keyed(Type.self, with: Key)`, a member of the keyed-reference
-  family. See [`ScopeAndKeyModelEvolution.md`](ScopeAndKeyModelEvolution.md),
-  "Adapter dependencies."
+The earlier model made an adapter a **post-construction sink**: the annotation's
+macro generated `_wireRegister(instance: Self, router: $0)`, and Wire emitted that
+call after graph construction to register the instance *into* a graph-bound
+collaborator (a `Router`). It carried `form`/`phase`/`registerSignature`, an ordering
+concern (a consumer of the mutated collaborator had to run after registration), and
+a bespoke dead-binding exemption.
+
+Collation supersedes it: the `Router` leaves the graph, the annotation aliases
+`@Contributes`, and the contributor flows through the existing multibinding
+machinery. The whole `_wireRegister` path — `AdapterResolution`, the emission, the
+use-site scanner, the exemption, and the `form`/`phase`/`registerSignature` fields —
+retired in M2.3.
+
+## Scopes — the contract's next axis (future)
+
+An annotation may later declare the scopes it's valid on: `contributableScopes`
+(app-scoped, direct — the M2.3 default) and `proxyableScopes` (a request-scoped
+controller proxied to an app-scoped contributor that enters the scope per request —
+**M5/WireMVC**, via the shared "adapter replaces the binding" primitive). Not part
+of the M2.3 contract; see [`WireHummingbirdDesign.md`](WireHummingbirdDesign.md),
+*Scope model*.

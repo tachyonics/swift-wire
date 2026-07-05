@@ -1,0 +1,86 @@
+import Testing
+
+@testable import WireGenCore
+
+/// M2.3: contribution aliases. An adapter declares `WireAdapterAnnotationV1(annotation:
+/// "X", contributesTo: key)`, so `@X` on a binding aliases `@Contributes(to: key)`.
+/// These pin the three moving parts: discovery of the `contributesTo` form (legacy
+/// `registerSignature` still works), name-agnostic use-site capture, and the
+/// post-aggregation injection of a synthetic contribution.
+@Suite("Contribution alias")
+struct ContributionAliasTests {
+    @Test func discoversContributesToForm() throws {
+        let source = """
+            enum HummingbirdAdapter {
+                static let route = WireAdapterAnnotationV1(
+                    annotation: "HummingbirdRoute", contributesTo: HummingbirdKeys.routes)
+            }
+            """
+        let annotation = try #require(
+            discover(in: source, sourcePath: "Adapter.swift", module: testModule).adapterAnnotations.first
+        )
+        #expect(annotation.annotationName == "HummingbirdRoute")
+        #expect(annotation.contributesToKey == "HummingbirdKeys.routes")
+    }
+
+    @Test func capturesAliasUseSitesNameAgnostically() {
+        let source = """
+            @Singleton
+            @HummingbirdRoute("todos")
+            struct TodoController {}
+            """
+        let sites = discover(in: source, sourcePath: "C.swift", module: testModule).aliasUseSites
+        #expect(sites.contains { $0.annotationName == "HummingbirdRoute" && $0.qualifiedTypeName == "TodoController" })
+    }
+
+    @Test func injectsContributionForAliasedBinding() throws {
+        let binding = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "TodoController",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [],
+                location: mockLocation("C.swift"),
+                originModule: testModule
+            )
+        )
+        let alias = DiscoveredAdapterAnnotation(
+            annotationName: "HummingbirdRoute",
+            contributesToKey: "HummingbirdKeys.routes",
+            location: mockLocation("Adapter.swift"),
+            originModule: testModule
+        )
+        let useSite = ContributionAliasUseSite(
+            annotationName: "HummingbirdRoute",
+            qualifiedTypeName: "TodoController",
+            location: mockLocation("C.swift"),
+            originModule: testModule
+        )
+
+        let injected = injectAliasContributions(into: [binding], aliases: [alias], useSites: [useSite])
+        let contributions = try #require(injected.first?.contributions)
+        #expect(contributions.contains { $0.keyReference == "HummingbirdKeys.routes" })
+    }
+
+    @Test func nonAliasAttributesAreNotInjected() {
+        let binding = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "Plain",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [],
+                location: mockLocation("P.swift"),
+                originModule: testModule
+            )
+        )
+        // `@Singleton` is captured as a candidate but matches no alias → no contribution.
+        let useSite = ContributionAliasUseSite(
+            annotationName: "Singleton",
+            qualifiedTypeName: "Plain",
+            location: mockLocation("P.swift"),
+            originModule: testModule
+        )
+        let injected = injectAliasContributions(into: [binding], aliases: [], useSites: [useSite])
+        #expect(injected.first?.contributions.isEmpty == true)
+    }
+}

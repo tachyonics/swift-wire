@@ -1,66 +1,44 @@
 import SwiftSyntax
 
 // Recognition of adapter-annotation definitions — `WireAdapterAnnotationV1`
-// declarations. An adapter package declares one per annotation it publishes
-// (e.g. `@RoutedBy`); the definition tells Wire what the annotation's macro
-// generates, so the build plugin can validate the annotation's dependencies
-// and emit registration calls without expanding the macro.
+// declarations. An adapter package declares one per annotation it publishes (e.g.
+// `@RoutedBy`, `@HummingbirdRoute`): the attribute `@annotation` on a binding is an
+// alias for `@Contributes(to: contributesTo)`.
 //
 // Discovered anywhere in source, syntax-only — the same discipline as
-// `BindingKeyScanning`. In M1 a consumer re-parses its Wire-aware
-// dependencies' sources, so an adapter package's definitions reach WireGen
-// without a manifest file; the generated manifest is M6a. See
+// `BindingKeyScanning`. A consumer re-parses its Wire-aware dependencies' sources,
+// so an adapter package's definitions reach WireGen without a manifest file. See
 // `MultiModuleComposition.md`.
 
-/// Where an adapter annotation attaches. M1: type-level only.
-package enum AdapterForm: Sendable, Equatable {
-    case typeLevel
-}
-
-/// When an adapter's generated registration runs relative to graph
-/// construction. M1: post-graph only. Ordered so emission can group
-/// registrations by phase.
-package enum AdapterPhase: Sendable, Comparable {
-    case postGraph
-}
-
-/// One adapter-annotation definition found in source — a
-/// `WireAdapterAnnotationV1` declaration describing an annotation the module
-/// publishes.
+/// One adapter-annotation definition found in source — a `WireAdapterAnnotationV1`
+/// declaration mapping an annotation the module publishes to a multibinding key.
 package struct DiscoveredAdapterAnnotation: Sendable, Equatable {
     /// The attribute spelling without the leading `@` — `"RoutedBy"`. Matches
     /// use-sites to this definition.
     package let annotationName: String
-    package let form: AdapterForm
-    package let phase: AdapterPhase
-    /// The generated `_wireRegister` parameter template — e.g.
-    /// `"(instance: Self, router: $0)"`. `Self` is the annotated type, `$0`
-    /// the annotation's first type argument, any other token a literal type.
-    package let registerSignature: String
+    /// The multibinding-key reference the annotation contributes to — `@X` on a
+    /// binding aliases `@Contributes(to: contributesToKey)`.
+    package let contributesToKey: String
     package let location: SourceLocation
     package let originModule: String
 
     package init(
         annotationName: String,
-        form: AdapterForm,
-        phase: AdapterPhase,
-        registerSignature: String,
+        contributesToKey: String,
         location: SourceLocation,
         originModule: String
     ) {
         self.annotationName = annotationName
-        self.form = form
-        self.phase = phase
-        self.registerSignature = registerSignature
+        self.contributesToKey = contributesToKey
         self.location = location
         self.originModule = originModule
     }
 }
 
 /// Recognise an adapter-annotation definition — a `let`/`static let` whose
-/// initialiser is a `WireAdapterAnnotationV1(...)` call — and capture its
-/// fields. Returns `nil` for any declaration that doesn't construct
-/// `WireAdapterAnnotationV1`, or whose `form`/`phase` name an unknown case.
+/// initialiser is a `WireAdapterAnnotationV1(annotation:, contributesTo:)` call —
+/// and capture its annotation name and key reference. Returns `nil` for any
+/// declaration that doesn't construct `WireAdapterAnnotationV1` with both arguments.
 func adapterAnnotation(
     from node: VariableDeclSyntax,
     sourcePath: String,
@@ -75,50 +53,23 @@ func adapterAnnotation(
     else { return nil }
 
     var annotationName: String?
-    var form: AdapterForm?
-    var phase: AdapterPhase?
-    var registerSignature: String?
+    var contributesToKey: String?
     for argument in call.arguments {
         switch argument.label?.text {
         case "annotation":
             annotationName = argument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
-        case "form":
-            form = adapterForm(from: argument.expression)
-        case "phase":
-            phase = adapterPhase(from: argument.expression)
-        case "registerSignature":
-            registerSignature = argument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
+        case "contributesTo":
+            contributesToKey = argument.expression.trimmedDescription
         default:
             break
         }
     }
 
-    guard let annotationName, let form, let phase, let registerSignature else { return nil }
-
+    guard let annotationName, let contributesToKey else { return nil }
     return DiscoveredAdapterAnnotation(
         annotationName: annotationName,
-        form: form,
-        phase: phase,
-        registerSignature: registerSignature,
+        contributesToKey: contributesToKey,
         location: makeSourceLocation(of: pattern.identifier, sourcePath: sourcePath, converter: converter),
         originModule: module
     )
-}
-
-/// The `AdapterForm` named by a `.case` member-access expression, or `nil`
-/// for an unknown case.
-private func adapterForm(from expression: ExprSyntax) -> AdapterForm? {
-    switch expression.as(MemberAccessExprSyntax.self)?.declName.baseName.text {
-    case "typeLevel": return .typeLevel
-    default: return nil
-    }
-}
-
-/// The `AdapterPhase` named by a `.case` member-access expression, or `nil`
-/// for an unknown case.
-private func adapterPhase(from expression: ExprSyntax) -> AdapterPhase? {
-    switch expression.as(MemberAccessExprSyntax.self)?.declName.baseName.text {
-    case "postGraph": return .postGraph
-    default: return nil
-    }
 }

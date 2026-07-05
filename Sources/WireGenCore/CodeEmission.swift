@@ -41,7 +41,6 @@ package func renderWireGraph(
     topologicalOrder: [DiscoveredBinding],
     containerTopologicalOrders: [String: [DiscoveredBinding]] = [:],
     seedScopeOrders: [SeedScopeEmission] = [],
-    adapterRegistrations: [ResolvedAdapterRegistration] = [],
     graphConformances: [DiscoveredGraphConformance] = []
 ) -> String {
     var lines: [String] = []
@@ -65,7 +64,6 @@ package func renderWireGraph(
         bootstrapFunction: "_wireBootstrap",
         bootstrapMethod: "bootstrap",
         topologicalOrder: topologicalOrder,
-        adapterRegistrations: adapterRegistrations,
         into: &lines,
         entries: &bootstrapEntries
     )
@@ -323,7 +321,6 @@ private func appendStruct(
     bootstrapFunction: String,
     bootstrapMethod: String,
     topologicalOrder: [DiscoveredBinding],
-    adapterRegistrations: [ResolvedAdapterRegistration] = [],
     into lines: inout [String],
     entries: inout [BootstrapEntry]
 ) {
@@ -435,16 +432,6 @@ private func appendStruct(
     // scope. Empty when no `@Inject weak var` sugar or
     // `@Inject func` member injections exist in the graph.
     lines.append(contentsOf: renderMemberInjections(for: topologicalOrder))
-
-    // Adapter registrations (post-graph): after every binding is constructed,
-    // call each adapter-generated `_wireRegister` with the matched locals. M1
-    // emits only the post-graph phase, into the default bootstrap.
-    for registration in adapterRegistrations {
-        let arguments = registration.arguments.map { argument in
-            argument.label.map { "\($0): \(argument.localName)" } ?? argument.localName
-        }.joined(separator: ", ")
-        lines.append("    \(registration.calleeType)._wireRegister(\(arguments))")
-    }
 
     // Final return — memberwise init takes one argument per stored
     // property in declaration order. Label is the property name;
