@@ -1,74 +1,29 @@
 import Wire
 import WireRouting
 
-/// A concrete `@Singleton` controller the `@RoutedBy` adapter registers with the
-/// router. The adapter consumes it as `instance: Self`, which keeps it live —
-/// no `allowUnused` needed.
-@Singleton
-@RoutedBy(Router.self)
-struct SimpleController {
-    @Inject init() {}
+// `@RoutedBy` controllers — `@Singleton` bindings the adapter aliases into
+// `@Contributes(to: RoutingKeys.controllers)`, plus a `Controller` conformance the
+// `@RoutedBy` macro adds.
+@Singleton @RoutedBy struct SimpleController { @Inject init() {} }
+@Singleton @RoutedBy struct AnotherController { @Inject init() {} }
+@Singleton @RoutedBy struct ThirdController { @Inject init() {} }
+
+/// Consumes the collated controllers (keyed to the `RoutingKeys.controllers`
+/// CollectedKey) — keeps the contribution live and lets us assert the collation
+/// ran across the package boundary.
+@Singleton(allowUnused: true)
+struct Registry {
+    @Inject(RoutingKeys.controllers) var controllers: [any Controller]
 }
 
-protocol RoutingController {}
-protocol Backend: Sendable {}
-struct InMemoryBackend: Backend {}
-
-/// A *fully lifted* controller: `@Singleton(as:)` keys it by an opaque identity
-/// `some RoutingController`, so it lifts a `_WireGraph` parameter of its own.
-/// Generic over a constrained backend injected as a bare parameter (bridged to
-/// the `some Backend` leaf). Proves `@RoutedBy` resolves an opaque bare-`some P`
-/// node — read via the concrete-reference map, not the opaque key.
-@Singleton(as: RoutingController.self)
-@RoutedBy(Router.self)
-struct LiftedController<B: Backend>: RoutingController {
-    @Inject init(backend: B) {}
-}
-
-/// A *partially lifted* (lift-the-minimum) controller: a plain generic
-/// `@Singleton` keyed by its structural identity `StructuralController<some
-/// Backend>`, so it lifts no parameter of its own — it's a nested
-/// `StructuralController<T0>` field reusing the backend's parameter. Proves
-/// `@RoutedBy` resolves a structural node through the same concrete-reference map.
-@Singleton
-@RoutedBy(Router.self)
-struct StructuralController<B: Backend>: RoutingController {
-    @Inject init(backend: B) {}
-}
-
-enum Wiring {
-    // The router is the registration's collaborator, not a binding consumed by a
-    // derivation edge — what `_wireRegister` does with it is the adapter's own
-    // logic, which Wire can't see — so it carries `allowUnused`. (It's read off
-    // the graph below to assert the registration ran.)
-    @Provides(allowUnused: true)
-    static let router = Router()
-
-    // The composition-root leaf for the lifted controller's backend.
-    @Provides
-    static let backend: some Backend = InMemoryBackend()
-}
-
-// WireBuildPlugin runs on this target: it discovers the `@RoutedBy` definition
-// from the activated WireRouting library, validates the registration's
-// dependencies against the graph, and emits
-// `SimpleController._wireRegister(instance:router:)` in the bootstrap. Running
-// it proves the adapter contract end-to-end: definition discovery across the
-// package boundary, use-site resolution, and post-construction registration.
+// WireBuildPlugin runs on this target: it discovers the `@RoutedBy` definition from
+// the activated WireRouting library, reads each `@RoutedBy` use-site as
+// `@Contributes(to: RoutingKeys.controllers)`, and collates the three controllers
+// into the `[any Controller]` the Registry injects. Running it proves the
+// contribution-alias contract end-to-end across the package boundary.
 let graph = try await Wire.bootstrap()
 precondition(
-    graph.router.routes.contains("SimpleController"),
-    "concrete @RoutedBy registration did not run"
+    graph.registry.controllers.count == 3,
+    "expected 3 @RoutedBy controllers collated, got \(graph.registry.controllers.count)"
 )
-// Each lifted controller records under its concrete type — the fully-lifted
-// (`LiftedController<…>`) and the partially-lifted (`StructuralController<…>`) —
-// so match on the prefix.
-precondition(
-    graph.router.routes.contains { $0.hasPrefix("LiftedController") },
-    "fully-lifted @RoutedBy registration did not run"
-)
-precondition(
-    graph.router.routes.contains { $0.hasPrefix("StructuralController") },
-    "partially-lifted @RoutedBy registration did not run"
-)
-print("OK: @RoutedBy registration emitted, validated, and executed (concrete + full + partial lifting)")
+print("OK: @RoutedBy contribution alias collated 3 controllers across the package boundary")

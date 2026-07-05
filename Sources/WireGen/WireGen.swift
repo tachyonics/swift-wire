@@ -41,8 +41,16 @@ struct WireGen {
         let groups = parseModuleGroups(Array(arguments.dropFirst(3)))
         guard let consumerModule = groups.first?.module else { printUsageAndExit() }
 
-        let aggregate = discoverAllSources(groups: groups, consumerModule: consumerModule)
+        var aggregate = discoverAllSources(groups: groups, consumerModule: consumerModule)
         print(renderDiscoveryReport(perFile: aggregate.perFile))
+
+        // Contribution aliases (`@X` → `@Contributes(to: key)`) inject a synthetic
+        // contribution onto each aliased binding, before graphs build.
+        aggregate.allBindings = applyAliasContributions(
+            to: aggregate.allBindings,
+            aliases: aggregate.adapterAnnotations,
+            useSites: aggregate.aliasUseSites
+        )
 
         // One graph per scope — default, per-`@Container`, and per-seed.
         let graphs = buildAllGraphs(in: aggregate)
@@ -71,18 +79,6 @@ struct WireGen {
 
         let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
 
-        // Adapter registrations resolve against the *valid* default graph, so
-        // this runs after `failIfAnyGraphInvalid`. Their errors (missing
-        // dependency, duplicate definition) get their own fail step rather than
-        // riding the cross-file pass, which fires before the graph is known good.
-        let (adapterRegistrations, adapterDiagnostics) = resolveAdapterRegistrations(
-            useSites: aggregate.adapterUseSites,
-            definitions: aggregate.adapterAnnotations,
-            producers: defaultOrder
-        )
-        printDiagnostics(adapterDiagnostics)
-        failIfAnyDiagnosticIsError(adapterDiagnostics)
-
         let containerOrders = printAndCollectTopologicalOrders(
             defaultOrder: defaultOrder,
             containers: containerGraphs,
@@ -103,7 +99,6 @@ struct WireGen {
             topologicalOrder: defaultOrder,
             containerTopologicalOrders: containerOrders,
             seedScopeOrders: seedScopeOrders,
-            adapterRegistrations: adapterRegistrations,
             graphConformances: aggregate.graphConformances
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
@@ -149,7 +144,7 @@ struct WireGen {
         var multibindingKeys: [DiscoveredMultibindingKey] = []
         var bindingKeys: [DiscoveredBindingKey] = []
         var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
-        var adapterUseSites: [AdapterUseSite] = []
+        var aliasUseSites: [ContributionAliasUseSite] = []
         var resultBuilders: [DiscoveredResultBuilder] = []
         var graphConformances: [DiscoveredGraphConformance] = []
     }
@@ -196,7 +191,7 @@ struct WireGen {
             aggregate.multibindingKeys.append(contentsOf: result.multibindingKeys)
             aggregate.bindingKeys.append(contentsOf: result.bindingKeys)
             aggregate.adapterAnnotations.append(contentsOf: result.adapterAnnotations)
-            aggregate.adapterUseSites.append(contentsOf: result.adapterUseSites)
+            aggregate.aliasUseSites.append(contentsOf: result.aliasUseSites)
             aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
             aggregate.graphConformances.append(contentsOf: result.graphConformances)
         }
@@ -345,9 +340,7 @@ struct WireGen {
         )
         diagnostics += deadBindingDiagnostics(
             across: aggregate.allBindings,
-            resolvedByContainer: resolvedBindingsByContainer,
-            adapterUseSites: aggregate.adapterUseSites,
-            adapterDefinitions: aggregate.adapterAnnotations
+            resolvedByContainer: resolvedBindingsByContainer
         )
         diagnostics += multibindingLivenessDiagnostics(
             multibindingKeys: aggregate.multibindingKeys,

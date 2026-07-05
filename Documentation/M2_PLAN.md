@@ -323,6 +323,13 @@ Request scope leaves M2 entirely, because it needs routing Wire generates:
 - **`@HummingbirdRoute` macro details** (M2.2 step two) — the extension macro
   emitting the witness that groups at the annotation path (no-arg → root mount); it
   assumes the author's routing method is `addRoutes` (convention).
+- **`WireMVCAbstraction.md` collation-pivot rewrite** (M5 doc debt) — it's built on
+  the retired `_wireRegister` mechanism (a `_wireRegister<S: WireMVCServer>` section)
+  and predates the collation / `ServerTransport` pivot. Rewrite it around the
+  collation model (contribution aliases, `ServerTransport`, request-scoped injection)
+  when M5/WireMVC design starts. (`AdapterModel.md` was rewritten in M2.3; incidental
+  `_wireRegister` mentions in `ScopeAndKeyModelEvolution.md`, `OpaqueTypesSupport.md`,
+  `VisibilityModel.md` are minor and can be swept alongside.)
 
 **Decided** (were open): the graph conformance is **shipped** (M2.1); the entry is
 internal `Wire.bootstrap()` returning the **concrete** graph (no `Wire<Module>`, no

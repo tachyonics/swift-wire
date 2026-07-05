@@ -102,14 +102,12 @@ final class BindingDiscovery: SyntaxVisitor {
     /// with `multibindingKeys`) to diagnose references to undeclared keys.
     var bindingKeys: [DiscoveredBindingKey] = []
     /// Adapter-annotation definitions (`WireAdapterAnnotationV1` declarations)
-    /// found in this file. Aggregated across the module by `WireGen` and
-    /// matched by name against adapter use-sites to resolve and validate the
-    /// generated `_wireRegister` calls.
+    /// found in this file. Aggregated across the module by `WireGen` and matched
+    /// by name against contribution-alias use-sites (`@X` → `@Contributes(to:)`).
     var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
-    /// Adapter-annotation use-sites (adapter-shaped attributes on type decls)
-    /// found in this file. Captured name-agnostically; classified against
-    /// `adapterAnnotations` later.
-    var adapterUseSites: [AdapterUseSite] = []
+    /// Contribution-alias candidates — every type-decl attribute, classified
+    /// against declared aliases after aggregation. See `ContributionAliasResolution`.
+    var aliasUseSites: [ContributionAliasUseSite] = []
     /// Graph-conformance declarations (`WireGraphConformanceV1`) found in this
     /// file — an adapter asking Wire to emit a graph conformance to its protocol.
     var graphConformances: [DiscoveredGraphConformance] = []
@@ -541,10 +539,10 @@ extension BindingDiscovery {
     /// stack, so `scopes` holds only the enclosing types for the qualified
     /// callee name.
     private func recordAdapterUseSites(name: TokenSyntax, attributes: AttributeListSyntax) {
-        adapterUseSites.append(
-            contentsOf: scanAdapterUseSites(
-                annotatedTypeName: name.text,
-                annotatedQualifiedTypeName: (scopes.map(\.typeName) + [name.text]).joined(separator: "."),
+        let qualified = (scopes.map(\.typeName) + [name.text]).joined(separator: ".")
+        aliasUseSites.append(
+            contentsOf: scanContributionAliasUseSites(
+                qualifiedTypeName: qualified,
                 attributes: attributes,
                 sourcePath: sourcePath,
                 converter: converter,

@@ -35,11 +35,8 @@
 /// the default (`nil`) container.
 package func deadBindingDiagnostics(
     across bindingsByPartition: [Partition: [DiscoveredBinding]],
-    resolvedByContainer: [String?: [DiscoveredBinding]] = [:],
-    adapterUseSites: [AdapterUseSite] = [],
-    adapterDefinitions: [DiscoveredAdapterAnnotation] = []
+    resolvedByContainer: [String?: [DiscoveredBinding]] = [:]
 ) -> [Diagnostic] {
-    let adapterAnnotated = adapterAnnotatedIdentities(useSites: adapterUseSites, definitions: adapterDefinitions)
     var bindingsByContainer: [String?: [DiscoveredBinding]] = [:]
     for (partition, bindings) in bindingsByPartition {
         bindingsByContainer[partition.container, default: []].append(contentsOf: bindings)
@@ -47,8 +44,7 @@ package func deadBindingDiagnostics(
     let diagnostics = bindingsByContainer.flatMap { container, discovered in
         deadBindingDiagnostics(
             in: discovered,
-            consumers: discovered + (resolvedByContainer[container] ?? []),
-            additionallyConsumed: container == nil ? adapterAnnotated : []
+            consumers: discovered + (resolvedByContainer[container] ?? [])
         )
     }
     return diagnostics.sorted { $0.location < $1.location }

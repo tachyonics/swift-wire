@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Iteration-8 adapter-contract gate.
+# Adapter-contract gate — the contribution-alias contract.
 #
 # Runs OUTSIDE `swift test`: the adapter fixture package uses macros and
 # depends on swift-wire, so a fixture inside swift-wire's own test targets
@@ -10,12 +10,12 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "== iteration 8 positive: @RoutedBy adapter registration =="
+echo "== adapter contract: @RoutedBy contribution alias =="
 # Builds the consumer — its WireBuildPlugin discovers the @RoutedBy definition
-# from the activated WireRouting library, validates the registration's
-# dependencies against the graph, and emits the _wireRegister call — then runs
-# it. main.swift bootstraps the generated graph and asserts the controller was
-# registered with the router, printing OK or trapping.
+# from the activated WireRouting library, reads each @RoutedBy use-site as
+# @Contributes(to: RoutingKeys.controllers), and collates the controllers — then
+# runs it. main.swift bootstraps the generated graph and asserts the three
+# controllers were collated across the package boundary, printing OK or trapping.
 swift run --package-path "$DIR/Consumer"
 
-echo "== iteration 8 gate passed =="
+echo "== adapter contract gate passed =="
