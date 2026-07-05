@@ -2,13 +2,13 @@
 import CompilerPluginSupport
 import PackageDescription
 
-// A minimal, non-shipped Wire adapter fixture backing the iteration-8 contract
-// gate. It publishes `@RoutedBy` (a real member macro that generates
-// `_wireRegister`) plus a `WireAdapterAnnotationV1` definition Wire discovers.
-// It lives in its own package so the consumer activates it as an external
-// `.product` — the same reason CompositionHarness's library is separate (a
-// macro-using fixture inside swift-wire's own tests would form a circular
-// package dependency).
+// A minimal, non-shipped Wire adapter fixture backing the adapter-contract gate.
+// It publishes `@HarnessRoute` (an extension macro adding a `Controller`
+// conformance) plus a `WireAdapterAnnotationV1` definition Wire discovers — the
+// attribute aliases `@Contributes(to: RoutingKeys.controllers)`. It lives in its
+// own package so the consumer activates it as an external `.product` — the same
+// reason CompositionHarness's library is separate (a macro-using fixture inside
+// swift-wire's own tests would form a circular package dependency).
 let package = Package(
     name: "WireRouting",
     platforms: [.macOS(.v15)],

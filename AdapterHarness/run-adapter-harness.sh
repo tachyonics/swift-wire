@@ -10,9 +10,9 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "== adapter contract: @RoutedBy contribution alias =="
-# Builds the consumer — its WireBuildPlugin discovers the @RoutedBy definition
-# from the activated WireRouting library, reads each @RoutedBy use-site as
+echo "== adapter contract: @HarnessRoute contribution alias =="
+# Builds the consumer — its WireBuildPlugin discovers the @HarnessRoute definition
+# from the activated WireRouting library, reads each @HarnessRoute use-site as
 # @Contributes(to: RoutingKeys.controllers), and collates the controllers — then
 # runs it. main.swift bootstraps the generated graph and asserts the three
 # controllers were collated across the package boundary, printing OK or trapping.

@@ -1,11 +1,11 @@
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// Adds the `Controller` conformance for an `@RoutedBy` type. Wire never reads
+/// Adds the `Controller` conformance for a `@HarnessRoute` type. Wire never reads
 /// this — it only reads the `WireAdapterAnnotationV1` definition telling it the
 /// attribute aliases `@Contributes(to: RoutingKeys.controllers)`; the conformance
 /// is the adapter's own framework surface, generated at macro-expansion time.
-public struct RoutedByMacro: ExtensionMacro {
+public struct HarnessRouteMacro: ExtensionMacro {
     public static func expansion(
         of node: AttributeSyntax,
         attachedTo declaration: some DeclGroupSyntax,
