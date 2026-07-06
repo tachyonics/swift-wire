@@ -158,7 +158,7 @@ struct SeedScopeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Logger", key: nil, kind: .singleton, scope: nil, dependencies: []),
+                        BindingInfo(type: "Logger", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Logger.swift", line: 1)),
                     ])
                 }
             }

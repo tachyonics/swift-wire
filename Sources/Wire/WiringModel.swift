@@ -24,19 +24,40 @@ public struct BindingInfo: Sendable, Codable {
     /// What it consumes — a type/provider's injected dependencies, or the contributors
     /// collated into an aggregate.
     public let dependencies: [DependencyEdge]
+    /// Where it's declared — the origin module, source file, and line. For a
+    /// synthesised aggregate, the location of its multibinding key.
+    public let location: SourceLocation
 
     public init(
         type: String,
         key: String?,
         kind: BindingKind,
         scope: String?,
-        dependencies: [DependencyEdge]
+        dependencies: [DependencyEdge],
+        location: SourceLocation
     ) {
         self.type = type
         self.key = key
         self.kind = kind
         self.scope = scope
         self.dependencies = dependencies
+        self.location = location
+    }
+}
+
+/// Where a binding is declared.
+public struct SourceLocation: Sendable, Codable {
+    /// The module the binding was declared in.
+    public let module: String
+    /// The source file.
+    public let file: String
+    /// The line within the file.
+    public let line: Int
+
+    public init(module: String, file: String, line: Int) {
+        self.module = module
+        self.file = file
+        self.line = line
     }
 }
 

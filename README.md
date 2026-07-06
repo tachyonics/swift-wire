@@ -856,6 +856,7 @@ public struct BindingInfo: Sendable, Codable {
     public let kind: BindingKind         // singleton / scoped / provider / aggregate
     public let scope: String?            // the scope seed, or nil for app-scoped
     public let dependencies: [DependencyEdge]
+    public let location: SourceLocation  // origin module, file, line
 }
 ```
 

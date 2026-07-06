@@ -17,6 +17,10 @@ struct IntrospectionTests {
         #expect(root.scope == nil)
         #expect(root.key == nil)
         #expect(root.dependencies.contains { $0.type == "IntrospectionLeaf" })
+        // Real (not mocked) source location — the fixture's own module, file, line.
+        #expect(!root.location.module.isEmpty)
+        #expect(root.location.file.hasSuffix("IntrospectionExample.swift"))
+        #expect(root.location.line > 0)
 
         let leaf = try #require(model.bindings.first { $0.type == "IntrospectionLeaf" })
         #expect(leaf.kind == .singleton)
