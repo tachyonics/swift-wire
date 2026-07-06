@@ -350,7 +350,7 @@ step, matching Wire's JVM-DI on-ramp audience.
 
 ## Suggested sequencing
 
-See [M2_PLAN.md](../M2_PLAN.md). In brief: **M2.1** Wire Core conformance emission +
+See the archived [M2_PLAN.md](../Archive/M2_PLAN.md). In brief: **M2.1** Wire Core conformance emission +
 `Wire.bootstrap()` (done) → **M2.2** context-free route slice + `@HummingbirdRoute`
 macro (done) → **M2.3** `@Contributes` alias (done) → **M2.4** middleware **out of
 scope** (app-owned) → **M2.5** `[any Service]` lifecycle → **M2.6** Tier-2 macro →
