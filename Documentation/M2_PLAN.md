@@ -10,7 +10,7 @@ has a validation gate.
 **The headline:** M2 is **app-scoped** WireHummingbird — native Hummingbird
 controllers auto-wired onto a `Router` that stays *outside* the graph. The model
 (settled across spikes 8–10) is **collation, not registration**: the graph
-collates route contributors + a middleware fold + a service list; a facade applies
+collates route contributors + a service list; a facade applies
 them to a user-built router and assembles the `Application`. The two hardest core
 pieces already ship (opaque lifting, iterations 9–10; multibindings, iteration 5),
 so the new core work is two small *framework-agnostic* capabilities — **emit a
@@ -56,7 +56,8 @@ per-root materialisation are the **foundation M5 builds on**, not M2 work. See
 - **Controller construction** — lift-the-minimum (iteration 10); the generic
   `Controller<Repository>` idiom is Wire-native. No new work.
 - **Multibindings** — `CollectedKey` (iteration 5) for routes + the `[any Service]`
-  list; `BuilderKey` for the middleware fold.
+  list. (`BuilderKey` for value folds exists but is unused in M2 — middleware, its
+  intended use, is out of scope; see M2.4.)
 - **Bootstrap collation shape** — [spike-9](../../swift-wire-spikes/spike-9-hummingbird-bootstrap/):
   Router outside the graph; routes as `[any RouteContributor]` (context-free); middleware
   folded via `MiddlewareFixedTypeBuilder`; `some RouterMethods<Context>`; the
@@ -73,7 +74,7 @@ per-root materialisation are the **foundation M5 builds on**, not M2 work. See
 hand-written `addRoutes(to:)`), **app-scoped only**. Three things are out:
 
 - **OpenAPI `registerHandlers(on:)`** (task-cluster's generator) → **M3
-  (WireOpenAPI)**. M2's collation, lifecycle, and middleware machinery is what M3
+  (WireOpenAPI)**. M2's collation and lifecycle machinery is what M3
   reuses; M2 can already automate task-cluster's non-OpenAPI app assembly.
 - **Request-scoped controllers** → **M5 (WireMVC)** — they need generated routing
   (see *Deferred to M5*).
@@ -87,14 +88,15 @@ written raw (`@Singleton @Contributes(to:) …`) with the conformance the
 `@HummingbirdRoute("path")` **macro** generates — an extension owning the mount and
 delegating to the controller's `addRoutes`, **no proxy type**. (An optional M2.3
 lets `@HummingbirdRoute` also alias `@Contributes` so the developer drops that
-annotation; scope stays explicit via `@Singleton`.) `@HummingbirdMiddleware` (M2.4) `@Contributes` to a `BuilderKey`
-folding via `MiddlewareFixedTypeBuilder` into one `some MiddlewareProtocol`.
-WireHummingbird declares a `WireGraphConformanceV1` mapping those keys onto a
+annotation; scope stays explicit via `@Singleton`.) Middleware is **out of scope**
+(M2.4) — a context-typed value with no clean collation shape; the app owns the
+`Router` and calls `router.addMiddleware` itself. WireHummingbird declares a
+`WireGraphConformanceV1` mapping the routes key (plus the M2.5 services key) onto a
 `HummingbirdComposable` protocol; **Wire emits `extension _WireGraph:
 HummingbirdComposable`, knowing nothing about HTTP**. `Wire.bootstrap()` returns
 the concrete graph, which *conforms* to `HummingbirdComposable`; the user passes it
 to a facade `apply(graph, to: router)` (generic over the conformance) that applies
-the collated middleware + routes to a user-owned router and returns `[any Service]`
+the collated routes to a user-owned router and returns `[any Service]`
 (M2.5). The user (Tier 1) or a generated `main` (Tier 2) constructs the
 `Application`.
 
@@ -160,7 +162,7 @@ First generated-code → real-Hummingbird proof. Built as an **external repo**
   `HummingbirdComposable` (no associated type), `HummingbirdKeys.routes =
   CollectedKey<any RouteContributor>`, the `WireGraphConformanceV1` declaration, and
   `apply<Context>(_ graph: some HummingbirdComposable, to router: some RouterMethods<Context>)`
-  (routes only; middleware in M2.4). No `Context` on the surface — the app's context
+  (routes only; middleware is out of scope, see M2.4). No `Context` on the surface — the app's context
   binds at `apply`.
 - **Step one (done):** controllers with raw `@Singleton @Contributes(to:
   HummingbirdKeys.routes)` + a hand-written conformance extension; the natural
@@ -204,25 +206,38 @@ collate via raw `@Contributes` from M2.2. Deferrable behind middleware/lifecycle
 scope) is **M5/WireMVC** via the adapter-replaces-the-binding proxy — a distinct,
 request-scope mechanism, not this app-scoped contribution-attribute.
 
-## Iteration M2.4 — middleware fold (`BuilderKey` via `MiddlewareFixedTypeBuilder`)
+## Iteration M2.4 — middleware: *out of scope for Tier 1*
 
-**Scope:**
-- `@HummingbirdMiddleware` macro → `@Contributes(to: HummingbirdMiddlewareKey)`.
-- `HummingbirdMiddlewareKey` is a `BuilderKey` whose builder is Hummingbird's
-  `MiddlewareFixedTypeBuilder` — Wire emits the contributors as static expressions
-  in the builder block, folding them into one `some MiddlewareProtocol` (the
-  parameterized-opaque `BuilderKey`; shape proven by spike-7 Proof 2 + spike-9).
-- `apply` adds the folded stack (`_ = router.add(middleware:)`); it's surfaced via
-  the conformance as an associated-type-bound member (spike-10).
-- Middleware are app-scoped bindings with injected deps (`SessionMiddleware(storage:)`,
-  an authenticator holding a key collection).
+Middleware collation is **dropped from M2** (like the M2.3 proxy). Zero
+regression: the app owns the `Router` and still calls `router.addMiddleware { … }`
+itself; wire-hummingbird simply doesn't claim middleware.
 
-**Why now:** middleware-with-DI is a core `buildApplication` ingredient; it's the
-last collation surface (after routes) needed to replace a hand-written one.
+**Why it doesn't fit the collation model** — the deciding factor is *callable vs
+value*:
+- **Routes are callables.** `apply` *invokes* a contributor's `addRoutes`, so the
+  context defers to the call site (a generic method absorbs it) — the contributor
+  is a provider shape, the routes it registers are the runtime interest.
+- **Middleware are values.** A middleware *is* the runtime object in the pipeline,
+  and it's `RouterMiddleware<Context>` — a context-*typed* value. There's no call to
+  defer the context to; the type is baked in. A `MiddlewareContributor` wrapper
+  whose only job is `router.add(middleware: theRealThing)` is a hack in the wrong
+  shape, and the `BuilderKey` fold (`MiddlewareFixedTypeBuilder<…, Context>`) pins a
+  concrete `Context` — reintroducing exactly the pinning routes removed. Making the
+  graph "define the context type" (a provider returning `MyContext.self`) is a type
+  masquerading as a value — it doesn't fit Wire's value-DI model.
 
-**Validation gate:** harness app with two `@HummingbirdMiddleware`, one holding an
-injected dependency; the folded stack runs both in order and each receives its
-deps (both effects observed on a graph route).
+Contrast **services** (M2.5), which *are* values but **context-free** (`any Service`
+has no context parameter), so they collate cleanly. Middleware is specifically a
+*context-typed value*, and there's no clean shape for it here.
+
+**Future (WireMVC/M5, deferred):** the standard proposed
+[`Middleware`](https://github.com/apple/swift-http-api-proposal/blob/main/Sources/Middleware/Middleware.swift)
+is parameterised by `Input`/`Output` only (no framework context), so it *is*
+collatable in principle — WireMVC owning an aggregation key, wire-hummingbird
+declaring the concrete type. But applying that stack means the router must
+understand that middleware type rather than Hummingbird's `RouterMiddleware<Context>`,
+which likely needs a custom router/transport — a big lift, gated on ecosystem
+convergence. Not designed from inside M2.
 
 ## Iteration M2.5 — service lifecycle (`[any Service]` incl. graph teardown)
 
@@ -252,7 +267,7 @@ graph-teardown-as-`Service` wrapper is the M2 piece.
 - `@main @WireHummingbird` on a composition-root type. The macro reads its members
   (spike-2): an `@Inject`ed config value, `routerBuilder()`, `applicationConfiguration()`.
 - Generates `main`: `Wire.bootstrap()` → `routerBuilder()` → `apply`
-  collated middleware+routes → construct `Application(configuration:, services:)`
+  collated routes → construct `Application(configuration:, services:)`
   → run. Hides the Tier-1 two-call shape (it can name the generated bootstrap).
 
 **Why now:** the ergonomic payoff — a zero-boilerplate entry point — once the
@@ -309,32 +324,32 @@ Request scope leaves M2 entirely, because it needs routing Wire generates:
   (`swift package update swift-wire`); its OpenAPI controller migrates in M3, but
   its app-assembly (router, middleware, `Application`, services) can adopt M2
   machinery earlier.
-- **`AdapterModel.md`** documents the *side-effect* `@RoutedBy` registration model,
-  which WireHummingbird no longer uses — it stays relevant to WireOpenAPI (M3);
-  WireHummingbird's collation/conformance model is documented in the design note.
+- **`AdapterModel.md`** documents the **contribution-alias** adapter contract
+  (rewritten in M2.3 — an annotation aliases `@Contributes(to: key)`); the
+  `_wireRegister` side-effect model it described is retired. WireHummingbird's
+  collation/conformance model is in the design note.
 
 ## Open decisions to pin
 
-- **BuilderKey conformance member** (M2.4): how the associated type is inferred when
-  a `HummingbirdComposable`-style member maps to a `BuilderKey`'s opaque product (the
-  middleware case). (The `CollectedKey`→array case is shipped.)
-- **Empty collections** — a middleware `BuilderKey` with no contributors needs an
-  identity witness (does `MiddlewareFixedTypeBuilder` accept an empty block?).
-- **`@HummingbirdRoute` macro details** (M2.2 step two) — the extension macro
-  emitting the witness that groups at the annotation path (no-arg → root mount); it
-  assumes the author's routing method is `addRoutes` (convention).
 - **`WireMVCAbstraction.md` collation-pivot rewrite** (M5 doc debt) — it's built on
   the retired `_wireRegister` mechanism (a `_wireRegister<S: WireMVCServer>` section)
   and predates the collation / `ServerTransport` pivot. Rewrite it around the
   collation model (contribution aliases, `ServerTransport`, request-scoped injection)
-  when M5/WireMVC design starts. (`AdapterModel.md` was rewritten in M2.3; incidental
-  `_wireRegister` mentions in `ScopeAndKeyModelEvolution.md`, `OpaqueTypesSupport.md`,
-  `VisibilityModel.md` are minor and can be swept alongside.)
+  when M5/WireMVC design starts. Incidental `_wireRegister` mentions in
+  `ScopeAndKeyModelEvolution.md`, `OpaqueTypesSupport.md`, `VisibilityModel.md` are
+  minor and can be swept alongside.
+- **BuilderKey conformance member** — *deferred with middleware*. The recon confirmed
+  the shipped emission already handles a `BuilderKey`→opaque member (`var x: some P
+  { self.prop }`) with no Core change, but there's no M2 consumer now that middleware
+  is out of scope. WireMVC's standard-`Middleware` aggregation (M5) would exercise and
+  validate it.
 
 **Decided** (were open): the graph conformance is **shipped** (M2.1); the entry is
 internal `Wire.bootstrap()` returning the **concrete** graph (no `Wire<Module>`, no
 composed `some (A & B)`); the route surface is **context-free**; signature adaptation
-is a **conformance-extension macro**, not a proxy.
+is a **conformance-extension macro**, not a proxy; the `@HummingbirdRoute` macro +
+`@Contributes` alias are **shipped** (M2.2/M2.3 payoff); **middleware is out of scope**
+for M2 (M2.4 — a context-typed value with no clean collation shape; app-owned).
 
 ## When M2 is "done"
 
