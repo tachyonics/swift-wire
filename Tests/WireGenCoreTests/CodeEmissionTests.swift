@@ -73,6 +73,34 @@ struct CodeEmissionTests {
         )
     }
 
+    /// A `CollectedKey` aggregate binding folding the named contributor types into
+    /// `[element]`; each contributor is a dependency edge referenced by its local.
+    private func collectedAggregate(
+        _ keyReference: String,
+        element: String,
+        contributors: [String]
+    ) -> DiscoveredBinding {
+        .aggregate(
+            DiscoveredAggregate(
+                keyReference: keyReference,
+                collectionType: "[\(element)]",
+                flavour: .collected,
+                contributors: contributors.map {
+                    AggregateContributor(
+                        dependency: DependencyParameter(
+                            name: nil,
+                            type: $0,
+                            kind: .injectInitParameter,
+                            location: mockLocation("\($0).swift")
+                        )
+                    )
+                },
+                location: mockLocation("\(keyReference).swift"),
+                originModule: testModule
+            )
+        )
+    }
+
     /// An `@Singleton(as: Identity.self)` lift node: generic over one
     /// constrained parameter, injecting it as a bare dependency.
     private func liftNode(
@@ -230,8 +258,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)]),
+                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "View.swift", line: 1)),
+                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)], location: SourceLocation(module: "TestModule", file: "Coordinator.swift", line: 1)),
                     ])
                 }
             }
@@ -286,8 +314,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)]),
+                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "View.swift", line: 1)),
+                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)], location: SourceLocation(module: "TestModule", file: "Coordinator.swift", line: 1)),
                     ])
                 }
             }
@@ -341,8 +369,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "Database", key: nil, kind: .singleton, scope: nil, dependencies: []),
+                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "View.swift", line: 1)),
+                        BindingInfo(type: "Database", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Database.swift", line: 1)),
                     ])
                 }
             }
@@ -398,8 +426,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)]),
+                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "View.swift", line: 1)),
+                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)], location: SourceLocation(module: "TestModule", file: "Coordinator.swift", line: 1)),
                     ])
                 }
             }
@@ -461,8 +489,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)]),
+                        BindingInfo(type: "View", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "View.swift", line: 1)),
+                        BindingInfo(type: "Coordinator", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "View", key: nil)], location: SourceLocation(module: "TestModule", file: "Coordinator.swift", line: 1)),
                     ])
                 }
             }
@@ -516,8 +544,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Validator", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "Policy", key: nil, kind: .singleton, scope: nil, dependencies: []),
+                        BindingInfo(type: "Validator", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Validator.swift", line: 1)),
+                        BindingInfo(type: "Policy", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Policy.swift", line: 1)),
                     ])
                 }
             }
@@ -569,8 +597,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "B", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "B", key: nil)]),
+                        BindingInfo(type: "B", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "B.swift", line: 1)),
+                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "B", key: nil)], location: SourceLocation(module: "TestModule", file: "A.swift", line: 1)),
                     ])
                 }
             }
@@ -639,7 +667,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: []),
+                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "A.swift", line: 1)),
                     ])
                 }
             }
@@ -674,9 +702,9 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "C", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "B", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "C", key: nil)]),
-                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "B", key: nil)]),
+                        BindingInfo(type: "C", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "C.swift", line: 1)),
+                        BindingInfo(type: "B", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "C", key: nil)], location: SourceLocation(module: "TestModule", file: "B.swift", line: 1)),
+                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "B", key: nil)], location: SourceLocation(module: "TestModule", file: "A.swift", line: 1)),
                     ])
                 }
             }
@@ -718,8 +746,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "X", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "A", key: nil)]),
+                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "A.swift", line: 1)),
+                        BindingInfo(type: "X", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "A", key: nil)], location: SourceLocation(module: "TestModule", file: "X.swift", line: 1)),
                     ])
                 }
             }
@@ -758,9 +786,9 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "B", key: nil, kind: .singleton, scope: nil, dependencies: []),
-                        BindingInfo(type: "X", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "A", key: nil), DependencyEdge(type: "B", key: nil)]),
+                        BindingInfo(type: "A", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "A.swift", line: 1)),
+                        BindingInfo(type: "B", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "B.swift", line: 1)),
+                        BindingInfo(type: "X", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "A", key: nil), DependencyEdge(type: "B", key: nil)], location: SourceLocation(module: "TestModule", file: "X.swift", line: 1)),
                     ])
                 }
             }
@@ -804,7 +832,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "DynamoDBTaskRepository", key: nil, kind: .singleton, scope: nil, dependencies: []),
+                        BindingInfo(type: "DynamoDBTaskRepository", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "DynamoDBTaskRepository.swift", line: 1)),
                     ])
                 }
             }
@@ -844,7 +872,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "logger.swift", line: 1)),
                     ])
                 }
             }
@@ -878,7 +906,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Database", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "Database", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Config.databaseURL.swift", line: 1)),
                     ])
                 }
             }
@@ -916,8 +944,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "TaskTable", key: nil, kind: .provider, scope: nil, dependencies: []),
-                        BindingInfo(type: "Repository", key: nil, kind: .provider, scope: nil, dependencies: [DependencyEdge(type: "TaskTable", key: nil)]),
+                        BindingInfo(type: "TaskTable", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "taskTable.swift", line: 1)),
+                        BindingInfo(type: "Repository", key: nil, kind: .provider, scope: nil, dependencies: [DependencyEdge(type: "TaskTable", key: nil)], location: SourceLocation(module: "TestModule", file: "makeRepo.swift", line: 1)),
                     ])
                 }
             }
@@ -961,8 +989,8 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: []),
-                        BindingInfo(type: "UserService", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Logger", key: nil)]),
+                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "logger.swift", line: 1)),
+                        BindingInfo(type: "UserService", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Logger", key: nil)], location: SourceLocation(module: "TestModule", file: "UserService.swift", line: 1)),
                     ])
                 }
             }
@@ -993,6 +1021,52 @@ struct CodeEmissionTests {
         #expect(output == expected)
     }
 
+    @Test func collectedAggregateEmitsConstructionAndIntrospection() {
+        // A CollectedKey aggregate folds two contributor singletons into
+        // [any Service]; introspection surfaces it as kind .aggregate whose
+        // dependency edges are the contributors.
+        let expected = """
+            // Generated by WireGen — do not edit.
+
+            internal struct _WireGraph {
+                let alpha: Alpha
+                let beta: Beta
+                let anyServiceKeyedServiceKeyServices: [any Service]
+
+                func introspect() -> WiringModel {
+                    WiringModel(bindings: [
+                        BindingInfo(type: "Alpha", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Alpha.swift", line: 1)),
+                        BindingInfo(type: "Beta", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Beta.swift", line: 1)),
+                        BindingInfo(type: "[any Service]", key: "ServiceKey.services", kind: .aggregate, scope: nil, dependencies: [DependencyEdge(type: "Alpha", key: nil), DependencyEdge(type: "Beta", key: nil)], location: SourceLocation(module: "TestModule", file: "ServiceKey.services.swift", line: 1)),
+                    ])
+                }
+            }
+
+            private func _wireBootstrap() async throws -> _WireGraph {
+                let alpha = Alpha()
+                let beta = Beta()
+                let anyServiceKeyedServiceKeyServices = [alpha, beta] as [any Service]
+                return _WireGraph(alpha: alpha, beta: beta, anyServiceKeyedServiceKeyServices: anyServiceKeyedServiceKeyServices)
+            }
+
+            internal enum Wire {
+                static func bootstrap() async throws -> _WireGraph {
+                    try await _wireBootstrap()
+                }
+            }
+
+            """
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [
+                singleton("Alpha"),
+                singleton("Beta"),
+                collectedAggregate("ServiceKey.services", element: "any Service", contributors: ["Alpha", "Beta"]),
+            ]
+        )
+        #expect(output == expected)
+    }
+
     // MARK: - Sanitisation
 
     @Test func genericInstantiationProducesOfSeparatedPropertyName() {
@@ -1006,7 +1080,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Repository<TaskTable>", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "Repository<TaskTable>", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "makeRepo.swift", line: 1)),
                     ])
                 }
             }
@@ -1042,7 +1116,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Pair<Left, Right>", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "Pair<Left, Right>", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "makePair.swift", line: 1)),
                     ])
                 }
             }
@@ -1168,7 +1242,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "TestContainer.logger.swift", line: 1)),
                     ])
                 }
             }
@@ -1210,7 +1284,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Logger", key: nil, kind: .singleton, scope: nil, dependencies: []),
+                        BindingInfo(type: "Logger", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Logger.swift", line: 1)),
                     ])
                 }
             }
@@ -1225,7 +1299,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "Logger", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "TestContainer.mockLogger.swift", line: 1)),
                     ])
                 }
             }
@@ -1281,7 +1355,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "MockService", key: nil, kind: .singleton, scope: nil, dependencies: []),
+                        BindingInfo(type: "MockService", key: nil, kind: .singleton, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "MockService.swift", line: 1)),
                     ])
                 }
             }
@@ -1339,7 +1413,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "A", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "A", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Alpha.a.swift", line: 1)),
                     ])
                 }
             }
@@ -1354,7 +1428,7 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "B", key: nil, kind: .provider, scope: nil, dependencies: []),
+                        BindingInfo(type: "B", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Bravo.b.swift", line: 1)),
                     ])
                 }
             }
@@ -1898,9 +1972,9 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "some DBTable & Sendable", key: nil, kind: .provider, scope: nil, dependencies: []),
-                        BindingInfo(type: "some TaskRepo", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Table", key: nil)]),
-                        BindingInfo(type: "some API", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Repository", key: nil)]),
+                        BindingInfo(type: "some DBTable & Sendable", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Wiring.table.swift", line: 1)),
+                        BindingInfo(type: "some TaskRepo", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Table", key: nil)], location: SourceLocation(module: "TestModule", file: "DynamoRepo.swift", line: 1)),
+                        BindingInfo(type: "some API", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Repository", key: nil)], location: SourceLocation(module: "TestModule", file: "Controller.swift", line: 1)),
                     ])
                 }
             }
@@ -1959,9 +2033,9 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "some DBTable & Sendable", key: nil, kind: .provider, scope: nil, dependencies: []),
-                        BindingInfo(type: "some TaskRepo", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Table", key: nil)]),
-                        BindingInfo(type: "Controller<some TaskRepo>", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Repository", key: nil)]),
+                        BindingInfo(type: "some DBTable & Sendable", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Wiring.table.swift", line: 1)),
+                        BindingInfo(type: "some TaskRepo", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Table", key: nil)], location: SourceLocation(module: "TestModule", file: "DynamoRepo.swift", line: 1)),
+                        BindingInfo(type: "Controller<some TaskRepo>", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Repository", key: nil)], location: SourceLocation(module: "TestModule", file: "Controller.swift", line: 1)),
                     ])
                 }
             }
@@ -2017,9 +2091,9 @@ struct CodeEmissionTests {
 
                 func introspect() -> WiringModel {
                     WiringModel(bindings: [
-                        BindingInfo(type: "some TaskRepo", key: nil, kind: .provider, scope: nil, dependencies: []),
-                        BindingInfo(type: "some Logger", key: nil, kind: .provider, scope: nil, dependencies: []),
-                        BindingInfo(type: "Pair<some TaskRepo, some Logger>", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Repository", key: nil), DependencyEdge(type: "Log", key: nil)]),
+                        BindingInfo(type: "some TaskRepo", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Wiring.repo.swift", line: 1)),
+                        BindingInfo(type: "some Logger", key: nil, kind: .provider, scope: nil, dependencies: [], location: SourceLocation(module: "TestModule", file: "Wiring.log.swift", line: 1)),
+                        BindingInfo(type: "Pair<some TaskRepo, some Logger>", key: nil, kind: .singleton, scope: nil, dependencies: [DependencyEdge(type: "Repository", key: nil), DependencyEdge(type: "Log", key: nil)], location: SourceLocation(module: "TestModule", file: "Pair.swift", line: 1)),
                     ])
                 }
             }

@@ -476,12 +476,17 @@ private func bindingInfoLiteral(_ binding: DiscoveredBinding) -> String {
                 + "key: \(optionalSwiftStringLiteral($0.keyIdentifier)))"
         }
         .joined(separator: ", ")
+    let location = binding.location
+    let locationLiteral =
+        "SourceLocation(module: \(swiftStringLiteral(binding.originModule)), "
+        + "file: \(swiftStringLiteral(location.file)), line: \(location.line))"
     return "BindingInfo("
         + "type: \(swiftStringLiteral(binding.boundType)), "
         + "key: \(optionalSwiftStringLiteral(binding.keyIdentifier)), "
         + "kind: .\(kind), "
         + "scope: \(optionalSwiftStringLiteral(scope)), "
-        + "dependencies: [\(dependencies)])"
+        + "dependencies: [\(dependencies)], "
+        + "location: \(locationLiteral))"
 }
 
 /// The `BindingKind` case name and scope seed for a binding: a scoped type binding
