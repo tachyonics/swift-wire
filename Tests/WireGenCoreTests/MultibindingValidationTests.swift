@@ -32,7 +32,10 @@ struct MultibindingValidationTests {
         let discovery = discover(in: source, sourcePath: "M.swift", module: testModule)
         return multibindingLivenessDiagnostics(
             multibindingKeys: discovery.multibindingKeys,
-            bindingsByPartition: discovery.allBindings
+            bindingsByPartition: discovery.allBindings,
+            conformanceConsumedKeys: Set(
+                discovery.graphConformances.flatMap { $0.members.map(\.keyReference) }
+            )
         )
     }
 
@@ -180,6 +183,44 @@ struct MultibindingValidationTests {
             struct Host { @Inject(App.services) var services: [any Service] }
             """
         #expect(livenessDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func keyConsumedByGraphConformanceIsSilent() {
+        // No `@Inject` consumer and an internal key, but a graph conformance maps a
+        // member to it — the generated member reads its aggregate, so it's consumed.
+        let source = """
+            enum App { static let services = CollectedKey<any Service>() }
+            protocol Composable { var services: [any Service] { get } }
+            let conformance = WireGraphConformanceV1(
+                conformsTo: (any Composable).self,
+                members: [.init("services", from: App.services)]
+            )
+            @Singleton @Contributes(to: App.services) struct AuthService {}
+            """
+        #expect(livenessDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func publicKeyInExtensionIsSilent() {
+        // A `public` key declared in an extension reads as public — the extension
+        // doesn't cap it — so an unconsumed public key stays silent, like the enum-body
+        // form. (Before: the extension's implicit-internal access capped it.)
+        let source = """
+            public enum App {}
+            extension App { public static let services = CollectedKey<any Service>() }
+            """
+        #expect(livenessDiagnostics(in: source).isEmpty)
+    }
+
+    @Test func internalKeyInExtensionStillWarns() throws {
+        // The extension fix doesn't over-silence: a member with no explicit modifier
+        // stays internal (the no-modifier extension doesn't promote it), so an
+        // unconsumed internal key still warns.
+        let source = """
+            public enum App {}
+            extension App { static let services = CollectedKey<any Service>() }
+            """
+        let diagnostic = try #require(livenessDiagnostics(in: source).first)
+        #expect(diagnostic.message.contains("has no consumer"))
     }
 
     @Test func allowUnusedKeyIsSilent() {

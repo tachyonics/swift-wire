@@ -356,6 +356,7 @@ final class BindingDiscovery: SyntaxVisitor {
             name: extendedName,
             attributes: node.attributes,
             modifiers: node.modifiers,
+            isExtension: true,
             unannotatedExtensionTarget: isAnnotatedAsContainer ? nil : extendedName
         )
         return .visitChildren
@@ -486,6 +487,7 @@ extension BindingDiscovery {
         name: String,
         attributes: AttributeListSyntax,
         modifiers: DeclModifierListSyntax,
+        isExtension: Bool = false,
         unannotatedExtensionTarget: String? = nil,
         seedScopeBlock: ScopeKey? = nil
     ) {
@@ -501,11 +503,19 @@ extension BindingDiscovery {
             )
         )
         let isContainer = hasAttribute(attributes, named: "Container")
+        // An extension with no explicit access modifier does not cap its members —
+        // `extension Foo { public static let x }` is public — so contribute `.open`
+        // (non-capping). An explicit modifier on the extension both defaults and caps.
+        // A plain type declaration caps normally.
+        let scopeAccess =
+            isExtension
+            ? (explicitAccessLevel(from: modifiers) ?? .open)
+            : accessLevel(from: modifiers)
         scopes.append(
             VisitorScope(
                 typeName: name,
                 containerName: isContainer ? name : scopes.last?.containerName,
-                access: accessLevel(from: modifiers),
+                access: scopeAccess,
                 unannotatedExtensionTarget: unannotatedExtensionTarget,
                 seedScope: seedScopeBlock ?? scopes.last?.seedScope
             )

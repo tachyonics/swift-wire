@@ -25,7 +25,7 @@ WireConfiguration preview) expand on what lands when.
   - **`WireMVCAbstraction.md` rewrite** off the retired `_wireRegister` model onto the collation / `ServerTransport` / request-scoped-injection model.
 - **M6: multi-module composition optimizations.** Multi-module composition itself ships in M1; M6 is purely two perf optimizations, each landing when its cost is felt. Both keep the surface contract unchanged and are invisible to users.
   - **M6a — manifest-based discovery.** Lands when re-parsing dependency sources at build time becomes a build-time performance problem (a large dependency graph). Each library's build plugin emits a per-library compile-time manifest of its bindings; the consumer reads manifests instead of re-parsing source. The `_WireExports.swift` marker (a hand-written stub in M1) becomes the generated manifest.
-  - **M6b — reachability pruning.** Lands when *eager construction* becomes a runtime/startup cost — depending on a library constructs all its singletons even if the consumer reaches only a few. The plugin computes the bindings reachable from the home package's roots (`allowUnused` marks a root, and only in the home package) and strips the rest before codegen, so a dependency costs only what's used. Until then, an expensive library binding opts into deferral with `Lazy<T>`.
+  - **M6b — reachability pruning.** Lands when *eager construction* becomes a runtime/startup cost — depending on a library constructs all its singletons even if the consumer reaches only a few. The plugin computes the bindings reachable from the home package's roots (`allowUnused` marks a root, and only in the home package) and strips the rest before codegen, so a dependency costs only what's used. Until then, an expensive library binding opts into deferral with `Lazy<T>`. Reachability also unlocks a **dead-code diagnostic**: a *package-local* binding pruned from every graph is genuinely dead (nothing in its own package reaches it, and it can't be reached from outside), so it should warn. This subsumes the subtle multibinding case — a package-local contributor folded into a `public` aggregate that is itself never consumed: the aggregate stays silent (permissively public, may be consumed downstream), but its package-local contributor is dead and warrants the warning.
 - **Post-1.0:** custom scopes, container composition / fine-grained overrides, `WireVapor` if a Vapor variant of task-cluster materialises, anything else that came out of real use.
 
 The ordering assumes task-cluster's roughly-expected trajectory; it'll shift if the trajectory does.
@@ -45,6 +45,13 @@ correctness or milestone blockers, and doing them late is deliberate:
   — M2–M6 add new paths (adapters, `some P<…>`, manifest generation), so a sweep
   now would be partly re-done. Diagnostics stay maintained incrementally
   meanwhile (iteration 3's standard, re-checked each iteration).
+- **Extension member-default access (edge case).** A binding or multibinding key
+  declared as a *defaulted* member of a `public extension` — `public extension Foo {
+  static let x }`, no per-member modifier — reads as `internal`, so an unconsumed key
+  can falsely warn "no consumer". The explicit-member idiom (`extension Foo { public
+  static let x }`) and no-modifier extensions are handled; the remaining fix is to
+  inherit a defaulted member's access from the extension's explicit modifier. Benign —
+  over-warns only in that rarer idiom.
 - **Missing-transitive-activation hint** (deferred from 7e/7g). When a
   cross-module `@Inject` is unsatisfied and the type is declared in a
   *non-activated* transitive Wire-aware dependency, name that library and suggest

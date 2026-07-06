@@ -66,15 +66,20 @@ package func multibindingContributionDiagnostics(
 /// `allowUnused:`. A key consumed by nothing is **dead**; a key consumed
 /// in a partition that has no contributors there is **empty** (its
 /// consumer receives an empty collection). `public`/`open` keys stay
-/// silent — downstream may contribute or consume. Anchored at the key
-/// declaration.
+/// silent — downstream may contribute or consume. A key mapped by a graph
+/// conformance is consumed by the generated conformance member (which reads
+/// its aggregate), so `conformanceConsumedKeys` counts as consumers regardless
+/// of visibility. Anchored at the key declaration.
 package func multibindingLivenessDiagnostics(
     multibindingKeys: [DiscoveredMultibindingKey],
-    bindingsByPartition: [Partition: [DiscoveredBinding]]
+    bindingsByPartition: [Partition: [DiscoveredBinding]],
+    conformanceConsumedKeys: Set<String> = []
 ) -> [Diagnostic] {
     var diagnostics: [Diagnostic] = []
     for key in multibindingKeys where keyWarrantsLivenessWarning(key) {
-        var consumedAnywhere = false
+        // A graph conformance that maps a member to this key generates a member
+        // (`var routes { self.<aggregate> }`) that reads it — a genuine consumer.
+        var consumedAnywhere = conformanceConsumedKeys.contains(key.keyReference)
         var emptyWhereConsumed = false
         for bindings in bindingsByPartition.values {
             let consumedHere = bindings.contains { binding in
