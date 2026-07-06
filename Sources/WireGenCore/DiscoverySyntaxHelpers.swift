@@ -82,6 +82,27 @@ func accessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel {
     return .internal
 }
 
+/// The *explicit* access modifier on a declaration, or `nil` when none is written —
+/// distinguishing "no modifier" from an explicit `internal`, which `accessLevel(from:)`
+/// collapses. Needed for extensions: an extension with no explicit modifier does not
+/// cap its members (a member can be as accessible as it declares, up to the extended
+/// type), whereas an explicit modifier both defaults and caps them.
+func explicitAccessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel? {
+    for modifier in modifiers {
+        if modifier.detail != nil { continue }
+        switch modifier.name.text {
+        case "open": return .open
+        case "public": return .public
+        case "package": return .package
+        case "internal": return .internal
+        case "fileprivate": return .fileprivate
+        case "private": return .private
+        default: continue
+        }
+    }
+    return nil
+}
+
 /// Extract the explicit setter-restriction access level from a
 /// declaration's modifier list. Returns `nil` when no setter-
 /// restricting modifier (`private(set)`, `fileprivate(set)`,

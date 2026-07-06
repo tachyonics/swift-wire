@@ -344,7 +344,10 @@ struct WireGen {
         )
         diagnostics += multibindingLivenessDiagnostics(
             multibindingKeys: aggregate.multibindingKeys,
-            bindingsByPartition: aggregate.allBindings
+            bindingsByPartition: aggregate.allBindings,
+            conformanceConsumedKeys: Set(
+                aggregate.graphConformances.flatMap { $0.members.map(\.keyReference) }
+            )
         )
         diagnostics += unknownBindingKeyDiagnostics(
             bindingsByPartition: aggregate.allBindings,
