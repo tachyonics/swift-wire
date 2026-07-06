@@ -45,6 +45,13 @@ correctness or milestone blockers, and doing them late is deliberate:
   — M2–M6 add new paths (adapters, `some P<…>`, manifest generation), so a sweep
   now would be partly re-done. Diagnostics stay maintained incrementally
   meanwhile (iteration 3's standard, re-checked each iteration).
+- **Extension member-default access (edge case).** A binding or multibinding key
+  declared as a *defaulted* member of a `public extension` — `public extension Foo {
+  static let x }`, no per-member modifier — reads as `internal`, so an unconsumed key
+  can falsely warn "no consumer". The explicit-member idiom (`extension Foo { public
+  static let x }`) and no-modifier extensions are handled; the remaining fix is to
+  inherit a defaulted member's access from the extension's explicit modifier. Benign —
+  over-warns only in that rarer idiom.
 - **Missing-transitive-activation hint** (deferred from 7e/7g). When a
   cross-module `@Inject` is unsatisfied and the type is declared in a
   *non-activated* transitive Wire-aware dependency, name that library and suggest
