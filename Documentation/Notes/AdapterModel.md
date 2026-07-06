@@ -8,20 +8,21 @@
 ## What an adapter is
 
 The adapter-annotation contract is swift-wire's extension point: a third-party
-package publishes its own annotation — WireHummingbird's `@HummingbirdRoute`, the
-harness's `@RoutedBy` — that **aliases `@Contributes(to: key)`**. The annotated
-binding collates into a multibinding key the adapter owns; a facade the adapter
-ships applies the collated products to a framework object (a Hummingbird `Router`, a
-`ServerTransport`) that stays *outside* the graph. The DI core does the collation
-and knows nothing about the framework; the contract is the published, versioned
-surface adapters build against.
+package publishes its own annotation — WireHummingbird's `@HummingbirdRoute`,
+WireOpenAPI's `@OpenAPIController` — that **aliases `@Contributes(to: key)`**. The
+annotated binding collates into a multibinding key the adapter owns; a facade the
+adapter ships applies the collated products to a framework object (a Hummingbird
+`Router`, a `some ServerTransport`) that stays *outside* the graph. The DI core does
+the collation and knows nothing about the framework; the contract is the published,
+versioned surface adapters build against. (See [WireHummingbirdDesign.md](WireHummingbirdDesign.md)
+and [WireOpenAPIDesign.md](WireOpenAPIDesign.md) for the two shipped adapters.)
 
 ## The contract
 
 ```swift
-public let routedBy = WireAdapterAnnotationV1(
-    annotation: "RoutedBy",                  // the attribute spelling, without `@`
-    contributesTo: RoutingKeys.controllers   // the multibinding key `@RoutedBy` aliases into
+public let openAPIController = WireAdapterAnnotationV1(
+    annotation: "OpenAPIController",         // the attribute spelling, without `@`
+    contributesTo: TransportKeys.handlers    // the multibinding key `@OpenAPIController` aliases into
 )
 ```
 
@@ -32,9 +33,9 @@ Versioned by type name (a shape change ships `WireAdapterAnnotationV2`).
 ## How it works
 
 1. The adapter package declares the `WireAdapterAnnotationV1` alias, **owns the
-   multibinding key** (`RoutingKeys.controllers = CollectedKey<any Controller>`),
+   multibinding key** (`TransportKeys.handlers = CollectedKey<any TransportContributor>`),
    and ships a **facade** that consumes the key's product (`apply(graph, to:)`).
-2. The consumer applies the annotation (`@Singleton @RoutedBy struct C {}`). The
+2. The consumer applies the annotation (`@Singleton @OpenAPIController struct C {}`). The
    build plugin discovers the alias definition (by re-parsing the adapter's
    sources) and the use-site — *name-agnostically*, because the defining module may
    differ from the use module.
@@ -53,11 +54,12 @@ expansion; Wire does only DI plumbing. The Wire-facing surface is *one annotatio
 plus its key*.
 
 - The adapter's macro makes the annotated type conform to the collated element type
-  — `@RoutedBy` adds `: Controller`; `@HummingbirdRoute("path")` adds the
+  — `@OpenAPIController` adds the `TransportContributor` conformance whose witness
+  calls the generated `registerHandlers`; `@HummingbirdRoute("path")` adds the
   `RouteContributor` conformance whose witness owns the mount. Wire never reads
   this; it's the adapter's framework surface.
-- Wire sees `@RoutedBy`/`@HummingbirdRoute` only as the alias — a contribution to
-  the key. It never learns routing or HTTP.
+- Wire sees `@OpenAPIController`/`@HummingbirdRoute` only as the alias — a
+  contribution to the key. It never learns routing or HTTP.
 - An adapter can carry an arbitrarily rich internal vocabulary (`@Get`,
   `@Middleware`, … as marker macros on controller *methods*); Wire's scan never
   matches them, so they're invisible to the DI core.
