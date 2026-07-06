@@ -351,7 +351,7 @@ The contract is versioned from M1. Adapters declare a target version in their ma
 
 The contract distinguishes two stability tiers:
 
-- **Public API** (stable, breaking change requires a major version of Wire): `Resolver` protocol, the `_wireRegister` direct-injection convention, manifest format, phase taxonomy, the `@Teardown` annotation, runtime types (`BindingKey`, `CollectedKey`, `MappedKey`, `BuilderKey`, `Provider`), introspection types (`ResolverIntrospection`, `BindingDescription`, etc.), build-time graph JSON format.
+- **Public API** (stable, breaking change requires a major version of Wire): `Resolver` protocol, the `_wireRegister` direct-injection convention, manifest format, phase taxonomy, the `@Teardown` annotation, runtime types (`BindingKey`, `CollectedKey`, `MappedKey`, `BuilderKey`, `Provider`), introspection types (`WiringModel`, `BindingInfo`, `DependencyEdge`, `BindingKind`), build-time graph JSON format.
 - **SPI** (adapter authors only, can evolve within a major version): registry internals, phase ordering implementation, build-plugin internals, generated bootstrap structure.
 
 Adapter authors building against public API are insulated from Wire's internal evolution.
@@ -839,23 +839,27 @@ The dump enables IDE integrations ("jump to binding declaration"), documentation
 
 #### Runtime introspection
 
-The `Resolver` exposes a read-only method returning a runtime view of the same data:
+The generated graph (returned by `Wire.bootstrap()`) exposes a read-only view of its own wiring, baked in at codegen — Wire is compile-time DI, so the wiring is fully known without runtime reflection:
 
 ```swift
-public protocol Resolver: Sendable {
-    // ... existing resolve methods
-    func introspect() -> ResolverIntrospection
+extension _WireGraph {
+    func introspect() -> WiringModel
 }
 
-public struct ResolverIntrospection: Sendable, Codable {
-    public let activations: [String]
-    public let bindings: [BindingDescription]
-    public let collections: [CollectionDescription]
-    public let adapters: [AdapterDescription]
+public struct WiringModel: Sendable, Codable {
+    public let bindings: [BindingInfo]   // in construction (topological) order
+}
+
+public struct BindingInfo: Sendable, Codable {
+    public let type: String              // the bound type (graph identity)
+    public let key: String?              // the binding key, if keyed
+    public let kind: BindingKind         // singleton / scoped / provider / aggregate
+    public let scope: String?            // the scope seed, or nil for app-scoped
+    public let dependencies: [DependencyEdge]
 }
 ```
 
-Use cases: `/admin/wiring` endpoints, ops dashboards, runtime diagnostic logs. The structure mirrors the build-time JSON — same field names, same versioning, `Codable` for serialization. The runtime data is included in the binary by default (small for typical graphs); a build flag opts out for size-sensitive deployments, in which case `introspect()` returns an empty structure. The build-time JSON dump is unaffected — it's always written.
+`introspect()` builds nothing until called — no runtime memory cost in production — and the model is `Codable` so adapters can serialise it. Use cases: `/admin/wiring` endpoints (WireHummingbird ships a mountable one), ops dashboards, runtime diagnostic logs. The construction code lives in the binary (small for typical graphs); if that ever matters for a large graph, an opt-out build flag is a future lever.
 
 #### Deliberately not in scope
 

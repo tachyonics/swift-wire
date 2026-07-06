@@ -261,29 +261,38 @@ is server → services → graph-teardown (verified against Hummingbird's `servi
 **Note:** `@Teardown` *emission* is M4; here the ordering aligns and the
 graph-teardown-as-`Service` wrapper is the M2 piece.
 
-## Iteration M2.6 — Tier 2: the `@WireHummingbird` composition-root macro
+## Iteration M2.6 — Tier-2 composition-root macro: *deferred to M5.2*
 
-**Scope:**
-- `@main @WireHummingbird` on a composition-root type. The macro reads its members
-  (spike-2): an `@Inject`ed config value, `routerBuilder()`, `applicationConfiguration()`.
-- Generates `main`: `Wire.bootstrap()` → `routerBuilder()` → `apply`
-  collated routes → construct `Application(configuration:, services:)`
-  → run. Hides the Tier-1 two-call shape (it can name the generated bootstrap).
+The `@main @WireHummingbird` macro is **moved to the second half of M5**. It codifies
+the composition-root assembly (`bootstrap → routerBuilder → apply → Application →
+run`) — exactly the shape WireMVC is most likely to perturb: if native middleware
+returns via a custom router/transport (the likely M5 path) or request-scoped routing
+changes how the router is built, the generated `main` changes with it. It's **pure
+sugar over a working Tier-1** (the two-call `bootstrap()` + `apply()` path ships in
+M2.2–M2.5), so deferring costs no capability and avoids codifying a shape we'd rewrite.
 
-**Why now:** the ergonomic payoff — a zero-boilerplate entry point — once the
-collation underneath (M2.2–M2.5) is proven.
+**Gate to un-defer:** WireMVC's shape is known *and* a router PoC has proven the
+native-middleware assembly. Build it once, against the settled shape.
 
-**Validation gate:** Tier-2 harness app; the generated `main` serves graph routes,
-folds middleware, runs services, and configures from the `@Inject`ed value.
+## Iteration M2.7 — runtime introspection
 
-## Iteration M2.7 — runtime introspection (`introspect()` + `/admin/wiring`)
+Split along the framework boundary — the model is framework-agnostic, the endpoint is
+WireHummingbird's.
 
-**Scope:** a read-only runtime view of the graph structure (bindings, dependency
-edges) — the `Resolver.introspect()` API the README's M2 entry names, plus an
-`/admin/wiring` example endpoint. Not dynamic resolution (stays
-[rejected](Archive/M1_PLAN.md#design-decisions-settled-during-m1)).
+**Core — `introspect()` → a wiring model.** A read-only, framework-agnostic view of the
+graph (bindings, dependency edges, scopes) — the `introspect()` API the README's M2
+entry names. Any adapter or app gets the model and can serve, log, or diff it. Not
+dynamic resolution (stays [rejected](Archive/M1_PLAN.md#design-decisions-settled-during-m1)).
 
-**Validation gate:** the harness's `/admin/wiring` endpoint returns the wiring view.
+**WireHummingbird — a mountable introspection endpoint.** A convenience *over*
+`introspect()` that the app **mounts where it wants**, so it can put it behind its own
+auth — the endpoint exposes the DI graph, so it is *not* a bare flag on `apply` (which
+stays routes + services, a consistent surface). Shape:
+`WireHummingbird.mountIntrospection(for: graph, on: router.group("admin"))`.
+
+**Validation gate:** Core — `introspect()` returns the wiring model for a small graph,
+unit-tested framework-free in `Tests/IntegrationTests`. WireHummingbird — the harness
+mounts the endpoint on an authed group and it returns the wiring view.
 
 ## Deferred to M5 (WireMVC) — with M2/prior work as its foundation
 
@@ -353,12 +362,13 @@ for M2 (M2.4 — a context-typed value with no clean collation shape; app-owned)
 
 ## When M2 is "done"
 
-- `WireHummingbird` ships: native app-scoped HB controllers auto-wired (routes +
-  middleware), service lifecycle via `[any Service]` + graph teardown, the Tier-2
-  `@WireHummingbird` macro, and `introspect()`.
+- `WireHummingbird` ships: native app-scoped HB controllers auto-wired (routes via
+  `@HummingbirdRoute`), service lifecycle via `@HummingbirdService` → `[any Service]`,
+  and a mountable `introspect()` endpoint. (Middleware is app-owned/out of scope; the
+  Tier-2 `@WireHummingbird` macro is deferred to M5.2 — see M2.4/M2.6.)
 - Wire Core gains the framework-agnostic graph-conformance capability, the
-  contribution-attribute + binding-rewrite adapter contract (`_wireRegister`
-  retired), and the `Wire.bootstrap()` façade.
+  contribution-alias adapter contract (`_wireRegister` retired), the framework-agnostic
+  `introspect()` wiring model, and the `Wire.bootstrap()` façade.
 - The external **WireHummingbird repo** builds + serves against pushed swift-wire
   main on macOS and Linux (its own CI).
 - Sets up M3 (WireOpenAPI reuses the machinery for `registerHandlers`) and M5
