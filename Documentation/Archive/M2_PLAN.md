@@ -1,10 +1,20 @@
-# M2 Implementation Plan — WireHummingbird
+# M2 Implementation Plan — WireHummingbird — archived
+
+> **Archived.** M2 is complete — WireHummingbird ships as an external adapter over
+> pushed swift-wire main: the graph-conformance emission and contribution-alias
+> contract in Wire Core, and `@HummingbirdRoute` route collation, `@HummingbirdService`
+> service-lifecycle collation, and the `introspect()` wiring model + mountable endpoint
+> in the adapter repo. Middleware landed **out of scope** (M2.4) and the Tier-2
+> `@WireHummingbird` macro (M2.6) **deferred to M5** — both moved to
+> [ROADMAP.md](../../ROADMAP.md). This is the historical plan, kept as the record of
+> what M2 built and the design decisions settled along the way (context-free routes,
+> collation-not-registration, the callable-vs-value boundary for what collates).
 
 The implementation plan for M2: swift-wire's first framework adapter,
 `WireHummingbird`. Design is in
-[Notes/WireHummingbirdDesign.md](Notes/WireHummingbirdDesign.md); the milestone
-sits in [ROADMAP.md](../ROADMAP.md). Iterative, same discipline as
-[the archived M1 plan](Archive/M1_PLAN.md): each iteration runs end-to-end and
+[Notes/WireHummingbirdDesign.md](../Notes/WireHummingbirdDesign.md); the milestone
+sits in [ROADMAP.md](../../ROADMAP.md). Iterative, same discipline as
+[the archived M1 plan](M1_PLAN.md): each iteration runs end-to-end and
 has a validation gate.
 
 **The headline:** M2 is **app-scoped** WireHummingbird — native Hummingbird
@@ -58,14 +68,14 @@ per-root materialisation are the **foundation M5 builds on**, not M2 work. See
 - **Multibindings** — `CollectedKey` (iteration 5) for routes + the `[any Service]`
   list. (`BuilderKey` for value folds exists but is unused in M2 — middleware, its
   intended use, is out of scope; see M2.4.)
-- **Bootstrap collation shape** — [spike-9](../../swift-wire-spikes/spike-9-hummingbird-bootstrap/):
+- **Bootstrap collation shape** — [spike-9](../../../swift-wire-spikes/spike-9-hummingbird-bootstrap/):
   Router outside the graph; routes as `[any RouteContributor]` (context-free); middleware
   folded via `MiddlewareFixedTypeBuilder`; `some RouterMethods<Context>`; the
   `[any Service]` lifecycle ordering.
-- **Graph-conformance shape** — [spike-10](../../swift-wire-spikes/spike-10-graph-conformance/):
+- **Graph-conformance shape** — [spike-10](../../../swift-wire-spikes/spike-10-graph-conformance/):
   a graph conforming to an externally-declared protocol, `Context` inferred and the
   opaque middleware bound via an associated type, consumed generically.
-- **Parameterized-opaque lifting** — [spike-7](../../swift-wire-spikes/spike-7-iteration-10-lifting/)
+- **Parameterized-opaque lifting** — [spike-7](../../../swift-wire-spikes/spike-7-iteration-10-lifting/)
   Proof 2 (`some P<A,B,C>`), underneath the middleware `BuilderKey`.
 
 ## Scope boundary
@@ -282,7 +292,7 @@ WireHummingbird's.
 **Core — `introspect()` → a wiring model.** A read-only, framework-agnostic view of the
 graph (bindings, dependency edges, scopes) — the `introspect()` API the README's M2
 entry names. Any adapter or app gets the model and can serve, log, or diff it. Not
-dynamic resolution (stays [rejected](Archive/M1_PLAN.md#design-decisions-settled-during-m1)).
+dynamic resolution (stays [rejected](M1_PLAN.md#design-decisions-settled-during-m1)).
 
 **WireHummingbird — a mountable introspection endpoint.** A convenience *over*
 `introspect()` that the app **mounts where it wants**, so it can put it behind its own
@@ -315,7 +325,7 @@ Request scope leaves M2 entirely, because it needs routing Wire generates:
 - **"Adapter replaces the binding" is a shared Wire primitive** (the same shape
   `@Configuration` needs — replace `let port: Int` with a config-reading provider),
   built here in M5 and reused rather than reinvented per adapter.
-- **Foundation carried forward, not discarded:** [spike-8](../../swift-wire-spikes/spike-8-hummingbird-request-scope/)
+- **Foundation carried forward, not discarded:** [spike-8](../../../swift-wire-spikes/spike-8-hummingbird-request-scope/)
   (request-scope entry, mechanism B), seeded-scope construction
   (`bootstrap<Seed>Scope`, iteration 4), and per-root reachability materialisation
   are exactly M5's engine.
