@@ -271,9 +271,9 @@ struct TeardownDiscoveryTests {
         #expect(singletons(in: source).first?.teardown == nil)
     }
 
-    // MARK: - Inert emission (M1 records but emits no teardown calls)
+    // MARK: - Emission (M4 emits the reverse-order teardown walk)
 
-    @Test func teardownActionsEmitNoTeardownCalls() {
+    @Test func teardownActionsEmitReverseOrderCalls() throws {
         let scopeBound = DiscoveredBinding.scopeBound(
             DiscoveredScopeBoundType(
                 typeName: "Pool",
@@ -308,8 +308,23 @@ struct TeardownDiscoveryTests {
         // type drives the property name — `HTTPClient` → `hTTPClient`)…
         #expect(output.contains("let pool = Pool()"))
         #expect(output.contains("let hTTPClient = makeClient()"))
-        // …but nothing references the recorded teardown action.
-        #expect(!output.contains("teardown"))
-        #expect(!output.contains("shutdown"))
+
+        // …and the graph now conforms to `Teardownable` and emits a `teardown()` walk.
+        #expect(output.contains(": Introspectable, Teardownable {"))
+        #expect(output.contains("func teardown() async -> [any Error] {"))
+        // Producer form: the action, pinned to the macro's type, applied to the value.
+        #expect(
+            output.contains(
+                "let action: @Sendable (HTTPClient) async throws -> Void = { (c: HTTPClient) in try await c.shutdown() }"
+            )
+        )
+        #expect(output.contains("try await action(self.hTTPClient)"))
+        // Member form: the recorded method, called on the instance with its own colour.
+        #expect(output.contains("try await self.pool.teardown()"))
+        // Reverse construction order — the later-constructed producer tears down before
+        // the earlier `pool` (dependents before dependencies).
+        let clientTeardown = try #require(output.firstRange(of: "action(self.hTTPClient)"))
+        let poolTeardown = try #require(output.firstRange(of: "self.pool.teardown()"))
+        #expect(clientTeardown.lowerBound < poolTeardown.lowerBound)
     }
 }
