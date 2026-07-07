@@ -180,10 +180,7 @@ struct WireGen {
             // conformance is an import source the same way a binding is. Files with
             // none of these have nothing to contribute — including their imports
             // would just leak unrelated modules.
-            if !result.allBindings.isEmpty
-                || !result.graphConformances.isEmpty
-                || !result.multibindingKeys.isEmpty
-            {
+            if !result.allBindings.isEmpty || !result.graphConformances.isEmpty || !result.multibindingKeys.isEmpty {
                 aggregate.imports.append(contentsOf: result.imports)
             }
 
@@ -397,17 +394,6 @@ struct WireGen {
         FileHandle.standardError.write(Data("\n".utf8))
     }
 
-    private static func readSource(at path: String) -> String {
-        do {
-            return try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)
-        } catch {
-            FileHandle.standardError.write(
-                Data("error: failed to read \(path): \(error)\n".utf8)
-            )
-            exit(1)
-        }
-    }
-
     /// Print the generic templates combined across all graphs.
     /// Informational; doesn't affect validation.
     private static func printGenericTemplatesReport(
@@ -549,6 +535,18 @@ extension WireGen {
 /// CLI argument parsing and usage: module-group parsing and the usage
 /// message printed on malformed invocation.
 extension WireGen {
+    /// Read a source file's contents, or `exit(1)` with a diagnostic on failure.
+    fileprivate static func readSource(at path: String) -> String {
+        do {
+            return try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)
+        } catch {
+            FileHandle.standardError.write(
+                Data("error: failed to read \(path): \(error)\n".utf8)
+            )
+            exit(1)
+        }
+    }
+
     /// Parse the module segments (everything after the two output paths)
     /// into ordered groups. Each group is `--module <name> <files…>` (the
     /// consumer or a same-package dependency) or `--external-module <name>
