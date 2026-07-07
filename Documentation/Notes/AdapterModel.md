@@ -8,7 +8,7 @@
 ## What an adapter is
 
 The adapter-annotation contract is swift-wire's extension point: a third-party
-package publishes its own annotation — WireHummingbird's `@HummingbirdRoute`,
+package publishes its own annotation — WireHummingbird's `@HummingbirdController`,
 WireOpenAPI's `@OpenAPIController` — that **aliases `@Contributes(to: key)`**. The
 annotated binding collates into a multibinding key the adapter owns; a facade the
 adapter ships applies the collated products to a framework object (a Hummingbird
@@ -55,10 +55,10 @@ plus its key*.
 
 - The adapter's macro makes the annotated type conform to the collated element type
   — `@OpenAPIController` adds the `TransportContributor` conformance whose witness
-  calls the generated `registerHandlers`; `@HummingbirdRoute("path")` adds the
+  calls the generated `registerHandlers`; `@HummingbirdController("path")` adds the
   `RouteContributor` conformance whose witness owns the mount. Wire never reads
   this; it's the adapter's framework surface.
-- Wire sees `@OpenAPIController`/`@HummingbirdRoute` only as the alias — a
+- Wire sees `@OpenAPIController`/`@HummingbirdController` only as the alias — a
   contribution to the key. It never learns routing or HTTP.
 - An adapter can carry an arbitrarily rich internal vocabulary (`@Get`,
   `@Middleware`, … as marker macros on controller *methods*); Wire's scan never

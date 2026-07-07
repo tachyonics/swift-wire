@@ -41,7 +41,8 @@ package func renderWireGraph(
     topologicalOrder: [DiscoveredBinding],
     containerTopologicalOrders: [String: [DiscoveredBinding]] = [:],
     seedScopeOrders: [SeedScopeEmission] = [],
-    graphConformances: [DiscoveredGraphConformance] = []
+    graphConformances: [DiscoveredGraphConformance] = [],
+    multibindingKeys: [DiscoveredMultibindingKey] = []
 ) -> String {
     var lines: [String] = []
     var bootstrapEntries: [BootstrapEntry] = []
@@ -105,7 +106,12 @@ package func renderWireGraph(
 
     // Adapter-declared graph conformances — `extension _WireGraph: <Protocol>`
     // mapping the protocol's members to the default graph's aggregate bindings.
-    appendGraphConformances(graphConformances, topologicalOrder: topologicalOrder, into: &lines)
+    appendGraphConformances(
+        graphConformances,
+        topologicalOrder: topologicalOrder,
+        multibindingKeys: multibindingKeys,
+        into: &lines
+    )
 
     // The `Wire` façade — one uniform, non-generic entry point per graph.
     // Emitted last so it's a single stable trailing block.

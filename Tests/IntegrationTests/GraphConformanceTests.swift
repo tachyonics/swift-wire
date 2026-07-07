@@ -16,4 +16,16 @@ struct GraphConformanceTests {
         let graph = try await Wire.bootstrap()
         #expect(labels(of: graph) == ["alpha", "beta"])
     }
+
+    /// Generic over a composable whose key has no contributors — only compiles if the
+    /// plugin emitted a valid `extension _WireGraph: EmptyComposable` with an empty-
+    /// collection accessor.
+    private func emptyCount<Graph: EmptyComposable>(of graph: Graph) -> Int {
+        graph.emptyThings.count
+    }
+
+    @Test func generatedGraphConformsWithEmptyCollectionWhenNoContributors() async throws {
+        let graph = try await Wire.bootstrap()
+        #expect(emptyCount(of: graph) == 0)
+    }
 }
