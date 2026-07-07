@@ -91,7 +91,7 @@ delegates to the controller's hand-written `addRoutes`:
 ```swift
 @Singleton
 @Contributes(to: HummingbirdKeys.routes)
-@HummingbirdRoute("todos")                 // annotation owns the mount
+@HummingbirdController("todos")                 // annotation owns the mount
 struct TodoController {
     @Inject init(repo: Repo) { self.repo = repo }
     func addRoutes(to router: some RouterMethods<some RequestContext>) { … }   // untouched
@@ -99,7 +99,7 @@ struct TodoController {
 // generated:
 extension TodoController: RouteContributor {
     func addWireRoutes<Context: RequestContext>(to router: some RouterMethods<Context>) {
-        addRoutes(to: router.group("todos"))     // no-arg @HummingbirdRoute → addRoutes(to: router)
+        addRoutes(to: router.group("todos"))     // no-arg @HummingbirdController → addRoutes(to: router)
     }
 }
 ```
@@ -110,7 +110,7 @@ The Wire-internal witness name means the generated method and the author's
 defer-instantiate a *type-generic* `Foo<Context>`, which requiring context-free
 controllers removes. The macro can't add `@Singleton`/`@Contributes` (attributes on
 the type), so those stay explicit until a plugin-side contribution-attribute folds
-`@Contributes` into `@HummingbirdRoute` (the small surviving remnant of the old
+`@Contributes` into `@HummingbirdController` (the small surviving remnant of the old
 M2.3).
 
 ### The one new Wire Core capability (M2.1, shipped): graph-conforms-to-declared-protocol
@@ -175,7 +175,7 @@ Surveying every `addRoutes` in hummingbird-examples pinned the design:
 - **Universal wiring pattern:** `Controller(deps).addRoutes(to: router.group("path"))`
   — the mount path lives *app-side*, deps are constructor-injected, some controllers
   mount at root (`addRoutes(to: router)`). This maps 1:1 onto `@Inject` +
-  `@HummingbirdRoute("path")` (the annotation takes over the `router.group` line).
+  `@HummingbirdController("path")` (the annotation takes over the `router.group` line).
 - **Two axes of variance:** router type (`Router` / `RouterGroup` / `some
   RouterMethods`) and context (generic `<Context>` / opaque `some RequestContext` /
   **concrete `typealias Context = AppRequestContext`**).
@@ -187,7 +187,7 @@ Surveying every `addRoutes` in hummingbird-examples pinned the design:
 The context-free surface therefore fits new, context-agnostic controllers written
 *for* WireHummingbird; auth controllers that read a typed context belong on the
 other side of the boundary below. WireHummingbird prescribes the context-free shape
-(self-grouping or `@HummingbirdRoute` owns the mount) — of the 18 example
+(self-grouping or `@HummingbirdController` owns the mount) — of the 18 example
 controllers only one matches directly, so this is "write controllers *for*
 WireHummingbird," not drop-in adaptation (that was the proxy's job, and it's gone).
 
@@ -351,7 +351,7 @@ step, matching Wire's JVM-DI on-ramp audience.
 ## Suggested sequencing
 
 See the archived [M2_PLAN.md](../Archive/M2_PLAN.md). In brief: **M2.1** Wire Core conformance emission +
-`Wire.bootstrap()` (done) → **M2.2** context-free route slice + `@HummingbirdRoute`
+`Wire.bootstrap()` (done) → **M2.2** context-free route slice + `@HummingbirdController`
 macro (done) → **M2.3** `@Contributes` alias (done) → **M2.4** middleware **out of
 scope** (app-owned) → **M2.5** `[any Service]` lifecycle → **M2.6** Tier-2 macro →
 **M2.7** introspection. Request scope is **M5 (WireMVC)**.
