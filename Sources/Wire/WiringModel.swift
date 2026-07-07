@@ -11,6 +11,14 @@ public struct WiringModel: Sendable, Codable {
     }
 }
 
+/// A generated graph that can describe itself. The build plugin emits `introspect()` on
+/// every graph struct and conforms it to this protocol, so a facade can accept `some
+/// Introspectable` (e.g. to serve the model over HTTP) without naming the concrete,
+/// internal `_WireGraph` type.
+public protocol Introspectable {
+    func introspect() -> WiringModel
+}
+
 /// One binding in the graph.
 public struct BindingInfo: Sendable, Codable {
     /// The bound type (graph identity) — e.g. `Logger`, `some TaskRepo`, `[any Service]`.

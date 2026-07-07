@@ -374,7 +374,9 @@ private func appendStruct(
     // handles the conformance when all bindings are Sendable; the
     // user gets compile-time feedback at their use site if one
     // isn't.
-    lines.append("internal struct \(structName)\(genericClause) {")
+    // Conforms to `Introspectable` (the `introspect()` below satisfies it) so a facade
+    // can accept `some Introspectable` without naming the concrete graph type.
+    lines.append("internal struct \(structName)\(genericClause): Introspectable {")
 
     // Stored properties — one per binding, type-derived name, no
     // prefix. Users access these as `graph.logger`, `graph.userService`.

@@ -32,6 +32,17 @@ struct IntrospectionTests {
         #expect(model.bindings.contains { $0.kind == .aggregate })
     }
 
+    /// Pins the `Introspectable` conformance: the graph is consumable *generically*
+    /// through the protocol, so a facade can take `some Introspectable` without naming
+    /// the concrete `_WireGraph`. Only compiles if the plugin emitted the conformance.
+    @Test func generatedGraphConformsToIntrospectable() async throws {
+        func bindingCount(of graph: some Introspectable) -> Int {
+            graph.introspect().bindings.count
+        }
+        let graph = try await Wire.bootstrap()
+        #expect(bindingCount(of: graph) > 0)
+    }
+
     @Test func introspectIsCodable() async throws {
         let model = try await Wire.bootstrap().introspect()
         let data = try JSONEncoder().encode(model)
