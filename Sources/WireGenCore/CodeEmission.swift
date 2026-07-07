@@ -374,9 +374,11 @@ private func appendStruct(
     // handles the conformance when all bindings are Sendable; the
     // user gets compile-time feedback at their use site if one
     // isn't.
-    // Conforms to `Introspectable` (the `introspect()` below satisfies it) so a facade
-    // can accept `some Introspectable` without naming the concrete graph type.
-    lines.append("internal struct \(structName)\(genericClause): Introspectable {")
+    // Conforms to `Introspectable` and `Teardownable` (the `introspect()` and — when
+    // there are `@Teardown` bindings — `teardown()` below satisfy them; the empty
+    // teardown falls back to a protocol default) so a facade can accept `some
+    // Introspectable`/`some Teardownable` without naming the concrete graph type.
+    lines.append("internal struct \(structName)\(genericClause): Introspectable, Teardownable {")
 
     // Stored properties — one per binding, type-derived name, no
     // prefix. Users access these as `graph.logger`, `graph.userService`.
@@ -394,6 +396,7 @@ private func appendStruct(
         lines.append("    let \(property): \(type)")
     }
     lines.append(contentsOf: introspectionMethodLines(topologicalOrder))
+    lines.append(contentsOf: teardownMethodLines(topologicalOrder))
     lines.append("}")
 
     // Free function at module scope — does the actual construction.
@@ -472,6 +475,56 @@ private func introspectionMethodLines(_ topologicalOrder: [DiscoveredBinding]) -
     }
     lines.append("    }")
     return lines
+}
+
+/// The `func teardown() async -> [any Error]` emitted on the graph struct — the
+/// app-scope teardown walk. Calls each `@Teardown` binding's action in **reverse**
+/// construction order (dependents before dependencies), collecting rather than
+/// propagating errors so one failing action doesn't stop the rest. Emitted only when the
+/// graph has at least one teardown action; otherwise the `Teardownable` default (an empty
+/// `[]`) stands in, so no method is emitted on a graph with nothing to tear down.
+private func teardownMethodLines(_ topologicalOrder: [DiscoveredBinding]) -> [String] {
+    let torn = topologicalOrder.reversed().filter { $0.teardown != nil }
+    guard !torn.isEmpty else { return [] }
+
+    var lines: [String] = ["", "    func teardown() async -> [any Error] {", "        var errors: [any Error] = []"]
+    for binding in torn {
+        lines.append(contentsOf: teardownCallLines(for: binding))
+    }
+    lines.append("        return errors")
+    lines.append("    }")
+    return lines
+}
+
+/// The call lines for one binding's teardown action, indented for the `teardown()` body.
+/// A throwing action is wrapped in `do`/`catch` that appends to `errors`; a non-throwing
+/// member action needs no wrapping. The producer action coerces to the macro's
+/// `@Sendable (T) async throws -> Void` type — pinned via a typed local so a sync,
+/// non-throwing action coerces cleanly — and so is always `try await`.
+private func teardownCallLines(for binding: DiscoveredBinding) -> [String] {
+    guard let action = binding.teardown else { return [] }
+    let property = propertyName(for: binding)
+    switch action.kind {
+    case .member(let methodName, let isAsync, let isThrowing):
+        let call = "\(effectPrefix(isAsync: isAsync, isThrowing: isThrowing))self.\(property).\(methodName)()"
+        guard isThrowing else { return ["        \(call)"] }
+        return [
+            "        do {",
+            "            \(call)",
+            "        } catch {",
+            "            errors.append(error)",
+            "        }",
+        ]
+    case .action(let expression):
+        return [
+            "        do {",
+            "            let action: @Sendable (\(binding.boundTypeReference)) async throws -> Void = \(expression)",
+            "            try await action(self.\(property))",
+            "        } catch {",
+            "            errors.append(error)",
+            "        }",
+        ]
+    }
 }
 
 /// A `BindingInfo(...)` literal for one binding — bound type, key, kind, scope, and
