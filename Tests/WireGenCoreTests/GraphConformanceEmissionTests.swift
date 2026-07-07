@@ -60,6 +60,48 @@ struct GraphConformanceEmissionTests {
         #expect(output.contains("var routes: [any RouteContributor] { self."))
     }
 
+    @Test func memberWithNoContributorsMapsToEmptyCollection() {
+        // A conformance whose key has no contributors in this graph still emits — the
+        // absent member maps to an empty collection, so the graph conforms and a
+        // facade's `apply` works even when nothing is contributed.
+        let order: [DiscoveredBinding] = [
+            .scopeBound(
+                DiscoveredScopeBoundType(
+                    typeName: "App",
+                    typeKind: "struct",
+                    genericParameterNames: [],
+                    dependencies: [],
+                    location: mockLocation("App.swift"),
+                    originModule: testModule
+                )
+            )
+        ]
+
+        let conformance = DiscoveredGraphConformance(
+            protocolName: "HummingbirdComposable",
+            members: [
+                .init(name: "routes", keyReference: "App.routes"),
+                .init(name: "services", keyReference: "App.services"),
+            ],
+            location: mockLocation("Conformance.swift"),
+            originModule: testModule
+        )
+
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: order,
+            graphConformances: [conformance],
+            multibindingKeys: [
+                collectedKey("App.routes", element: "any RouteContributor"),
+                collectedKey("App.services", element: "any Service"),
+            ]
+        )
+
+        #expect(output.contains("extension _WireGraph: HummingbirdComposable {"))
+        #expect(output.contains("var routes: [any RouteContributor] { [] }"))
+        #expect(output.contains("var services: [any Service] { [] }"))
+    }
+
     @Test func noConformancesEmitNoExtension() {
         let output = renderWireGraph(
             imports: [],

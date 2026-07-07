@@ -106,7 +106,7 @@ method because there is no context to defer.
 
 ### The `@OpenAPIController` macro
 
-A **conformance-extension macro** (the same shape as `@HummingbirdRoute`): the
+A **conformance-extension macro** (the same shape as `@HummingbirdController`): the
 controller keeps its native `APIProtocol` conformance and its handler methods
 (`createTask`, `getTask`, …) untouched; the macro generates the `TransportContributor`
 conformance whose witness calls the generated `registerHandlers`.
@@ -127,8 +127,8 @@ extension TaskController: TransportContributor {
 }
 ```
 
-**The optional path parameter** mirrors `@HummingbirdRoute("path")`. Where
-`@HummingbirdRoute` maps its path to `router.group(path)`, `@OpenAPIController` maps
+**The optional path parameter** mirrors `@HummingbirdController("path")`. Where
+`@HummingbirdController` maps its path to `router.group(path)`, `@OpenAPIController` maps
 its path to `registerHandlers`'s **`serverURL`** — the base URL against which all of
 the spec's operation paths are relative, so a path prefix is the transport-side
 equivalent of a route group:
@@ -165,7 +165,7 @@ public let wireOpenAPIControllerAlias = WireAdapterAnnotationV1(
 So `@Singleton @OpenAPIController` is all a controller needs — the plugin injects
 the synthetic `@Contributes(to: TransportKeys.handlers)` (the explicit `@Contributes`
 above is shown for clarity; the alias makes it implicit, exactly as with
-`@HummingbirdRoute`).
+`@HummingbirdController`).
 
 ### Graph conformance — reuses the shipped Core capability
 

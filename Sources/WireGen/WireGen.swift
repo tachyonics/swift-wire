@@ -92,6 +92,7 @@ struct WireGen {
         let imports =
             aggregate.imports
             + foreignImports(in: allBindingsFlat, consumerModule: consumerModule)
+            + conformanceOriginImports(aggregate.graphConformances, consumerModule: consumerModule)
 
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
         let generated = renderWireGraph(
@@ -99,7 +100,8 @@ struct WireGen {
             topologicalOrder: defaultOrder,
             containerTopologicalOrders: containerOrders,
             seedScopeOrders: seedScopeOrders,
-            graphConformances: aggregate.graphConformances
+            graphConformances: aggregate.graphConformances,
+            multibindingKeys: aggregate.multibindingKeys
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -171,11 +173,17 @@ struct WireGen {
                 aggregate.allBindings[partition, default: []].append(contentsOf: bindings)
             }
 
-            // Only collect imports from files that contribute bindings.
-            // Files with no @Singleton/@Provides have nothing to add to
-            // the generated file's type-visibility needs — including
-            // their imports would just leak unrelated modules.
-            if !result.allBindings.isEmpty {
+            // Collect imports from files that add to the generated file's
+            // type-visibility needs: files with bindings, and files declaring a
+            // graph conformance or a multibinding key. The emitted conformances
+            // reference the protocol and their keys' element types, so a
+            // conformance is an import source the same way a binding is. Files with
+            // none of these have nothing to contribute — including their imports
+            // would just leak unrelated modules.
+            if !result.allBindings.isEmpty
+                || !result.graphConformances.isEmpty
+                || !result.multibindingKeys.isEmpty
+            {
                 aggregate.imports.append(contentsOf: result.imports)
             }
 
