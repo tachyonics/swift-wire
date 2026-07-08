@@ -100,20 +100,31 @@ Hummingbird's own server service inside the `ServiceGroup` — the M2 lifecycle 
 already "verified against Hummingbird's reverse-order `ServiceGroup` shutdown," so this
 extends that check rather than opening it fresh.
 
-## Init-failure partial teardown — sequenced sub-step (M4.5)
+## Init-failure partial teardown — deferred to M6c
 
 Distinct from `graph.teardown()`: if an init throws **partway through bootstrap**, the
 already-constructed teardown-annotated bindings must be torn down in reverse before the
 bootstrap rethrows — and the graph struct doesn't exist yet, so this can't go through
-`Teardownable`. It's codegen inside `_wireBootstrap()`: wrap construction, track which
-bindings are built, and on a throw run the reverse teardown over the built prefix, then
-rethrow (with any teardown errors attached to the thrown error).
+`Teardownable`. It's codegen inside `_wireBootstrap()`: track which bindings are built and,
+on a throw, run the reverse teardown over the built set, then rethrow.
 
-This is deferred to its own sub-step because the M4 gate doesn't exercise it — the Soto
-stack's inits (`AWSClient()`, `DynamoDB(client:…)`, `SotoDynamoDBCompositePrimaryKeyTable(…)`)
-are synchronous and non-throwing. It lands with a synthetic fixture: a binding whose init
-throws after an earlier `@Teardown` binding constructed, asserting the earlier one's
-action fired.
+**This is deferred to M6c (dynamic construction scheduling), not an M4 sub-step.** The
+reason is coupling: what "the already-constructed set" *is*, and how it's inspected, is
+fixed by the construction scheduler. Under today's strict sequential chain it's a **linear
+prefix** (wrap each `let` in `do`/`catch`, tear down the prefix). Under M6c's dynamic
+*ready-as-deps-resolve* form it's **whichever `AtomicState<T>` cells reached `.resolved`**
+when the `TaskGroup` cancelled — a runtime-determined, non-linear set. Implementing it now
+against the sequential chain would be rewritten wholesale when the scheduler changes, so it
+lands once, against the final model. See [EffectAwareResolution.md](EffectAwareResolution.md),
+*Strict per-level vs dynamic ready-as-deps-resolve*.
+
+Nothing in M4 forces it: the Soto gate's inits (`AWSClient()`, `DynamoDB(client:…)`,
+`SotoDynamoDBCompositePrimaryKeyTable(…)`) are synchronous and non-throwing, and a bootstrap
+init-failure almost always ends in process exit, so the OS reclaims the half-built
+resources. It lands with M6c — or earlier if a concrete adopter hits a throwing init that
+coexists with a constructed `@Teardown` binding — with a fixture asserting the earlier
+binding's action fired. **Happy-path `teardown()` is unaffected:** it walks the *static*
+topological order in reverse, independent of the runtime scheduler.
 
 ## task-cluster adoption (the gate)
 
@@ -162,9 +173,12 @@ in isolation.
   in-memory table; build/run against pushed swift-wire + wire-hummingbird main.
 - **M4.4 — LocalStack integration test.** `swift-local-containers` + real DynamoDB;
   exercise `AWSClient.shutdown()` against a live client.
-- **M4.5 — init-failure partial teardown.** The `_wireBootstrap()` catch path + fixture.
-- **M4.6 — docs.** This note; the `ROADMAP.md` M4 entry; a README status flip (the
-  "M1 status: recognises but does not emit" note becomes "emitted in M4").
+- **~~M4.5~~ → M6c — init-failure partial teardown.** Deferred to the dynamic-scheduling
+  pass (above): its `_wireBootstrap()` codegen is fixed by the construction scheduler, so it
+  lands once against the final model rather than being written against the sequential chain
+  and rewritten.
+- **M4.6 — docs.** This note; the `ROADMAP.md` M4 entry + the new M6c entry; the README
+  status refresh (M1 inert → M4 app-scope emitted; request scope M5; init-failure M6c).
 
 ## References
 
