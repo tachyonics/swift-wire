@@ -1,5 +1,12 @@
 # WireMVC abstraction — working notes
 
+> **⚠️ Superseded — historical.** The authoritative M5 record is
+> **[WireMVCDesign.md](WireMVCDesign.md)** (the settled M5.0 decisions and surface). This
+> note is the earlier design-space *exploration*, still written against the retired
+> `_wireRegister` model; M5.6 rewrites it onto the collation / `ServerTransport` model,
+> folding its remaining Tier-1/Tier-2 progressive-adoption thinking into the new record.
+> Read it for that thinking, not for current decisions.
+
 > **Status:** design-space exploration for HTTP-framework integration
 > across M2 (framework-specific adapters) and M5 (cross-framework
 > WireMVC). Captures both tiers of integration plus the
