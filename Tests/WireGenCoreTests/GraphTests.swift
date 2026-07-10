@@ -829,6 +829,25 @@ struct GraphTests {
         #expect(report.contains("Config.dbURL"))
     }
 
+    @Test func renderTopologicalOrderNamesOpaqueIdentityAndConcreteProducer() {
+        // An `@Singleton(as: TodoRepository.self)` takes part in the graph as `some
+        // TodoRepository` but is constructed as the concrete type — the report shows both so
+        // it's clear which type produces the opaque slot.
+        let opaque = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "SQLiteTodoRepository",
+                typeKind: "class",
+                genericParameterNames: [],
+                explicitIdentity: "TodoRepository",
+                dependencies: [],
+                location: mockLocation("Repo.swift"),
+                originModule: testModule
+            )
+        )
+        let report = renderTopologicalOrder([opaque])
+        #expect(report.contains("1. some TodoRepository (from SQLiteTodoRepository)"))
+    }
+
     // MARK: - renderGenericTemplates
 
     @Test func renderGenericTemplatesEmptyReturnsEmptyString() {

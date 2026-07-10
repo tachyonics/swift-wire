@@ -395,6 +395,12 @@ private func appendStruct(
         )
         lines.append("    let \(property): \(type)")
     }
+    // The captured teardown, built at bootstrap where each binding's concrete type is
+    // live (see `bootstrapTeardownClosureLines`). Only emitted when something needs
+    // tearing down; the `teardown()` method below delegates to it.
+    if topologicalOrder.contains(where: { $0.teardown != nil }) {
+        lines.append("    let _wireTeardown: @Sendable () async -> [any Error]")
+    }
     lines.append(contentsOf: introspectionMethodLines(topologicalOrder))
     lines.append(contentsOf: teardownMethodLines(topologicalOrder))
     lines.append("}")
@@ -445,13 +451,24 @@ private func appendStruct(
     // `@Inject func` member injections exist in the graph.
     lines.append(contentsOf: renderMemberInjections(for: topologicalOrder))
 
+    // Captured teardown — built here, where each binding's local carries its
+    // concrete type, then handed to the graph. This is what lets `@Teardown`
+    // work on an opaquely-bound (`@Singleton(as:)`) type: the graph stores it as
+    // a lifted `some P` (no concrete member visible), but the closure closes over
+    // the concrete local, so the member call type-checks.
+    lines.append(contentsOf: bootstrapTeardownClosureLines(topologicalOrder))
+
     // Final return — memberwise init takes one argument per stored
     // property in declaration order. Label is the property name;
-    // value is the matching local.
-    let returnArgs = topologicalOrder.map { binding -> String in
+    // value is the matching local. The captured teardown, when present,
+    // is the trailing stored property and is passed last.
+    var returnArgs = topologicalOrder.map { binding -> String in
         let name = propertyName(for: binding)
         return "\(name): \(name)"
     }.joined(separator: ", ")
+    if topologicalOrder.contains(where: { $0.teardown != nil }) {
+        returnArgs += ", _wireTeardown: _wireTeardown"
+    }
     lines.append("    return \(structName)(\(returnArgs))")
 
     lines.append("}")
@@ -484,10 +501,32 @@ private func introspectionMethodLines(_ topologicalOrder: [DiscoveredBinding]) -
 /// graph has at least one teardown action; otherwise the `Teardownable` default (an empty
 /// `[]`) stands in, so no method is emitted on a graph with nothing to tear down.
 private func teardownMethodLines(_ topologicalOrder: [DiscoveredBinding]) -> [String] {
+    guard topologicalOrder.contains(where: { $0.teardown != nil }) else { return [] }
+    // The teardown actions are captured at bootstrap (`bootstrapTeardownClosureLines`),
+    // where the concrete types are live; the graph stores that closure. This method just
+    // runs it — necessary because the graph's stored properties may be lifted `some P`
+    // and can't name the concrete members the actions call.
+    return [
+        "",
+        "    func teardown() async -> [any Error] {",
+        "        await _wireTeardown()",
+        "    }",
+    ]
+}
+
+/// The captured-teardown closure, emitted in the bootstrap body after every binding local
+/// is in scope. Each action runs against its binding's *concrete* local rather than the
+/// graph's stored property (which may be a lifted `some P`), which is what makes `@Teardown`
+/// work on an opaquely-bound `@Singleton(as:)` type. Actions run in reverse construction
+/// order; the closure is `@Sendable` and captured onto the graph's `_wireTeardown` property.
+private func bootstrapTeardownClosureLines(_ topologicalOrder: [DiscoveredBinding]) -> [String] {
     let torn = topologicalOrder.reversed().filter { $0.teardown != nil }
     guard !torn.isEmpty else { return [] }
 
-    var lines: [String] = ["", "    func teardown() async -> [any Error] {", "        var errors: [any Error] = []"]
+    var lines: [String] = [
+        "    let _wireTeardown: @Sendable () async -> [any Error] = {",
+        "        var errors: [any Error] = []",
+    ]
     for binding in torn {
         lines.append(contentsOf: teardownCallLines(for: binding))
     }
@@ -496,17 +535,19 @@ private func teardownMethodLines(_ topologicalOrder: [DiscoveredBinding]) -> [St
     return lines
 }
 
-/// The call lines for one binding's teardown action, indented for the `teardown()` body.
-/// A throwing action is wrapped in `do`/`catch` that appends to `errors`; a non-throwing
-/// member action needs no wrapping. The producer action coerces to the macro's
-/// `@Sendable (T) async throws -> Void` type — pinned via a typed local so a sync,
+/// The call lines for one binding's teardown action, indented for the captured-teardown
+/// closure body. The action runs against the binding's bootstrap *local* (a bare name,
+/// concrete type) — not `self.<property>` — so an opaquely-bound type's concrete members
+/// stay in reach. A throwing action is wrapped in `do`/`catch` that appends to `errors`;
+/// a non-throwing member action needs no wrapping. The producer action coerces to the
+/// macro's `@Sendable (T) async throws -> Void` type — pinned via a typed local so a sync,
 /// non-throwing action coerces cleanly — and so is always `try await`.
 private func teardownCallLines(for binding: DiscoveredBinding) -> [String] {
     guard let action = binding.teardown else { return [] }
     let property = propertyName(for: binding)
     switch action.kind {
     case .member(let methodName, let isAsync, let isThrowing):
-        let call = "\(effectPrefix(isAsync: isAsync, isThrowing: isThrowing))self.\(property).\(methodName)()"
+        let call = "\(effectPrefix(isAsync: isAsync, isThrowing: isThrowing))\(property).\(methodName)()"
         guard isThrowing else { return ["        \(call)"] }
         return [
             "        do {",
@@ -519,7 +560,7 @@ private func teardownCallLines(for binding: DiscoveredBinding) -> [String] {
         return [
             "        do {",
             "            let action: @Sendable (\(binding.boundTypeReference)) async throws -> Void = \(expression)",
-            "            try await action(self.\(property))",
+            "            try await action(\(property))",
             "        } catch {",
             "            errors.append(error)",
             "        }",

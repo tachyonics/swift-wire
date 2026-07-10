@@ -8,7 +8,7 @@ package func renderTopologicalOrder(_ order: [DiscoveredBinding]) -> String {
         lines.append("  (graph is empty)")
     } else {
         for (index, binding) in order.enumerated() {
-            lines.append("  \(index + 1). \(displayName(binding))")
+            lines.append("  \(index + 1). \(topologicalDisplayName(binding))")
         }
     }
     return lines.joined(separator: "\n")
@@ -229,6 +229,18 @@ private func missingBindingLines(_ missing: MissingBinding) -> [String] {
         }
     }
     return lines
+}
+
+/// The identifier to show for a binding in the topological-order discovery report. An
+/// opaquely-bound `@Singleton(as: P.self)` is constructed as its concrete type but takes part
+/// in the graph under its `some P` identity — the report names both (`some TodoRepository (from
+/// SQLiteTodoRepository)`) so it's clear which concrete type produces the opaque slot. Every
+/// other binding falls back to the short `displayName`.
+private func topologicalDisplayName(_ binding: DiscoveredBinding) -> String {
+    if case .scopeBound(let scopeBound) = binding, scopeBound.explicitIdentity != nil {
+        return "\(binding.boundType) (from \(scopeBound.typeName))"
+    }
+    return displayName(binding)
 }
 
 /// The short identifier to show for a binding in human-facing output:
