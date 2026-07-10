@@ -387,6 +387,11 @@ private func appendStruct(
     // use `boundTypeReference` so nested `@Singleton`s inside a `@Container`
     // qualify with the enclosing path (`TestContainer.MockService`) — required
     // because this struct lives at module scope.
+    // Bindings carrying `@Teardown`, in reverse construction order (dependents before the
+    // dependencies they hold) — computed once and reused across the emission below: the graph
+    // gets a captured `_wireTeardown` property only when this is non-empty, the bootstrap builds
+    // that closure from it, and `teardown()` delegates to it.
+    let torn = topologicalOrder.reversed().filter { $0.teardown != nil }
     for binding in topologicalOrder {
         let property = propertyName(for: binding)
         let type = wireGraphFieldType(
@@ -395,8 +400,14 @@ private func appendStruct(
         )
         lines.append("    let \(property): \(type)")
     }
+    // The captured teardown, built at bootstrap where each binding's concrete type is
+    // live (see `bootstrapTeardownClosureLines`). Only emitted when something needs
+    // tearing down; the `teardown()` method below delegates to it.
+    if !torn.isEmpty {
+        lines.append("    let _wireTeardown: @Sendable () async -> [any Error]")
+    }
     lines.append(contentsOf: introspectionMethodLines(topologicalOrder))
-    lines.append(contentsOf: teardownMethodLines(topologicalOrder))
+    lines.append(contentsOf: teardownMethodLines(torn))
     lines.append("}")
 
     // Free function at module scope — does the actual construction.
@@ -445,13 +456,24 @@ private func appendStruct(
     // `@Inject func` member injections exist in the graph.
     lines.append(contentsOf: renderMemberInjections(for: topologicalOrder))
 
+    // Captured teardown — built here, where each binding's local carries its
+    // concrete type, then handed to the graph. This is what lets `@Teardown`
+    // work on an opaquely-bound (`@Singleton(as:)`) type: the graph stores it as
+    // a lifted `some P` (no concrete member visible), but the closure closes over
+    // the concrete local, so the member call type-checks.
+    lines.append(contentsOf: bootstrapTeardownClosureLines(torn))
+
     // Final return — memberwise init takes one argument per stored
     // property in declaration order. Label is the property name;
-    // value is the matching local.
-    let returnArgs = topologicalOrder.map { binding -> String in
+    // value is the matching local. The captured teardown, when present,
+    // is the trailing stored property and is passed last.
+    var returnArgs = topologicalOrder.map { binding -> String in
         let name = propertyName(for: binding)
         return "\(name): \(name)"
     }.joined(separator: ", ")
+    if !torn.isEmpty {
+        returnArgs += ", _wireTeardown: _wireTeardown"
+    }
     lines.append("    return \(structName)(\(returnArgs))")
 
     lines.append("}")
@@ -475,56 +497,6 @@ private func introspectionMethodLines(_ topologicalOrder: [DiscoveredBinding]) -
     }
     lines.append("    }")
     return lines
-}
-
-/// The `func teardown() async -> [any Error]` emitted on the graph struct — the
-/// app-scope teardown walk. Calls each `@Teardown` binding's action in **reverse**
-/// construction order (dependents before dependencies), collecting rather than
-/// propagating errors so one failing action doesn't stop the rest. Emitted only when the
-/// graph has at least one teardown action; otherwise the `Teardownable` default (an empty
-/// `[]`) stands in, so no method is emitted on a graph with nothing to tear down.
-private func teardownMethodLines(_ topologicalOrder: [DiscoveredBinding]) -> [String] {
-    let torn = topologicalOrder.reversed().filter { $0.teardown != nil }
-    guard !torn.isEmpty else { return [] }
-
-    var lines: [String] = ["", "    func teardown() async -> [any Error] {", "        var errors: [any Error] = []"]
-    for binding in torn {
-        lines.append(contentsOf: teardownCallLines(for: binding))
-    }
-    lines.append("        return errors")
-    lines.append("    }")
-    return lines
-}
-
-/// The call lines for one binding's teardown action, indented for the `teardown()` body.
-/// A throwing action is wrapped in `do`/`catch` that appends to `errors`; a non-throwing
-/// member action needs no wrapping. The producer action coerces to the macro's
-/// `@Sendable (T) async throws -> Void` type — pinned via a typed local so a sync,
-/// non-throwing action coerces cleanly — and so is always `try await`.
-private func teardownCallLines(for binding: DiscoveredBinding) -> [String] {
-    guard let action = binding.teardown else { return [] }
-    let property = propertyName(for: binding)
-    switch action.kind {
-    case .member(let methodName, let isAsync, let isThrowing):
-        let call = "\(effectPrefix(isAsync: isAsync, isThrowing: isThrowing))self.\(property).\(methodName)()"
-        guard isThrowing else { return ["        \(call)"] }
-        return [
-            "        do {",
-            "            \(call)",
-            "        } catch {",
-            "            errors.append(error)",
-            "        }",
-        ]
-    case .action(let expression):
-        return [
-            "        do {",
-            "            let action: @Sendable (\(binding.boundTypeReference)) async throws -> Void = \(expression)",
-            "            try await action(self.\(property))",
-            "        } catch {",
-            "            errors.append(error)",
-            "        }",
-        ]
-    }
 }
 
 /// A `BindingInfo(...)` literal for one binding — bound type, key, kind, scope, and
@@ -829,7 +801,7 @@ private func builderFoldLines(_ aggregate: DiscoveredAggregate) -> [String] {
 /// `"try await "`. The enclosing bootstrap function is `async
 /// throws` (the widest contract) so any combination is permitted
 /// at the call site.
-private func effectPrefix(isAsync: Bool, isThrowing: Bool) -> String {
+func effectPrefix(isAsync: Bool, isThrowing: Bool) -> String {
     switch (isThrowing, isAsync) {
     case (false, false): return ""
     case (true, false): return "try "

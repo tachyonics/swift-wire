@@ -309,22 +309,63 @@ struct TeardownDiscoveryTests {
         #expect(output.contains("let pool = Pool()"))
         #expect(output.contains("let hTTPClient = makeClient()"))
 
-        // …and the graph now conforms to `Teardownable` and emits a `teardown()` walk.
+        // …and the graph now conforms to `Teardownable`, emits a `teardown()` that
+        // delegates to the captured closure, and stores that closure.
         #expect(output.contains(": Introspectable, Teardownable {"))
+        #expect(output.contains("let _wireTeardown: @Sendable () async -> [any Error]"))
         #expect(output.contains("func teardown() async -> [any Error] {"))
-        // Producer form: the action, pinned to the macro's type, applied to the value.
+        #expect(output.contains("await _wireTeardown()"))
+        // The captured closure is built at bootstrap, where the locals are concrete, and
+        // handed to the memberwise init.
+        #expect(output.contains("let _wireTeardown: @Sendable () async -> [any Error] = {"))
+        #expect(output.contains("_wireTeardown: _wireTeardown)"))
+        // Producer form: the action, pinned to the macro's type, applied to the concrete local.
         #expect(
             output.contains(
                 "let action: @Sendable (HTTPClient) async throws -> Void = { (c: HTTPClient) in try await c.shutdown() }"
             )
         )
-        #expect(output.contains("try await action(self.hTTPClient)"))
-        // Member form: the recorded method, called on the instance with its own colour.
-        #expect(output.contains("try await self.pool.teardown()"))
+        #expect(output.contains("try await action(hTTPClient)"))
+        // Member form: the recorded method, called on the concrete local (not the graph's
+        // possibly-lifted stored property).
+        #expect(output.contains("try await pool.teardown()"))
         // Reverse construction order — the later-constructed producer tears down before
         // the earlier `pool` (dependents before dependencies).
-        let clientTeardown = try #require(output.firstRange(of: "action(self.hTTPClient)"))
-        let poolTeardown = try #require(output.firstRange(of: "self.pool.teardown()"))
+        let clientTeardown = try #require(output.firstRange(of: "action(hTTPClient)"))
+        let poolTeardown = try #require(output.firstRange(of: "pool.teardown()"))
         #expect(clientTeardown.lowerBound < poolTeardown.lowerBound)
+    }
+
+    /// The opaque-lift case (wire-mvc-examples' `@Singleton(as:) PostgresTodoRepository`): the
+    /// binding's graph identity is `some TodoRepository`, so it's stored under a lifted generic
+    /// parameter — its concrete `close()` is invisible on that stored property. The teardown
+    /// still fires because the captured closure closes over the *concrete* bootstrap local.
+    @Test func opaqueLiftTeardownCallsConcreteLocalNotLiftedProperty() throws {
+        let opaque = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "PostgresTodoRepository",
+                typeKind: "class",
+                genericParameterNames: [],
+                explicitIdentity: "TodoRepository",
+                dependencies: [],
+                location: mockLocation("Repo.swift"),
+                teardown: TeardownAction(
+                    kind: .member(methodName: "close", isAsync: true, isThrowing: true),
+                    location: mockLocation("Repo.swift")
+                ),
+                originModule: testModule
+            )
+        )
+        let output = renderWireGraph(imports: [], topologicalOrder: [opaque])
+        // The graph lifts the opaque identity to a generic parameter and stores the binding
+        // there under its identity-derived name — the concrete `close()` is not visible on that
+        // `T0` stored property.
+        #expect(output.contains("struct _WireGraph<T0: TodoRepository>"))
+        #expect(output.contains("let someTodoRepository: T0"))
+        // The concrete value is a bootstrap local; the captured closure calls `close()` on THAT
+        // local — never `self.someTodoRepository`, which is the lifted `T0` with no `close()`.
+        #expect(output.contains("let someTodoRepository = PostgresTodoRepository()"))
+        #expect(output.contains("try await someTodoRepository.close()"))
+        #expect(!output.contains("self.someTodoRepository"))
     }
 }
