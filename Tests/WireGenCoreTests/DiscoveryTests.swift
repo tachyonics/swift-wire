@@ -2009,6 +2009,65 @@ struct DiscoveryTests {
         #expect(imports.contains("import func Foundation.exit"))
     }
 
+    @Test func discoverImportsPreservesPlatformConditionalImports() throws {
+        // A platform-selection `#if … #elseif …` block is captured verbatim as a single
+        // guarded entry — not flattened into `import Glibc` + `import Darwin`, which would
+        // break the build on both platforms.
+        let source = """
+            #if canImport(Glibc)
+            import Glibc
+            #elseif canImport(Darwin)
+            import Darwin
+            #endif
+            """
+        let imports = discover(in: source, sourcePath: "", module: testModule).imports
+        #expect(imports.count == 1)
+        let block = try #require(imports.first)
+        #expect(block.contains("#if canImport(Glibc)"))
+        #expect(block.contains("import Glibc"))
+        #expect(block.contains("#elseif canImport(Darwin)"))
+        #expect(block.contains("import Darwin"))
+        #expect(block.contains("#endif"))
+        // The inner imports must not also appear as bare, unguarded entries.
+        #expect(!imports.contains("import Glibc"))
+        #expect(!imports.contains("import Darwin"))
+    }
+
+    @Test func discoverImportsPreservesElseImportBlock() throws {
+        // The `#else` clause's import is kept inside the same guarded block, so it stays
+        // conditional (`FoundationEssentials` on new platforms, `Foundation` otherwise).
+        let source = """
+            #if canImport(FoundationEssentials)
+            import FoundationEssentials
+            #else
+            import Foundation
+            #endif
+            """
+        let imports = discover(in: source, sourcePath: "", module: testModule).imports
+        #expect(imports.count == 1)
+        let block = try #require(imports.first)
+        #expect(block.contains("#if canImport(FoundationEssentials)"))
+        #expect(block.contains("import FoundationEssentials"))
+        #expect(block.contains("#else"))
+        #expect(block.contains("import Foundation"))
+        #expect(!imports.contains("import Foundation"))
+    }
+
+    @Test func bindingInsideConditionalCompilationBlockIsStillDiscovered() {
+        // A non-import `#if` block is traversed normally, so a `@Singleton` guarded by it is
+        // still discovered — the verbatim-capture path is limited to import-only blocks.
+        let source = """
+            #if DEBUG
+            @Singleton
+            struct DebugService {
+                @Inject init() {}
+            }
+            #endif
+            """
+        let result = discoverSingletons(in: source, sourcePath: "Debug.swift")
+        #expect(result.map(\.typeName) == ["DebugService"])
+    }
+
     @Test func discoverImportsReturnsEmptyForFileWithNoImports() {
         let source = """
             @Singleton

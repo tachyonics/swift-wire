@@ -141,6 +141,25 @@ final class BindingDiscovery: SyntaxVisitor {
         return .skipChildren
     }
 
+    /// An `#if … #endif` block whose clauses contain only imports — the platform-selection
+    /// idiom (`#if canImport(Glibc) … #elseif canImport(Darwin) …`,
+    /// `#if canImport(FoundationEssentials) … #else import Foundation #endif`) — is captured
+    /// verbatim, guard and all, so the generated file stays valid on every platform. Collecting
+    /// the inner imports unconditionally (the plain `ImportDeclSyntax` path) would emit, e.g.,
+    /// `import Glibc` and `import Darwin` side by side and break the build on both platforms.
+    /// A block that also holds non-import code falls through to normal traversal, so `#if`-guarded
+    /// bindings are still discovered.
+    override func visit(_ node: IfConfigDeclSyntax) -> SyntaxVisitorContinueKind {
+        let clausesAreImportOnly = node.clauses.allSatisfy { clause in
+            guard let elements = clause.elements else { return true }
+            guard case .statements(let statements) = elements else { return false }
+            return statements.allSatisfy { $0.item.is(ImportDeclSyntax.self) }
+        }
+        guard clausesAreImportOnly else { return .visitChildren }
+        imports.append(node.trimmedDescription)
+        return .skipChildren
+    }
+
     // MARK: Type decls — push/pop the enclosing-type stack and process
     // `@Singleton` if applicable.
 
