@@ -20,8 +20,10 @@ struct TeardownTests {
 
         #expect(errors.isEmpty)
         let log = teardownLog.withLock { $0 }
-        // All three teardown actions fired.
-        #expect(Set(log) == ["consumer", "pool", "client"])
+        // All teardown actions fired — including `opaque`, whose `@Teardown` calls a concrete
+        // method absent from its bound protocol (opaque-teardown fix), on a graph made generic by
+        // that opaque binding while seed scopes borrow from it (seed-scope + opaque-lift fix).
+        #expect(Set(log) == ["consumer", "pool", "client", "opaque"])
         // The consumer (dependent) tears down before the resources it holds.
         let consumer = try #require(log.firstIndex(of: "consumer"))
         let pool = try #require(log.firstIndex(of: "pool"))

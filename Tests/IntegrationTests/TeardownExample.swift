@@ -50,3 +50,30 @@ package struct TeardownConsumer {
     @Teardown
     package func teardown() async throws { teardownLog.withLock { $0.append("consumer") } }
 }
+
+/// The opaque-teardown case — the shape wire-mvc-examples' `@Singleton(as:) PostgresTodoRepository`
+/// surfaced. A resource protocol whose concrete `close()` is *not* part of the protocol.
+package protocol TeardownResource: Sendable {
+    func use() -> String
+}
+
+/// Bound opaquely as `some TeardownResource`, so the graph stores it lifted (a `T0` whose only
+/// visible surface is `TeardownResource`) and the whole graph becomes generic — which is what
+/// also exercises the seed-scope fix, since this module's `@Scoped` seed scopes borrow from a now
+/// generic `_WireGraph`. Its `@Teardown close()` isn't on the protocol, so it type-checks only
+/// against the concrete value the bootstrap captures.
+@Singleton(as: TeardownResource.self)
+package final class TeardownOpaqueResource: TeardownResource {
+    @Inject package init() {}
+    package func use() -> String { "opaque" }
+
+    @Teardown
+    package func close() async throws { teardownLog.withLock { $0.append("opaque") } }
+}
+
+/// Generic over the resource, so Wire lifts the minimum and the opaque binding is constructed
+/// (and torn down). Mirrors `TodosController<Repository: TodoRepository>` in wire-mvc-examples.
+@Singleton(allowUnused: true)
+package struct TeardownOpaqueConsumer<Resource: TeardownResource> {
+    @Inject package var resource: Resource
+}
