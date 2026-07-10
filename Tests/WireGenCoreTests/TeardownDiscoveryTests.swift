@@ -368,4 +368,29 @@ struct TeardownDiscoveryTests {
         #expect(output.contains("try await someTodoRepository.close()"))
         #expect(!output.contains("self.someTodoRepository"))
     }
+
+    @Test func nonThrowingMemberTeardownBindsErrorsWithLet() throws {
+        // When every teardown is a non-throwing member, nothing appends to `errors`, so it's
+        // bound with `let` — a `var` would draw a never-mutated warning in the generated file.
+        let cache = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "Cache",
+                typeKind: "class",
+                genericParameterNames: [],
+                dependencies: [],
+                location: mockLocation("Cache.swift"),
+                teardown: TeardownAction(
+                    kind: .member(methodName: "close", isAsync: true, isThrowing: false),
+                    location: mockLocation("Cache.swift")
+                ),
+                originModule: testModule
+            )
+        )
+        let output = renderWireGraph(imports: [], topologicalOrder: [cache])
+        #expect(output.contains("let errors: [any Error] = []"))
+        #expect(!output.contains("var errors: [any Error] = []"))
+        // A non-throwing member teardown is a bare awaited call — no do/catch, no append.
+        #expect(output.contains("await cache.close()"))
+        #expect(!output.contains("errors.append"))
+    }
 }

@@ -37,9 +37,20 @@ func teardownMethodLines(_ torn: [DiscoveredBinding]) -> [String] {
 func bootstrapTeardownClosureLines(_ torn: [DiscoveredBinding]) -> [String] {
     guard !torn.isEmpty else { return [] }
 
+    // `errors` is appended to only by a throwing member or a producer action (both wrapped in
+    // do/catch). When every teardown is a non-throwing member the array stays empty, so bind it
+    // with `let` — a `var` would draw a never-mutated warning in the generated file.
+    let mutatesErrors = torn.contains { binding in
+        switch binding.teardown?.kind {
+        case .member(_, _, let isThrowing): return isThrowing
+        case .action: return true
+        case nil: return false
+        }
+    }
+
     var lines: [String] = [
         "    let _wireTeardown: @Sendable () async -> [any Error] = {",
-        "        var errors: [any Error] = []",
+        "        \(mutatesErrors ? "var" : "let") errors: [any Error] = []",
     ]
     for binding in torn {
         lines.append(contentsOf: teardownCallLines(for: binding))
