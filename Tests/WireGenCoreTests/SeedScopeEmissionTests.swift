@@ -337,4 +337,57 @@ struct SeedScopeEmissionTests {
         // container's graph, not `_WireGraph`.
         #expect(output.contains("RequestLogger(base: _testContainerWireGraph.logger, seed: hBRequestSeed)"))
     }
+
+    @Test func seedScopeNamesOpaqueParentGraphWithItsLiftedParameters() {
+        // When the parent graph carries an `@Singleton(as:)` opaque binding it becomes generic
+        // (`_WireGraph<T0: TodoRepository>`), so the seed scope's `wireGraph:` parameter must
+        // name the opaque-erased form `_WireGraph<some TodoRepository>`. A bare `_WireGraph`
+        // reference here is a `reference to generic type '_WireGraph' requires arguments` error.
+        let opaqueRepo = DiscoveredBinding.scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: "SQLiteTodoRepository",
+                typeKind: "class",
+                genericParameterNames: [],
+                explicitIdentity: "TodoRepository",
+                dependencies: [],
+                location: mockLocation("Repo.swift"),
+                originModule: testModule
+            )
+        )
+        let scope = SeedScopeEmission(
+            seedTypeExpression: "HBRequestSeed",
+            identifierSuffix: "HBRequestSeed",
+            parentGraphType: "_WireGraph",
+            topologicalOrder: [
+                syntheticProvider(boundType: "HBRequestSeed", accessPath: "hBRequestSeed"),
+                scopedSingleton(
+                    "RequestLogger",
+                    seed: "HBRequestSeed",
+                    dependencies: [(name: "seed", type: "HBRequestSeed")]
+                ),
+            ],
+            borrowedBindingPropertyNames: []
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [opaqueRepo],
+            seedScopeOrders: [scope]
+        )
+        // The parent graph is generic over the lifted parameter…
+        #expect(output.contains("internal struct _WireGraph<T0: TodoRepository>"))
+        // …so both the bootstrap function and the façade name the opaque-erased parent type.
+        #expect(
+            output.contains(
+                "wireGraph _wireGraph: _WireGraph<some TodoRepository>) async throws -> _HBRequestSeedWireScope"
+            )
+        )
+        #expect(
+            output.contains(
+                "static func bootstrapHBRequestSeedScope(seed: HBRequestSeed, wireGraph: _WireGraph<some TodoRepository>)"
+            )
+        )
+        // The regression: no bare `_WireGraph` parameter reference survives in the seed plumbing.
+        #expect(!output.contains("wireGraph _wireGraph: _WireGraph)"))
+        #expect(!output.contains("wireGraph: _WireGraph)"))
+    }
 }

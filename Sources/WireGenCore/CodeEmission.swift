@@ -90,8 +90,25 @@ package func renderWireGraph(
     // seed value and the wire graph; the body aliases singleton
     // dependencies as locals via the synthetic-borrow bindings, then
     // constructs scope-bound bindings in topological order.
+    // A seed scope's `wireGraph:` parameter names its parent graph's concrete type. When that
+    // parent lifts generic parameters (an `@Singleton(as:)` opaque binding), the bare struct
+    // name doesn't compile — the parameter needs the opaque-erased `_WireGraph<some P>` form.
+    // Map each parent graph to its bindings so the opened reference can be computed per scope.
+    var parentGraphBindings: [String: [DiscoveredBinding]] = ["_WireGraph": topologicalOrder]
+    for (containerName, order) in containerTopologicalOrders {
+        parentGraphBindings["_\(containerName)WireGraph"] = order
+    }
     for scope in seedScopeOrders.sorted(by: { $0.identifierSuffix < $1.identifierSuffix }) {
-        appendSeedScopeStruct(scope: scope, into: &lines, entries: &bootstrapEntries)
+        let parentGraphTypeReference = openGraphTypeReference(
+            structName: scope.parentGraphType,
+            topologicalOrder: parentGraphBindings[scope.parentGraphType] ?? []
+        )
+        appendSeedScopeStruct(
+            scope: scope,
+            parentGraphTypeReference: parentGraphTypeReference,
+            into: &lines,
+            entries: &bootstrapEntries
+        )
     }
 
     // Setter extensions for `@Inject weak var` on actor consumers.
@@ -170,6 +187,7 @@ package struct SeedScopeEmission: Sendable {
 /// sites only, and unused borrows produce no output.
 private func appendSeedScopeStruct(
     scope: SeedScopeEmission,
+    parentGraphTypeReference: String,
     into lines: inout [String],
     entries: inout [BootstrapEntry]
 ) {
@@ -200,7 +218,7 @@ private func appendSeedScopeStruct(
     entries.append(
         BootstrapEntry(
             signature:
-                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(scope.parentGraphType)) async throws -> \(structName)",
+                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)) async throws -> \(structName)",
             body: "try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal))"
         )
     )
@@ -243,7 +261,7 @@ private func appendSeedScopeStruct(
 
     lines.append("")
     lines.append(
-        "private func \(bootstrapFunction)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(scope.parentGraphType)) async throws -> \(structName) {"
+        "private func \(bootstrapFunction)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(parentGraphTypeReference)) async throws -> \(structName) {"
     )
 
     if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {
@@ -322,6 +340,20 @@ private func wireGraphFieldType(
 /// Emit one `_<Name>WireGraph` struct + matching `_wireBootstrap<Name>`
 /// free function pair. Called once for the default graph and once per
 /// container; the same shape carries through for both.
+/// The opaque-erased type reference for a graph struct: `\(structName)<some P0, …>` when the
+/// graph has opaquely-bound (`@Singleton(as:)`) bindings that lift generic parameters, or the
+/// bare `structName` otherwise. This is the type the bootstrap/façade returns, and the type any
+/// seed scope borrowing from this graph must name for its `wireGraph:` parameter — a bare
+/// `_WireGraph` there fails to compile once the graph is generic.
+func openGraphTypeReference(structName: String, topologicalOrder: [DiscoveredBinding]) -> String {
+    let liftedConstraints =
+        topologicalOrder
+        .filter { $0.boundType.hasPrefix("some ") }
+        .map { String($0.boundType.dropFirst("some ".count)) }
+    guard !liftedConstraints.isEmpty else { return structName }
+    return "\(structName)<" + liftedConstraints.map { "some \($0)" }.joined(separator: ", ") + ">"
+}
+
 private func appendStruct(
     structName: String,
     bootstrapFunction: String,
@@ -353,10 +385,7 @@ private func appendStruct(
     // The `_wireBootstrap` free function and the `Wire` façade both return the
     // opaque-erased form `\(structName)<some P0, …>`; Swift infers each parameter
     // from the concrete values the bootstrap returns.
-    let openReturnType =
-        liftedConstraints.isEmpty
-        ? structName
-        : "\(structName)<" + liftedConstraints.map { "some \($0)" }.joined(separator: ", ") + ">"
+    let openReturnType = openGraphTypeReference(structName: structName, topologicalOrder: topologicalOrder)
 
     // The bootstrap entry point lives on the `Wire` façade, not on the struct
     // — a non-generic call site that stays `Wire.\(bootstrapMethod)()` whether
@@ -477,74 +506,6 @@ private func appendStruct(
     lines.append("    return \(structName)(\(returnArgs))")
 
     lines.append("}")
-}
-
-/// The `func introspect() -> WiringModel` emitted on the graph struct: a read-only
-/// view of the graph, baked in at codegen (Wire is compile-time DI, so no runtime
-/// reflection). One `BindingInfo` per binding in construction order.
-private func introspectionMethodLines(_ topologicalOrder: [DiscoveredBinding]) -> [String] {
-    var lines: [String] = []
-    lines.append("")
-    lines.append("    func introspect() -> WiringModel {")
-    if topologicalOrder.isEmpty {
-        lines.append("        WiringModel(bindings: [])")
-    } else {
-        lines.append("        WiringModel(bindings: [")
-        for binding in topologicalOrder {
-            lines.append("            \(bindingInfoLiteral(binding)),")
-        }
-        lines.append("        ])")
-    }
-    lines.append("    }")
-    return lines
-}
-
-/// A `BindingInfo(...)` literal for one binding — bound type, key, kind, scope, and
-/// dependency edges (for an aggregate, `binding.dependencies` surfaces the contributors).
-private func bindingInfoLiteral(_ binding: DiscoveredBinding) -> String {
-    let (kind, scope) = introspectionKindAndScope(binding)
-    let dependencies = binding.dependencies
-        .map {
-            "DependencyEdge(type: \(swiftStringLiteral($0.type)), "
-                + "key: \(optionalSwiftStringLiteral($0.keyIdentifier)))"
-        }
-        .joined(separator: ", ")
-    let location = binding.location
-    let locationLiteral =
-        "SourceLocation(module: \(swiftStringLiteral(binding.originModule)), "
-        + "file: \(swiftStringLiteral(location.file)), line: \(location.line))"
-    return "BindingInfo("
-        + "type: \(swiftStringLiteral(binding.boundType)), "
-        + "key: \(optionalSwiftStringLiteral(binding.keyIdentifier)), "
-        + "kind: .\(kind), "
-        + "scope: \(optionalSwiftStringLiteral(scope)), "
-        + "dependencies: [\(dependencies)], "
-        + "location: \(locationLiteral))"
-}
-
-/// The `BindingKind` case name and scope seed for a binding: a scoped type binding
-/// carries its seed; a plain `@Singleton` is app-scoped (nil seed).
-private func introspectionKindAndScope(_ binding: DiscoveredBinding) -> (kind: String, scope: String?) {
-    switch binding {
-    case .scopeBound(let type):
-        if let seed = type.scopeKey?.seed { return ("scoped", seed) }
-        return ("singleton", nil)
-    case .provider(let provider):
-        return ("provider", provider.scopeKey?.seed)
-    case .aggregate:
-        return ("aggregate", nil)
-    }
-}
-
-/// A Swift string literal for a type name. Type names from SwiftSyntax hold only type
-/// syntax (`<`, `>`, `[`, `&`, `.`, spaces) — never a quote or backslash — so no
-/// escaping is needed.
-private func swiftStringLiteral(_ value: String) -> String {
-    "\"\(value)\""
-}
-
-private func optionalSwiftStringLiteral(_ value: String?) -> String {
-    value.map(swiftStringLiteral) ?? "nil"
 }
 
 /// The stored-property name on `_WireGraph` and the local name in
