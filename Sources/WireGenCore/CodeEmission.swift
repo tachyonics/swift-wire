@@ -387,6 +387,11 @@ private func appendStruct(
     // use `boundTypeReference` so nested `@Singleton`s inside a `@Container`
     // qualify with the enclosing path (`TestContainer.MockService`) — required
     // because this struct lives at module scope.
+    // Bindings carrying `@Teardown`, in reverse construction order (dependents before the
+    // dependencies they hold) — computed once and reused across the emission below: the graph
+    // gets a captured `_wireTeardown` property only when this is non-empty, the bootstrap builds
+    // that closure from it, and `teardown()` delegates to it.
+    let torn = topologicalOrder.reversed().filter { $0.teardown != nil }
     for binding in topologicalOrder {
         let property = propertyName(for: binding)
         let type = wireGraphFieldType(
@@ -398,11 +403,11 @@ private func appendStruct(
     // The captured teardown, built at bootstrap where each binding's concrete type is
     // live (see `bootstrapTeardownClosureLines`). Only emitted when something needs
     // tearing down; the `teardown()` method below delegates to it.
-    if topologicalOrder.contains(where: { $0.teardown != nil }) {
+    if !torn.isEmpty {
         lines.append("    let _wireTeardown: @Sendable () async -> [any Error]")
     }
     lines.append(contentsOf: introspectionMethodLines(topologicalOrder))
-    lines.append(contentsOf: teardownMethodLines(topologicalOrder))
+    lines.append(contentsOf: teardownMethodLines(torn))
     lines.append("}")
 
     // Free function at module scope — does the actual construction.
@@ -456,7 +461,7 @@ private func appendStruct(
     // work on an opaquely-bound (`@Singleton(as:)`) type: the graph stores it as
     // a lifted `some P` (no concrete member visible), but the closure closes over
     // the concrete local, so the member call type-checks.
-    lines.append(contentsOf: bootstrapTeardownClosureLines(topologicalOrder))
+    lines.append(contentsOf: bootstrapTeardownClosureLines(torn))
 
     // Final return — memberwise init takes one argument per stored
     // property in declaration order. Label is the property name;
@@ -466,7 +471,7 @@ private func appendStruct(
         let name = propertyName(for: binding)
         return "\(name): \(name)"
     }.joined(separator: ", ")
-    if topologicalOrder.contains(where: { $0.teardown != nil }) {
+    if !torn.isEmpty {
         returnArgs += ", _wireTeardown: _wireTeardown"
     }
     lines.append("    return \(structName)(\(returnArgs))")
@@ -500,8 +505,8 @@ private func introspectionMethodLines(_ topologicalOrder: [DiscoveredBinding]) -
 /// propagating errors so one failing action doesn't stop the rest. Emitted only when the
 /// graph has at least one teardown action; otherwise the `Teardownable` default (an empty
 /// `[]`) stands in, so no method is emitted on a graph with nothing to tear down.
-private func teardownMethodLines(_ topologicalOrder: [DiscoveredBinding]) -> [String] {
-    guard topologicalOrder.contains(where: { $0.teardown != nil }) else { return [] }
+private func teardownMethodLines(_ torn: [DiscoveredBinding]) -> [String] {
+    guard !torn.isEmpty else { return [] }
     // The teardown actions are captured at bootstrap (`bootstrapTeardownClosureLines`),
     // where the concrete types are live; the graph stores that closure. This method just
     // runs it — necessary because the graph's stored properties may be lifted `some P`
@@ -518,9 +523,9 @@ private func teardownMethodLines(_ topologicalOrder: [DiscoveredBinding]) -> [St
 /// is in scope. Each action runs against its binding's *concrete* local rather than the
 /// graph's stored property (which may be a lifted `some P`), which is what makes `@Teardown`
 /// work on an opaquely-bound `@Singleton(as:)` type. Actions run in reverse construction
-/// order; the closure is `@Sendable` and captured onto the graph's `_wireTeardown` property.
-private func bootstrapTeardownClosureLines(_ topologicalOrder: [DiscoveredBinding]) -> [String] {
-    let torn = topologicalOrder.reversed().filter { $0.teardown != nil }
+/// order (`torn` is already reversed); the closure is `@Sendable` and captured onto the graph's
+/// `_wireTeardown` property.
+private func bootstrapTeardownClosureLines(_ torn: [DiscoveredBinding]) -> [String] {
     guard !torn.isEmpty else { return [] }
 
     var lines: [String] = [
