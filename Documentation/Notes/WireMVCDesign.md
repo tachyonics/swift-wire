@@ -5,30 +5,61 @@
 > [WireMVCAbstraction.md](WireMVCAbstraction.md) (built on the retired
 > `_wireRegister` model — its full rewrite is M5.6). The milestone sits in
 > [ROADMAP.md](../../ROADMAP.md); the iteration plan is [M5_PLAN.md](../M5_PLAN.md).
-> The shape here is proven by
-> [spike-11](../../../swift-wire-spikes/spike-11-wiremvc-servertransport/) — a
-> hand-written `@Controller` witness registering decoded handlers on real
-> `ServerTransport`, served in-process.
+>
+> **Update — proposal-native pivot (reconciled below).** M5.0 originally standardised on
+> `some ServerTransport` (OpenAPIRuntime) as the core target, with the
+> `swift-http-api-proposal` server surface named the *tracked successor* behind the same
+> seam. That successor is now the **core**, ahead of the planned timeline: deploying against
+> macOS 26 makes `anyAppleOS 26.0` unconditional, so Wire's ungated generated code compiles
+> against the proposal's server API today. WireMVC registers routes on
+> `RoutableHTTPServerBuilder` (over the proposal's `HTTPServer`/`HTTPServerRequestHandler`);
+> `some ServerTransport` is **retained as an opt-in adapter** (`WireMVCServerTransport`,
+> behind a `ServerTransport` package trait) so Hummingbird/Vapor still mount the same
+> controllers. The inversion is proven by
+> [spike-12](../../../swift-wire-spikes/spike-12-wiremvc-proposal-native/) (routing over
+> `HTTPServer.serve`), [spike-13](../../../swift-wire-spikes/spike-13-wiremvc-servertransport-bridge/)
+> (the `ServerTransport` bridge), and
+> [spike-14](../../../swift-wire-spikes/spike-14-wiremvc-streaming/) (streaming through both).
+> [spike-11](../../../swift-wire-spikes/spike-11-wiremvc-servertransport/) remains the
+> proof of the decoded-witness *shape* (decode → call → encode); only its registration
+> target moved from `transport.register` to `builder.register`.
 
-The headline, unchanged from the plan: WireMVC is a **spec-free, annotation-driven
-analogue of the OpenAPI generator's registration codegen**. `@Controller`/verb/param/
-response annotations fold into M3's `ServerTransport` collation surface; because the
-target is `some ServerTransport`, controllers mount cross-runtime unchanged.
+The headline, unchanged: WireMVC is a **spec-free, annotation-driven analogue of the OpenAPI
+generator's registration codegen**. `@Controller`/verb/param/response annotations fold into a
+Wire collation surface (`WireMVCKeys.routeContributors`); because the target is the proposal's
+**routing-surface protocol** rather than any one framework, controllers mount cross-runtime
+unchanged — natively on the proposal server, and on Hummingbird/Vapor through the
+`ServerTransport` adapter.
 
 ## Decisions
 
-### Target protocol — `some ServerTransport` (standardised)
+### Target protocol — `RoutableHTTPServerBuilder` over the proposal server (adapter for `ServerTransport`)
 
-WireMVC registers routes on `some ServerTransport` (`swift-openapi-runtime`). It's the
-proven Swift shape (swift-openapi-generator targets exactly it), cross-runtime for free,
-already Wire's shipped collation primitive (M3's `TransportContributor`), and
-dispatch-agnostic. **Not a permanent wedding:** the route-descriptor table (below) is the
-portability layer, so the transport is a swappable backend (the `TransportContributor`
-witness parameter swaps). The `swift-http-api-proposal` server surface (`HTTPServer` /
-`HTTPServerRequestHandler`, `anyAppleOS 26.0` / Swift 6.4) is the **tracked successor**
-behind the same seam — a *Router* sits on top of `serve` in that world too, so WireMVC
-still does per-route registration, never reimplements routing. Cost accepted: a light,
-stable, OpenAPI-*branded* dependency (`OpenAPIRuntime`) for a non-OpenAPI adapter.
+WireMVC registers routes on **`RoutableHTTPServerBuilder`** — a small WireMVC-owned
+per-route registration surface parameterised over the proposal server's associated
+`RequestContext` / `Reader` / `ResponseSender`, so a *Router* built on the proposal's
+`HTTPServer.serve(handler:)` conforms to it and WireMVC never reimplements routing. The
+genericity is on the **contributor's method** (`registerWireRoutes<Builder: RoutableHTTPServerBuilder>`),
+not the contributor type, so `any RouteContributor` still boxes and collates through Wire's
+`CollectedKey` (below), while the builder keeps the server's `~Copyable` streaming
+associated types and is never boxed. (Superseded decision: M5.0 first standardised on
+`some ServerTransport`; see the pivot banner. The core no longer depends on `OpenAPIRuntime`
+at all — that dependency moved to the opt-in adapter.)
+
+**`some ServerTransport` is retained as an opt-in adapter.** `WireMVCServerTransport` (a
+separate module behind the `ServerTransport` package trait, off by default so the core
+resolves proposal-only) bridges the same proposal-native controllers onto a
+`some ServerTransport`, so Hummingbird/Vapor mount them via `swift-openapi-hummingbird` /
+`swift-openapi-vapor` unchanged. The `ServerTransport` register closure is
+`request → (HTTPResponse, HTTPBody?)`; the bridge fabricates a proposal `Reader` from the
+request `HTTPBody?` and a `ResponseSender` that feeds the response `HTTPBody` (streaming —
+see [spike-14](../../../swift-wire-spikes/spike-14-wiremvc-streaming/)). This inverts the
+original cost: OpenAPIRuntime is now a dependency only of the adapter a consumer explicitly
+opts into, not of the core.
+
+**Not a permanent wedding either way:** the route-descriptor table (below) stays the
+portability layer, so the registration backend (`builder.register` for the proposal server,
+`transport.register` inside the adapter) is swappable off the same descriptors.
 
 ### Dispatch — dynamic registration now; static-capable by construction
 
@@ -47,7 +78,10 @@ off the same table. Do not make "emit `register` calls" the macro's only output.
 - `@Controller` — the annotation name (generic, per Spring/Micronaut/NestJS prior art;
   the framework-specific adapters keep their qualified `@HummingbirdController` /
   `@OpenAPIController` names — the portable surface earns the plain one).
-- It is a `@Contributes(to: TransportKeys.handlers)` **alias** — no new contract.
+- It is a `@Contributes(to: WireMVCKeys.routeContributors)` **alias** — no new contract.
+  (WireMVC uses its own collated key rather than re-homing into M3's `TransportKeys.handlers`,
+  because its witness registers on `RoutableHTTPServerBuilder`, not `some ServerTransport`;
+  the two surfaces still coexist on one graph — see the plan's *task-cluster* note.)
 - **Requires an explicit scope** (`@Singleton` → app-scope, M5.1; `@Scoped(seed:)` →
   request-scope, M5.4). Bare `@Controller` with no scope is a diagnostic.
 - **Optional path prefix:** `@Controller("/users")` groups and verb subpaths append; bare
@@ -128,27 +162,46 @@ discipline is JAX-RS/OpenAPI-flavored; `@ResponseStatus` is the Spring name.)
 - Raw escape-hatch handler spelling (`@RawRoute` vs signature-detected) → **M5.2**.
 - Content negotiation beyond JSON, and content-type routing between handlers → future
   capability off the route-descriptor table.
-- Streaming / SSE / WebSocket → raw handler (M5.2).
+- **Streaming / SSE → raw handler (M5.2).** The `RoutableHTTPServerBuilder` handler already
+  hands the raw proposal primitives (`consuming sending Reader` / `ResponseSender`) to the
+  closure, so the raw escape hatch *is* that signature with decode/encode skipped —
+  [spike-14](../../../swift-wire-spikes/spike-14-wiremvc-streaming/) streams SSE end-to-end
+  both natively and through the `ServerTransport` adapter (with real backpressure), so
+  streaming needs **no** framework-specific adapter.
+- **WebSocket → escape-to-framework, not a WireMVC route.** An upgrade is not a
+  request→response body; neither the proposal server's handler model nor `ServerTransport`'s
+  `register → (HTTPResponse, HTTPBody?)` expresses it, so no transport-level adapter (generic
+  or framework-specific) carries it. WebSocket routes are registered directly on the
+  framework and WireMVC coexists — unless/until the proposal *and* OpenAPIRuntime both grow
+  upgrade support.
 - Typed error→response mapping, response header/cookie control → later.
 - `@Head` / `@Options` verbs → later or via the raw handler.
 
-## The generated shape (from spike-11)
+## The generated shape (from spike-12)
 
-Per route, the macro emits one `transport.register` call with a thin closure; decode/
-encode/status logic lives in a WireMVC runtime support layer the closure calls:
+Per route, the macro emits one `builder.register(method:path:handler:)` call with a thin
+closure; decode/encode/status logic lives in a WireMVC runtime support layer the closure
+calls. The handler receives the matched path parameters plus the proposal's `~Copyable`
+streaming reader and response sender:
 
 ```swift
 // @Get("/{id}") @JSONResponse  →  200, JSON body
-try transport.register(
-    { _, _, metadata in
-        let id = String(metadata.pathParameters["id"] ?? "")          // @Path id
-        let result = try await self.getUser(id: id)
-        return try WireMVCResponse.json(result, status: .ok)          // @JSONResponse
-    },
+builder.register(
     method: .get,
-    path: "/users/{id}"                                               // prefix + subpath
+    path: "/users/{id}",                                              // prefix + subpath
+    handler: { _, pathParameters, _, responseSender in
+        let id = String(pathParameters["id"] ?? "")                   // @Path id
+        let result = try await self.getUser(id: id)
+        try await WireMVCResponse.json(result, status: .ok, on: responseSender)  // @JSONResponse
+    }
 )
 ```
 
-See [spike-11](../../../swift-wire-spikes/spike-11-wiremvc-servertransport/) for the full
-hand-written witness (all six surface behaviors served in-process).
+The witness that carries these registrations is `registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on:)`
+— generic over the builder, with the `~Copyable` inverse requirements restated at the generic
+boundary (they don't propagate; the proposal's own `serve` does the same). See
+[spike-12](../../../swift-wire-spikes/spike-12-wiremvc-proposal-native/) for the full
+hand-written witness served on a real `NIOHTTPServer`, and
+[spike-13](../../../swift-wire-spikes/spike-13-wiremvc-servertransport-bridge/) for the same
+witness driven through `some ServerTransport`. spike-11's decode/encode logic is unchanged;
+only the registration target moved from `transport.register` to `builder.register`.
