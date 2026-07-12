@@ -9,16 +9,33 @@ against the retired `_wireRegister` model; its rewrite is M5.6). Iterative, same
 the archived [M1](Archive/M1_PLAN.md) and [M2](Archive/M2_PLAN.md) plans: each
 iteration runs end-to-end and has a validation gate.
 
+> **Update — proposal-native pivot (this plan is reconciled to it).** M5.0 committed to
+> `some ServerTransport` (OpenAPIRuntime) as WireMVC's core target, naming the
+> `swift-http-api-proposal` server surface a *tracked successor* behind the same seam.
+> That successor is now the **core**, ahead of the planned timeline: deploying against
+> macOS 26 makes `anyAppleOS 26.0` unconditional, so Wire's ungated generated code compiles
+> against the proposal's server API today. WireMVC registers on `RoutableHTTPServerBuilder`
+> (over the proposal's `HTTPServer`); `some ServerTransport` is **retained as an opt-in
+> adapter** (`WireMVCServerTransport`, behind a `ServerTransport` package trait) so
+> Hummingbird/Vapor mount the same controllers. Proven by
+> [spike-12](../../swift-wire-spikes/spike-12-wiremvc-proposal-native/),
+> [spike-13](../../swift-wire-spikes/spike-13-wiremvc-servertransport-bridge/), and
+> [spike-14](../../swift-wire-spikes/spike-14-wiremvc-streaming/). Where sentences below still
+> read "the target is `some ServerTransport`," take that as the adapter path; the load-bearing
+> passages (the model paragraph, M5.0–M5.5, the open decisions) are updated inline.
+
 **The headline:** WireMVC is a **spec-free, annotation-driven analogue of the OpenAPI
-generator's registration codegen.** `@Controller`/`@Get`/`@Path`/`@JSONResponse`
-**fold into M3's `ServerTransport` collation surface** (`TransportContributor` /
-`TransportKeys.handlers` / `TransportComposable` / `apply`) — a *re-home*, not a
-parallel surface. Where WireOpenAPI's `TransportContributor` witness calls the
-generator's `registerHandlers(on:)`, WireMVC's witness is a body Wire *generates* from
-the annotations: decode path/query/body params from the raw request, call the handler,
-encode the response. Because the target is `some ServerTransport`, the same controller
-mounts on Hummingbird, Vapor, or Lambda unchanged — cross-runtime for free, exactly as
-M3 proved.
+generator's registration codegen.** `@Controller`/`@Get`/`@Path`/`@JSONResponse` fold into a
+Wire collation surface — `RouteContributor` / `WireMVCKeys.routeContributors` /
+`RouteComposable` / `WireMVC.apply` — mirroring M3's `ServerTransport` collation shape but
+with WireMVC's own key (the witness registers on `RoutableHTTPServerBuilder`, not
+`transport.register`). Where WireOpenAPI's `TransportContributor` witness calls the
+generator's `registerHandlers(on:)`, WireMVC's witness is a body Wire *generates* from the
+annotations: decode path/query/body params from the raw request, call the handler, encode the
+response. Because the target is the proposal's routing-surface protocol rather than any one
+framework, the same controller serves natively on the proposal server and — through the
+`WireMVCServerTransport` adapter — on Hummingbird, Vapor, or Lambda unchanged: cross-runtime
+for free.
 
 **Middleware needs no native-middleware router.** Because WireMVC owns the
 route-registration codegen, controller- and route-scoped `@Middleware` are nested
@@ -30,18 +47,24 @@ either type-checks or fails at the generated seam. This retires the "native-midd
 router PoC" the M2 deferral parked.
 
 **The escape hatch is a raw handler.** Anything WireMVC's typed core can't express —
-streaming, SSE, WebSocket upgrades, proxying — falls into a catch-all route whose
-handler takes the transport-native raw request/response and is registered verbatim,
-skipping decode/encode. Middleware can still wrap it. One catch-all, not a growing
-list of special-case annotations.
+streaming, SSE, proxying — falls into a catch-all route whose handler takes the proposal's
+raw primitives (`consuming sending Reader` / `ResponseSender`, the exact `RoutableHTTPServerBuilder`
+signature) and is registered verbatim, skipping decode/encode. Middleware can still wrap it.
+One catch-all, not a growing list of special-case annotations.
+[spike-14](../../swift-wire-spikes/spike-14-wiremvc-streaming/) proves SSE streams through it
+end-to-end — natively *and* through the `ServerTransport` adapter with real backpressure — so
+streaming needs no framework-specific adapter. **WebSocket is the exception:** an upgrade
+isn't a response body, so it's escape-to-framework (registered directly on the framework, with
+WireMVC coexisting), not a WireMVC route — see the scope boundary.
 
 ## How to use this plan
 
 - Each iteration has a *scope*, a *why-now*, and a *validation gate*. Don't move on
   until the gate passes.
 - **Highest-risk first** (M1/M2 philosophy): the riskiest seam is **M5.0's target
-  decision + the generated `TransportContributor` witness body** (param decode / call /
-  encode against a bare `ServerTransport`). Everything else layers on it. Middleware
+  decision + the generated `RouteContributor` witness body** (param decode / call /
+  encode against `RoutableHTTPServerBuilder`'s `~Copyable` reader/sender). Everything else
+  layers on it. Middleware
   (M5.3) and request scope (M5.4) are the two conceptually hard follow-ons, but both
   have their load-bearing shapes already proven (see *What M5 rests on*).
 - **Validation vehicle:** WireMVC ships as an **external repo** depending on *pushed*
@@ -64,13 +87,16 @@ list of special-case annotations.
 
 ## What M5 rests on (shipped / proven)
 
-- **The `ServerTransport` collation surface** — M3 shipped `TransportContributor`,
+- **The collation surface *shape*** — M3 shipped `TransportContributor`,
   `TransportKeys.handlers = CollectedKey<any TransportContributor>`, `TransportComposable`,
-  and `apply(graph, to: transport)`. WireMVC's `@Controller` contributes into exactly
-  this key; only the *witness body* is new (generated, not `registerHandlers`). See
-  [Notes/WireOpenAPIDesign.md](Notes/WireOpenAPIDesign.md).
+  and `apply(graph, to: transport)`. WireMVC reuses this *shape* with its **own key**:
+  `RouteContributor`, `WireMVCKeys.routeContributors = CollectedKey<any RouteContributor>`,
+  `RouteComposable`, and `WireMVC.apply(graph, to: &builder)`. A separate key (not a re-home
+  into `TransportKeys.handlers`) because the witness registers on `RoutableHTTPServerBuilder`,
+  not `some ServerTransport` — a different witness shape. Both keys still collate on one graph.
+  See [Notes/WireOpenAPIDesign.md](Notes/WireOpenAPIDesign.md).
 - **The `@Contributes`-alias adapter contract** — a `WireAdapterAnnotationV1` aliasing
-  `@Controller` to `@Contributes(to: TransportKeys.handlers)`, mirroring
+  `@Controller` to `@Contributes(to: WireMVCKeys.routeContributors)`, mirroring
   `@OpenAPIController`/`@HummingbirdController`. No new contract form.
 - **Graph-conformance emission** — `extension _WireGraph: TransportComposable`, emitted
   by Core knowing nothing about HTTP (M2.1, shipped). Reused verbatim.
@@ -92,38 +118,49 @@ list of special-case annotations.
 
 WireMVC's **typed core** covers request→response handlers with structured
 params and encoded bodies. Explicitly **out of the typed core, into the raw
-escape hatch (M5.2):** streaming responses, server-sent events, WebSocket upgrades,
-and proxying. Explicitly **not M5 at all:**
+escape hatch (M5.2):** streaming responses, server-sent events, and proxying (all still
+request→response, so the raw `RoutableHTTPServerBuilder` handler carries them — proven by
+[spike-14](../../swift-wire-spikes/spike-14-wiremvc-streaming/)). **WebSocket upgrades are
+neither typed-core nor raw-handler:** an upgrade isn't a request→response body, so it's
+escape-to-framework (registered on the framework directly, WireMVC coexisting), not a WireMVC
+route — the only case that could ever justify a framework-specific adapter. Explicitly **not
+M5 at all:**
 
 - **Background/scheduled work** (`jobs`-style) — a scope/lifecycle axis, not routing.
   Not a WireMVC gate.
 - **Content negotiation beyond JSON + form/multipart decode** — a narrow
   encoder/decoder hook is in M5.1's scope; pluggable multi-format negotiation is
   post-1.0 unless an example forces it.
-- **A second HTTP-framework adapter (`WireMVCVapor`)** — the cross-runtime property is
-  *structural* (the target is `ServerTransport`), so a second adapter proves nothing
-  new (same reasoning that skipped M3.4). Follows post-M5 only if a Vapor variant of
-  task-cluster materialises.
+- **Framework-specific adapters (`WireHummingbird` / `WireVapor`)** — the cross-runtime
+  property is *structural* (the target is the proposal routing surface, reached natively or
+  through the one generic `WireMVCServerTransport` bridge), so a framework-specific adapter
+  proves nothing new about portability (same reasoning that skipped M3.4). It could only ever
+  be a *performance* play — collapsing the bridge's extra hop/copies, or reaching a framework's
+  native WebSocket upgrade — and is deferred as an optimization gated on real numbers, not a
+  correctness need. Follows post-M5 only if profiling or a WebSocket-in-WireMVC use case forces
+  it.
 
 ## The model in one paragraph
 
-A `@Controller("/tasks")` type is a **transport contributor**: the plugin injects
-`@Contributes(to: TransportKeys.handlers)` (the alias), and the macro generates a
-`TransportContributor` conformance whose `registerWireHandlers(on: any ServerTransport)`
-witness, for each `@Get`/`@Post`/… member, registers a handler closure that (a) decodes
-the member's `@Path`/`@Query`/`@Body`/`@Header` params from the raw request, (b) applies
-the route's and controller's `@Middleware` layers as nested wrappers, (c) calls the
-handler, and (d) encodes the return via `@JSONResponse` (status + body). The controller
-is constructed from the graph (lift-the-minimum, shipped) and collated exactly like an
-OpenAPI controller — `Wire.bootstrap()` returns the concrete graph, which conforms to
-`TransportComposable`, and `WireMVC.apply(graph, to: transport)` registers the collated
-handlers on a user-owned `some ServerTransport` that stays *outside* the graph. Global
-middleware is a **Tier-2 concern** (M5.5), applied at the router-assembly layer — not
-folded per-route — so it keeps its pre-routing / unmatched-request coverage. A
-`@Scoped(seed:)` controller (M5.4) becomes an app-scoped proxy contributor whose generated
-witness embeds per-request scope entry, **rooted per-controller by reachability**. A raw
-handler (M5.2) skips (a) and (d)
-and registers verbatim.
+A `@Controller("/tasks")` type is a **route contributor**: the plugin injects
+`@Contributes(to: WireMVCKeys.routeContributors)` (the alias), and the macro generates a
+`RouteContributor` conformance whose `registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on:)`
+witness, for each `@Get`/`@Post`/… member, calls `builder.register(method:path:handler:)` with a
+closure that (a) decodes the member's `@Path`/`@Query`/`@Body`/`@Header` params from the raw
+request, (b) applies the route's and controller's `@Middleware` layers as nested wrappers,
+(c) calls the handler, and (d) encodes the return via `@JSONResponse` (status + body) onto the
+proposal's response sender. The controller is constructed from the graph (lift-the-minimum,
+shipped) and collated exactly like an OpenAPI controller — `Wire.bootstrap()` returns the
+concrete graph, which conforms to `RouteComposable`, and `WireMVC.apply(graph, to: &builder)`
+registers the collated routes onto a user-owned `RoutableHTTPServerBuilder` (a Router over the
+proposal's `HTTPServer`) that stays *outside* the graph. On a `ServerTransport` framework
+(Hummingbird/Vapor) the assembly instead calls `WireMVCServerTransport.apply(graph, to: transport)`
+— the opt-in adapter — with everything else identical. Global middleware is a **Tier-2 concern**
+(M5.5), applied at the router-assembly layer — not folded per-route — so it keeps its
+pre-routing / unmatched-request coverage. A `@Scoped(seed:)` controller (M5.4) becomes an
+app-scoped proxy contributor whose generated witness embeds per-request scope entry, **rooted
+per-controller by reachability**. A raw handler (M5.2) skips (a) and (d) and drives the
+proposal reader/sender verbatim.
 
 ## Iteration M5.0 — pin the target protocol + annotation surface (design gate)
 
@@ -150,19 +187,27 @@ against a fixed shape.
     M5.)
   - *A Wire-published `WireMVCServer`* — self-contained but a parallel surface; last resort.
 
-  **Decision: standardise on `some ServerTransport`.** It's the proven Swift shape
-  (swift-openapi-generator targets exactly it, verified from source), cross-runtime for
-  free, already Wire's shipped collation primitive (M3's `TransportContributor` witness),
-  and dispatch-agnostic (per the dispatch decision below). This is not a permanent wedding:
-  the **route-descriptor table is the portability layer** — the macro's source of truth is
-  the descriptors, not the `register` call, so the transport is a swappable backend (the
-  witness parameter swaps). The **`swift-http-api-proposal` server surface is the tracked
-  successor**: when it stabilises (a comparable — not longer — timeline than swift-wire's own
-  M5 → M6 → feedback path; `anyAppleOS 26.0` server / `26.2` middleware, Swift 6.4), WireMVC
-  follows it behind the same seam. One cost accepted with eyes open: `ServerTransport` lives
-  in `OpenAPIRuntime`, so WireMVC takes a **light, stable, OpenAPI-*branded* dependency** for
-  a non-OpenAPI adapter — the better trade against inventing a parallel surface. The
-  successor bridge is spikeable early (see M5.1's cross-runtime demo).
+  **Original decision (M5.0): standardise on `some ServerTransport`** — the proven Swift
+  shape (swift-openapi-generator targets exactly it), cross-runtime for free, already Wire's
+  shipped collation primitive, dispatch-agnostic — with the route-descriptor table as the
+  portability layer and the `swift-http-api-proposal` server surface named the *tracked
+  successor* behind the same seam.
+
+  **Reconciled decision: standardise on the proposal server surface now; keep `ServerTransport`
+  as an opt-in adapter.** The tracked successor arrived early. Deploying against macOS 26 makes
+  `anyAppleOS 26.0` unconditional, so Wire's ungated generated code compiles against the
+  proposal's server API today — there's no reason to route the core through OpenAPIRuntime and
+  wait. WireMVC registers on **`RoutableHTTPServerBuilder`** (a per-route surface over the
+  proposal's `HTTPServer`); the route-descriptor table stays the portability layer, so the
+  registration backend is still swappable. `some ServerTransport` is **retained behind a
+  `ServerTransport` package trait** as `WireMVCServerTransport`, bridging the same controllers
+  onto Hummingbird/Vapor. This **resolves** the OpenAPI-branded-dependency cost rather than
+  accepting it: the core depends only on `swift-http-api-proposal`; OpenAPIRuntime is a
+  dependency of the opt-in adapter alone. Proven by
+  [spike-12](../../swift-wire-spikes/spike-12-wiremvc-proposal-native/) (native routing over
+  `HTTPServer.serve`), [spike-13](../../swift-wire-spikes/spike-13-wiremvc-servertransport-bridge/)
+  (the bridge), and [spike-14](../../swift-wire-spikes/spike-14-wiremvc-streaming/) (streaming
+  through both).
 - **Annotation vocabulary.** Fix the surface: `@Controller(path)`; verb annotations
   `@Get`/`@Post`/`@Put`/`@Delete`/`@Patch(subpath)`; param annotations
   `@Path`/`@Query`/`@Body`/`@Header`; response `@JSONResponse` (with an optional status);
@@ -195,50 +240,56 @@ against a fixed shape.
 and a concrete param-annotation set; both must be pinned before codegen starts.
 
 **Validation gate — MET.** The decisions are recorded in
-[Notes/WireMVCDesign.md](Notes/WireMVCDesign.md) (target `some ServerTransport`; dynamic
-dispatch with the route-descriptor table as portability layer; the `@Controller` /
-`@Get…` / `@Path`·`@Query`·`@JSONBody`·`@Header` / `@JSONResponse` / `@ResponseStatus`
-surface; `@JSONBody` content-type rules). The proving spike,
-[spike-11](../../swift-wire-spikes/spike-11-wiremvc-servertransport/), hand-writes the
-`registerWireHandlers(on: some ServerTransport)` witness and serves all six surface
-behaviors in-process (`@Path` decode, `@JSONBody` 415/422/lenient, `@JSONResponse(status:)`,
-`@ResponseStatus(.noContent)` → 204) — `spike-11 OK`. The witness signature and decode/
-encode/status logic compile and run against real `ServerTransport` (`swift-openapi-runtime`
-1.12.0), so M5.1 codegen has a validated target to emit against.
+[Notes/WireMVCDesign.md](Notes/WireMVCDesign.md) (target `RoutableHTTPServerBuilder` over the
+proposal server, `ServerTransport` as an opt-in adapter; dynamic dispatch with the
+route-descriptor table as portability layer; the `@Controller` / `@Get…` /
+`@Path`·`@Query`·`@JSONBody`·`@Header` / `@JSONResponse` / `@ResponseStatus` surface;
+`@JSONBody` content-type rules). Four spikes prove the target:
+[spike-11](../../swift-wire-spikes/spike-11-wiremvc-servertransport/) hand-writes the decoded
+witness and serves all six surface behaviors in-process (`@Path` decode, `@JSONBody`
+415/422/lenient, `@JSONResponse(status:)`, `@ResponseStatus(.noContent)` → 204) — establishing
+the decode/encode/status logic; [spike-12](../../swift-wire-spikes/spike-12-wiremvc-proposal-native/)
+moves the registration target to `builder.register` and serves on a real `NIOHTTPServer`;
+[spike-13](../../swift-wire-spikes/spike-13-wiremvc-servertransport-bridge/) drives the same
+witness through `some ServerTransport` (the retained adapter); and
+[spike-14](../../swift-wire-spikes/spike-14-wiremvc-streaming/) streams SSE through both. So
+M5.1 codegen has a validated proposal-native target to emit against, and the `ServerTransport`
+adapter has a validated bridge.
 
 ## Iteration M5.1 — app-scope controllers, JSON in/out, no middleware
 
 The core codegen. App-scoped only, no middleware, typed handlers.
 
 **Scope:**
-- `@Controller` macro + `@Contributes(to: TransportKeys.handlers)` alias.
-- Generate the `TransportContributor` conformance: per verb-annotated member, register a
-  handler that decodes `@Path`/`@Query`/`@Body`/`@Header` params, calls the handler, and
-  encodes the `@JSONResponse` return (status + JSON body). Route paths compose the
-  controller prefix with the member subpath; `@Path` names must match `{name}`
-  placeholders (validated).
+- `@Controller` macro + `@Contributes(to: WireMVCKeys.routeContributors)` alias.
+- Generate the `RouteContributor` conformance: its `registerWireRoutes<Builder>` witness, per
+  verb-annotated member, calls `builder.register(method:path:handler:)` with a closure that
+  decodes `@Path`/`@Query`/`@Body`/`@Header` params, calls the handler, and encodes the
+  `@JSONResponse` return (status + JSON body) onto the proposal response sender. Route paths
+  compose the controller prefix with the member subpath; `@Path` names must match `{name}`
+  placeholders (validated). The `~Copyable` inverse requirements on the builder's associated
+  types are restated at the generic boundary (they don't propagate — see spike-12).
 - A narrow JSON encoder/decoder hook (JSON in / JSON out) — the one content form the
   core commits to.
-- Controller construction via lift-the-minimum (shipped); collation + `apply` reused
-  from M3.
+- Controller construction via lift-the-minimum (shipped); collation + `apply` reuse the M3
+  collation *shape* on WireMVC's own `RouteComposable` / `WireMVCKeys.routeContributors`.
 
 **Why now:** this is the milestone's spine — everything else (middleware, request scope,
 the Tier-2 macro) wraps or assembles this. Highest-risk-first.
 
 **Validation gate:** the harness serves a decoded GET/POST round-trip; `hello` and a
-`todos`-style example (e.g. `todos-dynamodb`, controllers only) port onto WireMVC and serve
-in-process. **Cross-runtime demonstration:** the *same* controllers register and serve live
-on **two** `ServerTransport`s — Hummingbird's and Vapor's (reuse the existing
-`swift-openapi-hummingbird` / `swift-openapi-vapor` transport conformances directly, or thin
-WireMVC-owned bridges; the OpenAPI generator isn't involved — WireMVC just calls
-`transport.register`). This is a **content/demonstration** asset, *not* added verification:
-cross-runtime is *structural* (the target is `some ServerTransport`), so — consistent with
-the M3.4 skip — a second live transport doesn't make the property truer, it shows it.
-**Optional richer form (gated on the proposal toolchain):** a third transport — a minimal
-`ServerTransport` conforming a router to the proposal's
-`HTTPServer`/`HTTPServerRequestHandler` — which doubles as the **successor-bridge spike** for
-M5.0's tracked-successor claim (prove `ServerTransport` bridges onto the proposal server
-surface, de-risking eventual adoption).
+`todos`-style example port onto WireMVC and serve in-process. **Cross-runtime demonstration:**
+the *same* controllers serve **(a) natively on the proposal server** (a Router conforming to
+`RoutableHTTPServerBuilder` over `NIOHTTPServer`) **and (b) on Hummingbird and Vapor** through
+the `WireMVCServerTransport` adapter (`swift-openapi-hummingbird` / `swift-openapi-vapor`
+providing the `Router`/`VaporTransport: ServerTransport` conformances — the OpenAPI generator
+isn't involved). This is a **content/demonstration** asset, *not* added verification:
+cross-runtime is *structural* (the target is the proposal routing surface), so — consistent
+with the M3.4 skip — a second live runtime doesn't make the property truer, it shows it. This
+is already realised in the `wire-mvc-examples` repo (a proposal-server runtime plus Hummingbird
+and Vapor runtimes on the adapter), which stands in for the earlier "successor-bridge spike":
+the bridge onto the proposal server surface is no longer a future de-risking exercise but the
+shipped core.
 
 ## Iteration M5.2 — the raw escape-hatch handler
 
@@ -246,20 +297,31 @@ The catch-all, before middleware — so streaming examples have a home and middl
 (M5.3) can be designed to wrap both typed and raw handlers uniformly.
 
 **Scope:**
-- A raw route form whose handler takes the transport-native raw request/response
-  (`ServerTransport`'s `HTTPRequest`/`HTTPBody?`/metadata → `HTTPResponse`/`HTTPBody?`)
-  and is registered verbatim — no param decode, no response encode. Spelling is an open
-  decision (an explicit `@RawRoute`, or a verb annotation whose raw handler *signature*
-  opts in); pin it here.
+- A raw route form whose handler takes the proposal's raw primitives — the
+  `RoutableHTTPServerBuilder` handler signature itself (`HTTPRequest`, path parameters,
+  `consuming sending Reader`, `consuming sending ResponseSender`) — and is registered verbatim,
+  no param decode, no response encode. Because that signature is *already* what the builder
+  hands every closure, the raw handler is the typed core's own shape with decode/encode
+  skipped; M5.2 is a **macro spelling**, not a new runtime path. Spelling is an open decision
+  (an explicit `@RawRoute`, or a verb annotation whose raw handler *signature* opts in); pin it
+  here.
 - The generated witness registers the raw closure directly; middleware wrapping (M5.3)
-  still composes around it.
+  still composes around it. The `WireMVCServerTransport` adapter must carry the raw stream too
+  — its response sender streams into the `ServerTransport` `HTTPBody` rather than collecting
+  (spike-14 built exactly this; today's shipped adapter still buffers and needs that path).
 
 **Why now:** it bounds the typed core. Without it, every streaming/SSE/WebSocket example
 would pressure the core to grow special cases; with it, the core stays typed-only and the
 hard cases have one uniform exit.
 
 **Validation gate:** an SSE or streaming example (`server-sent-events`,
-`response-body-processing`) ports via the raw handler and streams a response in-process.
+`response-body-processing`) ports via the raw handler and streams a response in-process — on
+the proposal server *and* through the `ServerTransport` adapter.
+[spike-14](../../swift-wire-spikes/spike-14-wiremvc-streaming/) already discharges the shape
+(a raw SSE handler streaming both ways, with real backpressure); the gate is met once the
+macro spelling and the adapter's streaming path land. **Not this gate:** `websocket-*`
+(escape-to-framework — see scope boundary) and `http2` (a transport concern, not a WireMVC
+route form).
 
 ## Iteration M5.3 — middleware, folded into codegen
 
@@ -306,9 +368,11 @@ Controller- and route-scoped middleware as nested wrappers; the standard
   once that window opens, on a comparable timeline to M5 itself (not a someday).
   *Recommendation:* model WireMVC's decoded per-route middleware on the proposal's
   **forward-transform-plus-terminal** pattern (which delivers the compile-error property)
-  over `some ServerTransport` (M5.0) now; as the proposal stabilizes, the raw `Middleware`
-  chain becomes the **substrate under** that decoded layer (per-route *and* global), not a
-  replacement for it. The god-object-critique differentiator holds either way.
+  over `RoutableHTTPServerBuilder` (M5.0) now; the proposal's `Middleware`/`HTTPAPIs` are
+  already the core's direct dependency, but `Middleware` is `@available(…26.2)` above the
+  core's `26.0` floor, so it stays the **substrate under** the decoded layer (adopted per-route
+  *and* global once the deployment floor reaches it), not a replacement. The
+  god-object-critique differentiator holds either way.
 - Validate `@Middleware` exprs against WireMVC's chosen middleware protocol; a
   type-thread mismatch gets a diagnostic that names the producing middleware, the
   expected input, and the offending stage.
@@ -330,7 +394,7 @@ value a type-transforming middleware produces and a request-scoped controller co
 
 **Scope:**
 - A `@Scoped(seed: RequestSeed.self)` controller becomes an **app-scoped proxy
-  contributor** whose *generated* `registerWireHandlers` embeds per-request scope entry
+  contributor** whose *generated* `registerWireRoutes` embeds per-request scope entry
   (build the seeded scope from the request, construct the controller fresh, dispatch).
   The mechanism is the M2-deferred one, not new: a **weak back-reference to the app
   graph** (`@Inject weak var`, shipped) feeds `bootstrap<Seed>Scope(seed:, wireGraph:)`,
@@ -356,11 +420,13 @@ value a type-transforming middleware produces and a request-scoped controller co
   per-request context** where a handler/middleware constrains its generic to require a
   capability, compile-time-verified (the ecosystem-standard analogue of Wire's
   compile-time DI, and the same mechanism as the type-transforming-middleware property).
-  Layering keeps the two from colliding: the transport delivers **one** `RequestContext`
+  Layering keeps the two from colliding: the server delivers **one** `RequestContext`
   per request (carried through the middleware chain in the `Input` box); WireMVC **seeds
   its request scope from it**; per-controller reachability roots are a DI-scope layer
-  *above* that single context. When the proposal ships, the seed can *be* the request
-  context and capability requirements interop with the middleware type-thread.
+  *above* that single context. This is now concrete, not prospective: `RoutableHTTPServerBuilder`
+  already carries `associatedtype RequestContext: HTTPServerCapability.RequestContext`, so the
+  seed maps onto the builder's request context directly and capability requirements interop
+  with the middleware type-thread.
 - The shared **"adapter replaces the binding"** primitive (the same shape
   `@Configuration` needs — swap a binding for a synthesized provider) is built here and
   reused, not reinvented.
@@ -381,11 +447,13 @@ with a `@Singleton` controller alongside in the same app.
 The M2.6 deferral, un-gated now that the routing/middleware shape is settled.
 
 **Scope:**
-- The `@main @WireHummingbird` macro codifying `bootstrap → routerBuilder → apply →
-  Application → run` — pure sugar over the working two-call `bootstrap()` + `apply()`
-  path. It absorbs the request-scope proxy assembly (M5.4) and the **global-middleware
-  application point**, which is exactly why it's built last: those settle the shape it
-  codifies.
+- The `@main @WireHummingbird` macro codifying `bootstrap → router → WireMVCServerTransport.apply →
+  Application → run` — pure sugar over the working two-call `bootstrap()` + `apply()` path
+  (Hummingbird reaches WireMVC through the `ServerTransport` adapter). A sibling proposal-server
+  composition root is thinner still — `bootstrap → RoutableHTTPServerBuilder → WireMVC.apply →
+  serve(on:)`, no framework `Application`. Either macro absorbs the request-scope proxy assembly
+  (M5.4) and the **global-middleware application point**, which is exactly why it's built last:
+  those settle the shape it codifies.
 - **Global middleware is handled here, not in M5.3** — its defining property (pre-routing,
   unmatched-request coverage) belongs at the router-assembly layer. Three options were
   weighed; the plan commits to **(i) now, (iii) when forced, never (ii)**:
@@ -458,22 +526,30 @@ be real — you can't fake authenticated-principal-as-typed-value with a logging
 Stays the downstream validator against pushed swift-wire main. Its OpenAPI controller
 (M3) is untouched; M5's forcing case is a *new* inline-routed endpoint (an internal admin
 route), demonstrating WireMVC and WireOpenAPI **coexisting on one graph** — different
-controllers, both contributing to `TransportKeys.handlers`, on the same transport.
+controllers contributing to *different* collated keys (`WireMVCKeys.routeContributors` and
+`TransportKeys.handlers`), both applied to the same runtime. On a `ServerTransport` framework
+that means both land on one transport (WireOpenAPI directly, WireMVC via
+`WireMVCServerTransport.apply`); on the proposal server, WireMVC applies natively while a
+transport-only contributor mounts through its own adapter.
 
 ## Open decisions to pin
 
-- **Target protocol** (M5.0) — **decided: standardise on `some ServerTransport`** (route
-  descriptors as the portability layer; `swift-http-api-proposal` server surface as the
-  tracked successor behind the same witness seam). No longer open.
+- **Target protocol** (M5.0) — **decided (reconciled): standardise on `RoutableHTTPServerBuilder`
+  over the proposal server**, with `some ServerTransport` retained as the opt-in
+  `WireMVCServerTransport` adapter (behind a `ServerTransport` trait). Route descriptors stay
+  the portability layer. The original `some ServerTransport` core decision was inverted once
+  macOS-26 deployment made the proposal server usable now; the core no longer depends on
+  OpenAPIRuntime. No longer open.
 - **Dispatch model** (M5.0) — **decided: dynamic registration now**, static generated
   dispatch a deferred opt-in perf backend off the same route-descriptor table.
 - **Raw-handler spelling** (M5.2) — explicit `@RawRoute` vs signature-detected opt-in.
 - **Per-route middleware protocol** (M5.3) — the proposal's `Middleware<Input, NextInput>`
   is the ideal shape (forward-transform stages + handler-as-terminal; type-transformation
-  as a compile error) but is raw-transport-level and OS-26.2-gated, so M5 uses a WireMVC
-  *decoded* fold modeled on it over `ServerTransport`, adopting the proposal chain as
-  substrate when it ships. Hummingbird's `RouterMiddleware` is incompatible (bidirectional,
-  context-typed). Type-threading recommended regardless.
+  as a compile error) but is raw-transport-level and `26.2`-gated above the core's `26.0`
+  floor, so M5 uses a WireMVC *decoded* fold modeled on it over `RoutableHTTPServerBuilder`,
+  adopting the proposal chain as substrate once the deployment floor reaches it. Hummingbird's
+  `RouterMiddleware` is incompatible (bidirectional, context-typed). Type-threading recommended
+  regardless.
 - **Global middleware** (M5.5) — committed to **(i) framework concern now, (iii)
   context-free responder/transport decorator when forced, never (ii) collated
   `RouterMiddleware`s**.
@@ -483,10 +559,12 @@ controllers, both contributing to `TransportKeys.handlers`, on the same transpor
 ## When M5 is "done"
 
 - `WireMVC` ships: `@Controller`/verb/param/`@JSONResponse` controllers generating
-  `TransportContributor` witnesses onto `some ServerTransport`, cross-runtime by
-  construction; `@Middleware` folded into the generated routing (type-transforming
-  middleware surfacing as compile errors); the raw escape-hatch handler; request-scoped
-  controllers; and the Tier-2 `@WireHummingbird` composition-root macro.
+  `RouteContributor` witnesses onto `RoutableHTTPServerBuilder` (the proposal server surface),
+  cross-runtime by construction — natively on the proposal server and, through the opt-in
+  `WireMVCServerTransport` adapter, on Hummingbird/Vapor; `@Middleware` folded into the
+  generated routing (type-transforming middleware surfacing as compile errors); the raw
+  escape-hatch handler; request-scoped controllers; and the Tier-2 `@WireHummingbird`
+  composition-root macro.
 - Wire Core gains no new *contract* form — M5 rides the shipped
   graph-conformance emission, the `@Contributes` alias, and the (previously unused)
   `BuilderKey`→opaque-member fold; the one new *primitive* is the shared "adapter
