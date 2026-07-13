@@ -150,16 +150,19 @@ discipline is JAX-RS/OpenAPI-flavored; `@ResponseStatus` is the Spring name.)
   awaits / `try`s as needed.
 - Thrown error → **500** baseline in M5 core; typed error→response mapping deferred.
 
-### Middleware (spelling only — protocol is M5.3)
+### Middleware (spelling here; full model settled in M5.3)
 
 - `@Middleware(expr)` repeatable at controller + route scope; composed source-order,
-  controller-outer → route-inner → handler. The concrete middleware *protocol* is the M5.3
-  decision (a WireMVC-defined decoded shape modeled on the proposal's forward-transform +
-  terminal pattern).
+  controller-outer → route-inner → handler. The middleware *is* the proposal's `Middleware`
+  (a Wire component referenced from the graph); each route's chain is a `MiddlewareBuilder` fold
+  and every handler is its terminal, projecting params off the fold's final box. The full
+  record — box projection, capabilities, folds, `@RawRoute`, plugin-generated forwarding — is
+  [WireMVCMiddleware.md](WireMVCMiddleware.md).
 
 ## Deferred (explicitly not M5.0)
 
-- Raw escape-hatch handler spelling (`@RawRoute` vs signature-detected) → **M5.2**.
+- Raw escape-hatch handler spelling → **M5.2, decided: `@RawRoute`** (see
+  [WireMVCMiddleware.md](WireMVCMiddleware.md)).
 - Content negotiation beyond JSON, and content-type routing between handlers → future
   capability off the route-descriptor table.
 - **Streaming / SSE → raw handler (M5.2).** The `RoutableHTTPServerBuilder` handler already
