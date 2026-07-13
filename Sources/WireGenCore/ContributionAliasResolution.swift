@@ -8,32 +8,37 @@ import SwiftSyntax
 // aliases after aggregation, injecting a synthetic contribution onto each matched
 // binding so it flows through the ordinary multibinding fan-in — no new emission.
 
-/// A candidate contribution-alias use-site: an attribute on a type declaration,
-/// captured before it's matched against a declared alias.
+/// A candidate contribution-alias use-site: an attribute on a binding declaration —
+/// a scope-bound type, or a `@Provides` function/property — captured before it's
+/// matched against a declared alias.
 package struct ContributionAliasUseSite: Sendable, Equatable {
     package let annotationName: String
-    package let qualifiedTypeName: String
+    /// The identity of the binding the attribute sits on: a qualified type name for
+    /// a scope-bound type, or the `@Provides` access path for a provider. Matched
+    /// against `DiscoveredBinding.aliasTargetIdentity` after aggregation.
+    package let targetIdentity: String
     package let location: SourceLocation
     package let originModule: String
 
     package init(
         annotationName: String,
-        qualifiedTypeName: String,
+        targetIdentity: String,
         location: SourceLocation,
         originModule: String
     ) {
         self.annotationName = annotationName
-        self.qualifiedTypeName = qualifiedTypeName
+        self.targetIdentity = targetIdentity
         self.location = location
         self.originModule = originModule
     }
 }
 
-/// Capture every attribute on a type declaration as an alias candidate.
+/// Capture every attribute on a binding declaration as an alias candidate, tagged
+/// with the binding's identity (a type name, or a `@Provides` access path).
 /// Classification against declared aliases (by name) happens after aggregation, so
 /// non-alias attributes captured here are harmless — they simply never match.
 func scanContributionAliasUseSites(
-    qualifiedTypeName: String,
+    targetIdentity: String,
     attributes: AttributeListSyntax,
     sourcePath: String,
     converter: SourceLocationConverter,
@@ -45,7 +50,7 @@ func scanContributionAliasUseSites(
         sites.append(
             ContributionAliasUseSite(
                 annotationName: attribute.attributeName.trimmedDescription,
-                qualifiedTypeName: qualifiedTypeName,
+                targetIdentity: targetIdentity,
                 location: makeSourceLocation(of: attribute, sourcePath: sourcePath, converter: converter),
                 originModule: module
             )
@@ -77,17 +82,17 @@ func injectAliasContributions(
     }
     guard !keyByAnnotation.isEmpty else { return bindings }
 
-    var keysByType: [String: [String]] = [:]
+    var keysByIdentity: [String: [String]] = [:]
     for site in useSites {
         if let key = keyByAnnotation[site.annotationName] {
-            keysByType[site.qualifiedTypeName, default: []].append(key)
+            keysByIdentity[site.targetIdentity, default: []].append(key)
         }
     }
-    guard !keysByType.isEmpty else { return bindings }
+    guard !keysByIdentity.isEmpty else { return bindings }
 
     return bindings.map { binding in
-        guard let typeName = binding.scopeBoundQualifiedTypeName,
-            let keys = keysByType[typeName], !keys.isEmpty
+        guard let identity = binding.aliasTargetIdentity,
+            let keys = keysByIdentity[identity], !keys.isEmpty
         else { return binding }
         let extra = keys.map { Contribution(keyReference: $0, location: binding.location) }
         return binding.appendingContributions(extra)
@@ -95,11 +100,15 @@ func injectAliasContributions(
 }
 
 extension DiscoveredBinding {
-    /// The qualified type name for a scope-bound (type) binding, else `nil` —
-    /// contribution aliases attach to type declarations only.
-    var scopeBoundQualifiedTypeName: String? {
-        if case let .scopeBound(type) = self { return type.qualifiedTypeName }
-        return nil
+    /// The identity a contribution-alias use-site matches against: a scope-bound
+    /// type's qualified name, or a provider's `@Provides` access path. `nil` for a
+    /// synthesised aggregate (nothing to alias).
+    var aliasTargetIdentity: String? {
+        switch self {
+        case .scopeBound(let type): return type.qualifiedTypeName
+        case .provider(let provider): return provider.accessPath
+        case .aggregate: return nil
+        }
     }
 
     /// A copy with `extra` contributions appended (scope-bound and provider
