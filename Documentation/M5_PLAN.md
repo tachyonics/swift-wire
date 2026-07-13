@@ -302,9 +302,12 @@ The catch-all, before middleware — so streaming examples have a home and middl
   `consuming sending Reader`, `consuming sending ResponseSender`) — and is registered verbatim,
   no param decode, no response encode. Because that signature is *already* what the builder
   hands every closure, the raw handler is the typed core's own shape with decode/encode
-  skipped; M5.2 is a **macro spelling**, not a new runtime path. Spelling is an open decision
-  (an explicit `@RawRoute`, or a verb annotation whose raw handler *signature* opts in); pin it
-  here.
+  skipped; M5.2 is a **macro spelling**, not a new runtime path. **Spelling pinned: `@RawRoute`**
+  — a func-level marker that is greppable, stands in for the "one response annotation per route"
+  invariant, and flips param binding to type-identification (raw params by type, typed params
+  keep their annotations). The full model — a raw handler as a *projection of the box's raw
+  slots*, unified with the typed core and with middleware — is in
+  [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
 - The generated witness registers the raw closure directly; middleware wrapping (M5.3)
   still composes around it. The `WireMVCServerTransport` adapter must carry the raw stream too
   — its response sender streams into the `ServerTransport` `HTTPBody` rather than collecting
@@ -327,6 +330,17 @@ route form).
 
 Controller- and route-scoped middleware as nested wrappers; the standard
 `Middleware<Input, NextInput>` type; type-threading.
+
+> **Settled — see [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).** A WireMVC middleware
+> *is* the proposal's `Middleware` **and** a Wire component; `@Middleware(T.self)` references it
+> from the graph. Each route's chain is a per-route `MiddlewareBuilder` fold whose final box type
+> the compiler infers; the terminal projects the handler's params off that box (`withContents`),
+> and the "remove the middleware ⇒ won't compile" guarantee is the compiler's, from the
+> projection type-check — not asserted by the macro. The plugin generates the capability
+> *forwarding* conformances for the specialisations the folds surface. It rests on shipped Wire
+> (`BuilderKey` fold + generic `@Provides` factories), so the adapter contract stays
+> `@Contributes`; the single unbuilt piece is the type-preserving **opaque** `BuilderKey` fold
+> (deferred, spike-7-proven). The derivation below records how each decision was reached.
 
 **Scope:**
 - `@Middleware(expr)` at controller scope (wraps every route) and route scope (wraps one
@@ -379,8 +393,10 @@ Controller- and route-scoped middleware as nested wrappers; the standard
 
 **Why now:** middleware is the first thing that makes the codegen more than a
 route-registration convenience. It precedes request scope only nominally — see M5.4.
-(The `BuilderKey`→opaque-member fold this once anchored is now exercised by the *global*
-standard-`Middleware` aggregation, deferred to M5.5 with the rest of the global layer.)
+(The `BuilderKey`→opaque-member fold is load-bearing *here*: the per-route chain is a
+type-preserving opaque fold, so M5.3 — not just M5.5's global aggregation — needs it. It's
+de-risked by spike-7 Proof 2 but unbuilt; see [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md),
+*What this rests on*.)
 
 **Validation gate:** `open-telemetry` ports (pure-interception tracing,
 `Input == NextInput`) **and** one `auth-*` example ports (type-transforming: the
@@ -542,14 +558,17 @@ transport-only contributor mounts through its own adapter.
   OpenAPIRuntime. No longer open.
 - **Dispatch model** (M5.0) — **decided: dynamic registration now**, static generated
   dispatch a deferred opt-in perf backend off the same route-descriptor table.
-- **Raw-handler spelling** (M5.2) — explicit `@RawRoute` vs signature-detected opt-in.
-- **Per-route middleware protocol** (M5.3) — the proposal's `Middleware<Input, NextInput>`
-  is the ideal shape (forward-transform stages + handler-as-terminal; type-transformation
-  as a compile error) but is raw-transport-level and `26.2`-gated above the core's `26.0`
-  floor, so M5 uses a WireMVC *decoded* fold modeled on it over `RoutableHTTPServerBuilder`,
-  adopting the proposal chain as substrate once the deployment floor reaches it. Hummingbird's
-  `RouterMiddleware` is incompatible (bidirectional, context-typed). Type-threading recommended
-  regardless.
+- **Raw-handler spelling** (M5.2) — **decided: `@RawRoute`** (func-level marker; raw params
+  type-identified, typed params annotated). See [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
+- **Per-route middleware protocol** (M5.3) — **decided: the proposal's `Middleware<Input, NextInput>`
+  itself**, composed as a per-route `MiddlewareBuilder` fold whose final box the compiler infers;
+  the terminal projects handler params off the box via `withContents`, and the type-transformation
+  compile-error property is the compiler's (the projection type-check). The plugin generates
+  capability forwarding for the specialisations the folds surface. Rests on shipped Wire
+  (`BuilderKey` + generic `@Provides` factories); the one unbuilt piece is the opaque `BuilderKey`
+  fold. `Middleware` is `26.2`-gated above the core's `26.0` floor, so per-route middleware lands
+  when the deployment floor reaches it. Hummingbird's `RouterMiddleware` is incompatible
+  (bidirectional, context-typed). Full record: [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
 - **Global middleware** (M5.5) — committed to **(i) framework concern now, (iii)
   context-free responder/transport decorator when forced, never (ii) collated
   `RouterMiddleware`s**.
