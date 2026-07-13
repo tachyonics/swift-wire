@@ -26,9 +26,19 @@ the compiler enforces it.
 
 ## The box & projection
 
-- **The box is the proposal's `RequestResponseMiddlewareBox<RequestContext, Reader, ResponseSender>`.**
-  It bundles a fixed `request: HTTPRequest`, the capability-typed `RequestContext`, the
-  `~Copyable` `Reader`, and the `~Copyable` `ResponseSender`. We reuse it — nothing to invent.
+- **The box is `RequestResponseMiddlewareBox<RequestContext, Reader, ResponseSender>`, WireMVC-owned
+  but structurally the proposal's.** It bundles a fixed `request: HTTPRequest`, the capability-typed
+  `RequestContext`, the `~Copyable` `Reader`, and the `~Copyable` `ResponseSender`. **Correction
+  (grounding for 4a):** the proposal's own `RequestResponseMiddlewareBox` lives *only* in the
+  `HTTPClientConformance` **test module** (under `HTTPServerForTesting`) and is referenced by nothing
+  — not the test server, not any example; that module also drags in the whole NIO server stack, so it
+  is not a viable runtime dependency for WireMVC's framework-agnostic core. WireMVC therefore ships an
+  **identical** box in its own runtime module (the exact shape spike-15 vendored: `init` +
+  `withContents<T>`). Middleware stay the proposal's `Middleware` (the shippable `Middleware` module —
+  protocol + `MiddlewareBuilder` + `ChainedMiddleware`); only the `Input`/`NextInput` box type is
+  WireMVC's. There is no proposal-native middleware pipeline to be incompatible with (the box is
+  unused upstream), so owning it is free. [spike-16](../../../swift-wire-spikes/spike-16-wiremvc-generic-fold/)
+  confirms the fold over this box compiles when parameterised on a *generic* builder's associated types.
 - **Explode = the box's `withContents`.** `consuming func withContents { request, context, reader, sender in … }`
   is the one-shot consuming destructure; the generated terminal calls it. (`@Explode` is only
   for a *custom* box — e.g. one that retypes `request` — where the author supplies the
@@ -45,17 +55,19 @@ the compiler enforces it.
 ## Middleware = proposal `Middleware` **and** a Wire component
 
 - A WireMVC middleware *is* the proposal's `Middleware<Input, NextInput>` **and** a normal Wire
-  component (its own `@Singleton`/`@Scoped` scope, its own `@Inject` deps). `@Middleware(T.self)`
-  is a graph reference — nothing new for the binding. Request-scoped middleware come from M5.4
-  for free.
-- Three graph forms, all folded uniformly:
-  1. **Concrete, single instance** — an ordinary concrete binding; its concrete `Input`/`NextInput`
-     pin what may precede it, and it can conform its output context by hand (it knows its input).
-  2. **Generic, self-producing** — a middleware generic over its input. If it varies per use it
-     is a `@Provides` factory in Wire's model (an unconstrained generic `@Singleton` is a
-     diagnostic that redirects to `@Provides`).
-  3. **Generic `@Provides` factory** — a parameterised factory the fold specialises per position;
-     "multiple instances via specialisation."
+  component (its own `@Singleton`/`@Scoped` scope, its own `@Inject` deps). `@Middleware(…)` names a
+  middleware *type* (see the naming record below — a generic type can't be named `T.self`, so it takes
+  placeholder type args). Request-scoped middleware come from M5.4 for free.
+- Three forms (revised — see *`@Middleware` naming, dispatch & the fold* below for what actually
+  type-checks):
+  1. **Concrete** — `@Middleware(Concrete.self)`, constructed inline. A fully concrete middleware pins
+     its box, so it fits *only downstream of an erasing middleware* (one whose `NextInput` is a concrete
+     box); it can never unify with the generic base box. Real, but a niche position.
+  2. **Generic** — `@Middleware(Generic<WireContext, WireReader, WireSender>.self)`. The common form;
+     dep-free ones construct inline (no graph). Both non-transforming and context-transforming.
+  3. **Generic with `@Inject` deps** — same spelling, but the plugin synthesises a hidden factory (the
+     metatype-parameter form below) and lifts it onto the controller. The one form needing a swift-wire
+     change; deferred past 4a.
 
 ## Chains = per-route folds
 
@@ -104,6 +116,61 @@ the compiler enforces it.
 - Residual: "whole-slot by type" is really "by type *spelling*" for a syntactic macro; an
   aliased `ResponseSender` is where a minimal marker (or requiring the canonical spelling) might
   return.
+
+## `@Middleware` naming, dispatch & the fold — 4a implementation record
+
+Building 4a surfaced constraints the conceptual design didn't anticipate. All findings validated by
+[spike-16](../../../swift-wire-spikes/spike-16-wiremvc-generic-fold/) and the wire-mvc implementation.
+
+**The naming problem.** A composable middleware must be generic over the box (`<Ctx, Reader, Sender>`)
+to sit at any position — the reader/sender are irreducibly the *server's* associated types (the live
+body stream and connection writer; not concretizable without buffering + an existential `~Copyable`
+sender, which isn't expressible). But a **generic type can't be named `Generic.self`** — no metatype
+without type arguments. Two rescue attempts also failed: a factory *method* can't be explicitly
+specialized (`Factory.make<…>()` → "cannot explicitly specialize static method"), and a wrapping
+`around(next:)` observer can't capture-and-consume the `~Copyable` box values in its nested closure.
+
+**The dispatch (what the `@Controller` macro emits), by argument syntax:**
+- `@Middleware(Concrete.self)` — no generic args → construct inline `Concrete()`. A concrete middleware
+  pins its box, so it only unifies **downstream of an erasing middleware** (a generic middleware whose
+  `NextInput` is a *concrete* box: it buffers/adapts the server's reader+sender, runs the concrete
+  downstream chain, then flushes the result into the real sender on return — trading streaming for
+  concreteness, by choice). Proven end-to-end.
+- `@Middleware(Generic<WireContext, WireReader, WireSender>.self)` — generic args → strip them, re-spell
+  as `Generic<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()`. Inference does **not**
+  flow backward through the fold, so the type args must be spelled; and the placeholder types
+  (`WireContext`/`WireReader`/`WireSender`, shipped by WireMVC, never instantiated) exist only so the
+  annotation's metatype type-checks. This is the common form. Dep-free → inline construction, **no
+  swift-wire change**.
+- `@Middleware(someKey)` — not `.self` → diagnosed. Referencing a bound middleware by key needs graph
+  injection into the witness; deferred (see below).
+
+**The fold, per route** (built inline in `registerWireRoutes`, witness-local concrete): build the base
+`RequestResponseMiddlewareBox` from the register closure's `(request, requestContext, reader,
+responseSender)`, `wireCompose { … }` the middleware (controller-outer → route-inner), then
+`intercept(input: baseBox) { finalBox in finalBox.withContents { … terminal … } }`. Routes with no
+`@Middleware` keep the direct path (conditional emission — internal witness shape, not user surface).
+
+**The `sending` relaxation (load-bearing correctness fix).** The box's `withContents` can only yield
+plain `consuming` values (its stored fields aren't provably in a disconnected region — the proposal's
+box yields `consuming` for exactly this reason). But `RoutableHTTPServerBuilder.register` hands the
+witness `consuming sending` reader/sender at the boundary, and the terminal's consumers were declared
+`consuming sending` to match. Through a fold the sender/reader arrive from `withContents` as plain
+`consuming`, so those consumers must **not require `sending`**. Fix: `WireMVCOutcome.send(on:)` and
+`WireMVCRequest.collectBody` take `consuming` (not `consuming sending`), and **`@RawRoute` handlers take
+`consuming` too** (a raw handler streams within its own region; `consuming` works both directly and
+through a fold). A `sending` value still passes fine to a `consuming` parameter, so the no-middleware
+and raw-direct paths are unaffected. This refines the M5.2 raw-handler contract: `consuming`, not
+`consuming sending`.
+
+**Generic-with-deps: the metatype-parameter factory.** The deferred piece. The factory's `make` takes
+the box types as **metatype parameters** — `make(_: Ctx.Type, _: R.Type, _: S.Type) -> Mw<Ctx,R,S>` —
+so the specialization is *inferred from arguments*, sidestepping the forbidden explicit method
+specialization. This also **fixes the design's own factory** (whose `make<In>()` would not have
+compiled). The developer never writes a factory: the plugin reads the middleware's `@Inject` deps,
+emits the factory, lifts it onto the controller (macro-generated `@Inject` is invisible to Wire's
+plugin, so the plugin must do the lift), and the witness calls `self._factory.make(Builder.RequestContext.self, …)`.
+This is the one swift-wire Core change; everything above ships as 4a with no swift-wire change.
 
 ## Who does what
 
