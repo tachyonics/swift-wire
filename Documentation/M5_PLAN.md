@@ -337,10 +337,17 @@ Controller- and route-scoped middleware as nested wrappers; the standard
 > the compiler infers; the terminal projects the handler's params off that box (`withContents`),
 > and the "remove the middleware ⇒ won't compile" guarantee is the compiler's, from the
 > projection type-check — not asserted by the macro. The plugin generates the capability
-> *forwarding* conformances for the specialisations the folds surface. It rests on shipped Wire
-> (`BuilderKey` fold + generic `@Provides` factories), so the adapter contract stays
-> `@Contributes`; the single unbuilt piece is the type-preserving **opaque** `BuilderKey` fold
-> (deferred, spike-7-proven). The derivation below records how each decision was reached.
+> *forwarding* conformances for the specialisations the folds surface. It rests on generic
+> `@Provides` factories, so the adapter contract stays `@Contributes`. The fold is **witness-local
+> concrete** codegen, *not* a `BuilderKey`/opaque fold —
+> [spike-15](../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/) found the opaque
+> graph-binding form isn't expressible (`Middleware` can't partial-bind its two primary associated
+> types), so there is nothing opaque to build. The one Core-codegen item the design reduces to is a
+> **generic-middleware factory object** (a plugin-generated concrete struct holding the middleware's
+> deps with a generic `make<In>()`, lifted as an ordinary binding — *not* a graph back-reference);
+> concrete and generic-dep-free middleware need no Core change. See
+> [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *Generic middleware*. The derivation
+> below records how each decision was reached.
 
 **Scope:**
 - `@Middleware(expr)` at controller scope (wraps every route) and route scope (wraps one
@@ -393,10 +400,11 @@ Controller- and route-scoped middleware as nested wrappers; the standard
 
 **Why now:** middleware is the first thing that makes the codegen more than a
 route-registration convenience. It precedes request scope only nominally — see M5.4.
-(The `BuilderKey`→opaque-member fold is load-bearing *here*: the per-route chain is a
-type-preserving opaque fold, so M5.3 — not just M5.5's global aggregation — needs it. It's
-de-risked by spike-7 Proof 2 but unbuilt; see [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md),
-*What this rests on*.)
+(The per-route chain is a **witness-local concrete** fold, not the `BuilderKey`→opaque-member fold —
+[spike-15](../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/) found the opaque form
+isn't expressible for `Middleware` and isn't needed here; see
+[Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *What this rests on*. The `BuilderKey`
+opaque/erased fold remains relevant only to M5.5's *global* context-free aggregation.)
 
 **Validation gate:** `open-telemetry` ports (pure-interception tracing,
 `Input == NextInput`) **and** one `auth-*` example ports (type-transforming: the
@@ -564,11 +572,15 @@ transport-only contributor mounts through its own adapter.
   itself**, composed as a per-route `MiddlewareBuilder` fold whose final box the compiler infers;
   the terminal projects handler params off the box via `withContents`, and the type-transformation
   compile-error property is the compiler's (the projection type-check). The plugin generates
-  capability forwarding for the specialisations the folds surface. Rests on shipped Wire
-  (`BuilderKey` + generic `@Provides` factories); the one unbuilt piece is the opaque `BuilderKey`
-  fold. `Middleware` is `26.2`-gated above the core's `26.0` floor, so per-route middleware lands
-  when the deployment floor reaches it. Hummingbird's `RouterMiddleware` is incompatible
-  (bidirectional, context-typed). Full record: [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
+  capability forwarding for the specialisations the folds surface. The fold is **witness-local
+  concrete** codegen (spike-15): the opaque `BuilderKey` graph-binding fold isn't expressible for
+  `Middleware` (two primary associated types can't partial-bind), so nothing opaque is built. The
+  one Core-codegen item is a **generic-middleware factory object** (plugin-generated concrete struct
+  holding the middleware's deps + a generic `make<In>()`, lifted as an ordinary binding — not a
+  back-reference); concrete and generic-dep-free middleware work today. `Middleware` is `26.2`-gated
+  above the core's `26.0` floor, so per-route middleware lands when the deployment floor reaches it.
+  Hummingbird's `RouterMiddleware` is incompatible (bidirectional, context-typed). Full record:
+  [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
 - **Global middleware** (M5.5) — committed to **(i) framework concern now, (iii)
   context-free responder/transport decorator when forced, never (ii) collated
   `RouterMiddleware`s**.
