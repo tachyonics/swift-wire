@@ -30,7 +30,19 @@ struct ContributionAliasTests {
             struct TodoController {}
             """
         let sites = discover(in: source, sourcePath: "C.swift", module: testModule).aliasUseSites
-        #expect(sites.contains { $0.annotationName == "HummingbirdRoute" && $0.qualifiedTypeName == "TodoController" })
+        #expect(sites.contains { $0.annotationName == "HummingbirdRoute" && $0.targetIdentity == "TodoController" })
+    }
+
+    @Test func capturesAliasUseSitesOnProviderFunctions() {
+        // The alias attribute sits on a `@Provides func`, not a type — captured keyed by the
+        // provider's access path so it resolves onto the provider binding, not just types.
+        let source = """
+            @Provides
+            @HummingbirdRoute
+            func makeController() -> TodoController { TodoController() }
+            """
+        let sites = discover(in: source, sourcePath: "C.swift", module: testModule).aliasUseSites
+        #expect(sites.contains { $0.annotationName == "HummingbirdRoute" && $0.targetIdentity == "makeController" })
     }
 
     @Test func injectsContributionForAliasedBinding() throws {
@@ -52,7 +64,7 @@ struct ContributionAliasTests {
         )
         let useSite = ContributionAliasUseSite(
             annotationName: "HummingbirdRoute",
-            qualifiedTypeName: "TodoController",
+            targetIdentity: "TodoController",
             location: mockLocation("C.swift"),
             originModule: testModule
         )
@@ -60,6 +72,37 @@ struct ContributionAliasTests {
         let injected = injectAliasContributions(into: [binding], aliases: [alias], useSites: [useSite])
         let contributions = try #require(injected.first?.contributions)
         #expect(contributions.contains { $0.keyReference == "HummingbirdKeys.routes" })
+    }
+
+    @Test func injectsContributionForAliasedProvider() throws {
+        // A `@Provides` provider (not a type) carrying an alias attribute, matched by its access path.
+        let binding = DiscoveredBinding.provider(
+            DiscoveredProvider(
+                boundType: "ValkeyClient",
+                accessPath: "makeClient",
+                form: .function,
+                dependencies: [],
+                genericParameterNames: [],
+                location: mockLocation("C.swift"),
+                originModule: testModule
+            )
+        )
+        let alias = DiscoveredAdapterAnnotation(
+            annotationName: "BackgroundService",
+            contributesToKey: "WireMVCKeys.services",
+            location: mockLocation("Adapter.swift"),
+            originModule: testModule
+        )
+        let useSite = ContributionAliasUseSite(
+            annotationName: "BackgroundService",
+            targetIdentity: "makeClient",
+            location: mockLocation("C.swift"),
+            originModule: testModule
+        )
+
+        let injected = injectAliasContributions(into: [binding], aliases: [alias], useSites: [useSite])
+        let contributions = try #require(injected.first?.contributions)
+        #expect(contributions.contains { $0.keyReference == "WireMVCKeys.services" })
     }
 
     @Test func nonAliasAttributesAreNotInjected() {
@@ -76,7 +119,7 @@ struct ContributionAliasTests {
         // `@Singleton` is captured as a candidate but matches no alias → no contribution.
         let useSite = ContributionAliasUseSite(
             annotationName: "Singleton",
-            qualifiedTypeName: "Plain",
+            targetIdentity: "Plain",
             location: mockLocation("P.swift"),
             originModule: testModule
         )

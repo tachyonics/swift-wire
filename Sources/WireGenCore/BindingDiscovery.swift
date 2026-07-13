@@ -569,9 +569,17 @@ extension BindingDiscovery {
     /// callee name.
     private func recordAdapterUseSites(name: TokenSyntax, attributes: AttributeListSyntax) {
         let qualified = (scopes.map(\.typeName) + [name.text]).joined(separator: ".")
+        recordAdapterUseSites(targetIdentity: qualified, attributes: attributes)
+    }
+
+    /// Capture any adapter-annotation use-sites on a binding declaration, tagged
+    /// with its identity — a qualified type name for a type, or a `@Provides`
+    /// access path for a provider function/property (so `@X` aliases resolve on
+    /// providers, not just types).
+    private func recordAdapterUseSites(targetIdentity: String, attributes: AttributeListSyntax) {
         aliasUseSites.append(
             contentsOf: scanContributionAliasUseSites(
-                qualifiedTypeName: qualified,
+                targetIdentity: targetIdentity,
                 attributes: attributes,
                 sourcePath: sourcePath,
                 converter: converter,
@@ -739,6 +747,7 @@ extension BindingDiscovery {
 
         let propertyName = pattern.identifier.text
         let accessPath = (scopes.map(\.typeName) + [propertyName]).joined(separator: ".")
+        recordAdapterUseSites(targetIdentity: accessPath, attributes: node.attributes)
         let providesAttribute = attribute(in: node.attributes, named: "Provides")
         let key = providesAttribute.flatMap { keyIdentifier(from: $0) }
         let scopeKey = scopes.last?.seedScope
@@ -806,6 +815,7 @@ extension BindingDiscovery {
         }
         let functionName = node.name.text
         let accessPath = (scopes.map(\.typeName) + [functionName]).joined(separator: ".")
+        recordAdapterUseSites(targetIdentity: accessPath, attributes: node.attributes)
         let dependencies = node.signature.parameterClause.parameters.map { parameter in
             // Per-parameter `@Inject(<key>)` lets a consumer name the
             // keyed binding it wants. A bare parameter (no attribute)
