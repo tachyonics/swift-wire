@@ -6,8 +6,10 @@
 > [spike-12](../../../swift-wire-spikes/spike-12-wiremvc-proposal-native/) (proposal-native
 > routing), [spike-13](../../../swift-wire-spikes/spike-13-wiremvc-servertransport-bridge/)
 > (the `ServerTransport` bridge), [spike-14](../../../swift-wire-spikes/spike-14-wiremvc-streaming/)
-> (streaming). Rests on **shipped** Wire primitives — the `BuilderKey` result-builder fold and
-> generic `@Provides` factories — plus one deferred piece (the type-preserving opaque fold; see
+> (streaming), and [spike-15](../../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/)
+> (the fold + capability forwarding). The middleware fold is **witness-local concrete** codegen over
+> the proposal's `Middleware`/`MiddlewareBuilder`, resting on generic `@Provides` factories; spike-15
+> corrected an earlier draft that expected a `BuilderKey` *opaque* fold (not expressible — see
 > *What this rests on*).
 
 ## The model in one paragraph
@@ -63,9 +65,13 @@ the compiler enforces it.
   terminating in the generated terminal. The final box type is **compiler-inferred** from the
   fold (`MiddlewareBuilder`'s `First.NextInput == Second.Input` thread) — the macro never names
   it; the terminal just explodes it via `withContents`.
-- This is Wire's shipped **`BuilderKey`** result-builder-fold mechanism (its doc example is
-  literally `BuilderKey<MiddlewareBuilder>`), applied per route rather than to one global key,
-  with middleware pulled from the graph (concrete binding / specialised factory).
+- **The fold is witness-local concrete codegen, not a graph binding** — proven by
+  [spike-15](../../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/). It is *not* a
+  `BuilderKey` fold: `BuilderKey` yields a binding whose type must be nameable/opaque, but
+  `Middleware` has two primary associated types (`Input`, `NextInput`) that can't be partially
+  bound, so "pinned input, opaque output" is not expressible. So the chain is built inline in the
+  route witness (where the final box stays concrete-inferred and `withContents` works), with the
+  *middleware* pulled from the graph (concrete binding / specialised factory).
 
 ## The compile-time guarantee & forwarding
 
@@ -126,20 +132,70 @@ Request flow: `base box → ctrl-mw… → route-mw… → [ explode → project
 ## What this rests on
 
 - **Shipped Wire:** generic `@Provides` factories (demand-driven specialisation, dedup,
-  ambiguity diagnostics) and the [`BuilderKey`](BuilderKeyDesign.md) result-builder fold. The
-  adapter contract stays `@Contributes` — WireMVC does **not** need a new "inject arbitrary
-  bindings" power; the fold is Wire-generated from a contribution, and the middleware are
-  ordinary user-declared bindings.
+  ambiguity diagnostics). The adapter contract stays `@Contributes` — WireMVC does **not** need a
+  new "inject arbitrary bindings" power; the middleware are ordinary user-declared bindings, and
+  the chain fold is witness-local codegen that references them (not a contributed binding).
 - **Shipped proposal:** `Middleware`/`ChainedMiddleware`/`MiddlewareBuilder`,
   `RequestResponseMiddlewareBox` + `withContents`, `HTTPServerCapability.RequestContext`.
-- **The one unbuilt piece:** the type-preserving **opaque** `BuilderKey` fold — a per-chain
-  `some Middleware<BaseBox, FinalBox>` where `FinalBox` varies. The shipped fold produces a
-  *fixed* result; a fixed/erased `[any Middleware]` fold would throw away the type-thread the
-  guarantee depends on. `BuilderKey`'s own doc defers exactly this ("the parameterised-opaque
-  case … is deferred to [OpaqueTypesSupport](OpaqueTypesSupport.md)"); it's de-risked (spike-7
-  Proof 2 proved parameterised-opaque lifting) but not yet emitted — the M5.5-earmarked
-  "`BuilderKey`→opaque-member fold," now pulled forward as M5.3's dependency. **This is the
-  single build item this design adds beyond shipped machinery.**
+- **No opaque fold to build — corrected by
+  [spike-15](../../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/).** An earlier
+  draft named the type-preserving *opaque `BuilderKey` fold* as the one unbuilt piece. spike-15
+  found it is **not expressible**: `Middleware`'s two primary associated types can't be partially
+  bound, so a fold can't be returned through a `some Middleware`-with-pinned-input boundary. The
+  fold is therefore **witness-local concrete** (which spike-15 proves works end-to-end with the
+  real proposal types), so it is *not* a `BuilderKey`/opaque-member fold and there is nothing
+  opaque to emit. The one Core-codegen item the design reduces to is the **generic-middleware
+  factory object** — see the next section.
+- **Codegen detail (spike-15):** every plugin-generated forwarding conformance must restate
+  `& ~Copyable` in its `where` clause (`extension …: Cap where Base: Cap & ~Copyable`) or Swift
+  silently re-imposes `Copyable` and it fails to compile.
+
+## Generic middleware: the factory-object extension
+
+For multi-stage chains, middleware are generally **generic over their input box** (a middleware
+pinned to one concrete input can only sit where that exact box appears). How the witness obtains
+such a middleware splits by whether it has dependencies:
+
+- **Works today, no Core change:** *concrete* middleware (an ordinary binding, lifted onto the
+  controller) and *generic dep-free* middleware (the witness constructs `Mw<In>()` inline — proven
+  in [spike-15](../../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/)). Covers the
+  logging/timing tier.
+- **Needs one extension:** *generic middleware with `@Inject` deps* (auth-with-a-verifier,
+  session-with-a-store). The reason it doesn't fit shipped Wire: the `_WireGraph` is a struct of
+  **pre-constructed stored properties, one per binding**, and generic bindings are only ever
+  *specialised into concrete stored properties, demand-driven by written dependency types*. A
+  middleware in a fold is specialised at the **compiler-inferred** box type — never written — so it
+  can be neither a stored property nor demand-specialised. (Wire does already emit some helper
+  *methods* on the graph — the `BuilderKey` `_wireFold…`, `@Inject func` setters — so method
+  emission itself isn't new; a *generic* one is.)
+
+**The extension is a factory *object*, not a graph back-reference.** The plugin generates, per
+generic-with-deps middleware, a small concrete type holding the middleware's deps and exposing a
+generic `make`:
+
+```swift
+// plugin-generated — an ordinary binding: concrete struct, concrete deps resolved like any binding
+struct _WireSessionMiddlewareFactory {
+    let store: SessionStore
+    func make<In>() -> SessionMiddleware<In> { SessionMiddleware<In>(store: store) }
+}
+```
+
+The controller lifts this factory as a hidden dependency and the macro-witness calls it in the
+fold — `self._sessionMiddlewareFactory.make()`, with `In` inferred from the fold position. This
+splits exactly along the macro/plugin line: only the **plugin** (global view) sees the middleware's
+`@Inject` deps and writes its construction, into the factory; the **macro-witness** (syntactic)
+only *names* the factory and calls `.make()`, never touching the deps. It's therefore an ordinary
+lifted binding — constructed once, deduped across controllers that use the same middleware — **not**
+a whole-graph reference. (A back-reference is reserved for M5.4's request-scope proxy, which
+genuinely must re-enter the graph; middleware construction doesn't.) The generic method lives on a
+*concrete* struct, so it's liftable, sidestepping the "a bare generic function isn't a first-class
+value" problem.
+
+Scope of the extension: a new plugin emission (recognise a generic `@Middleware(X.self)`, read
+`X`'s `@Inject` deps, emit the factory + its conformance) that **composes shipped pieces** — ordinary
+binding resolution for the factory's deps, the existing method-emission capability, and lift-the-
+minimum for the factory itself. Not a new binding kind; no change to how deps resolve.
 
 ## Open sub-decisions
 
