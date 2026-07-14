@@ -42,7 +42,8 @@ package func renderWireGraph(
     containerTopologicalOrders: [String: [DiscoveredBinding]] = [:],
     seedScopeOrders: [SeedScopeEmission] = [],
     graphConformances: [DiscoveredGraphConformance] = [],
-    multibindingKeys: [DiscoveredMultibindingKey] = []
+    multibindingKeys: [DiscoveredMultibindingKey] = [],
+    syntheticTypeDeclarations: [String] = []
 ) -> String {
     var lines: [String] = []
     var bootstrapEntries: [BootstrapEntry] = []
@@ -56,6 +57,14 @@ package func renderWireGraph(
         for line in sortedImports {
             lines.append(line)
         }
+    }
+
+    // Plugin-synthesised module-scope types (e.g. `@Factory` factory structs).
+    // Emitted before the graph structs so the bindings that construct them —
+    // registered by the synthesis pass — are in scope. Each is a full declaration.
+    for declaration in syntheticTypeDeclarations {
+        lines.append("")
+        lines.append(declaration)
     }
 
     // Default graph — always emitted, even when empty, so consumers

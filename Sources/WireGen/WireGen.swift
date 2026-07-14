@@ -44,20 +44,15 @@ struct WireGen {
         var aggregate = discoverAllSources(groups: groups, consumerModule: consumerModule)
         print(renderDiscoveryReport(perFile: aggregate.perFile))
 
-        // Contribution aliases (`@X` → `@Contributes(to: key)`) inject a synthetic
-        // contribution onto each aliased binding, before graphs build.
-        aggregate.allBindings = applyAliasContributions(
-            to: aggregate.allBindings,
-            aliases: aggregate.adapterAnnotations,
-            useSites: aggregate.aliasUseSites
-        )
-
-        // Adapter dependencies (`@X(T.self)` → the annotated binding depends on T) inject a
-        // synthetic input edge, the symmetric complement of the contribution aliases above.
-        aggregate.allBindings = applyAdapterDependencies(
-            to: aggregate.allBindings,
-            annotations: aggregate.adapterAnnotations,
-            useSites: aggregate.aliasUseSites
+        // Pre-graph binding rewrites — contribution aliases (`@X` → `@Contributes`),
+        // adapter dependencies (`@X(T.self)`), and factory synthesis (`@X(key)`) — mutate
+        // the bindings before graphs build; synthesis also yields the factories to emit.
+        let synthesizedFactories = applyPreGraphBindingPasses(
+            to: &aggregate.allBindings,
+            adapterAnnotations: aggregate.adapterAnnotations,
+            aliasUseSites: aggregate.aliasUseSites,
+            factoryTemplates: aggregate.factoryTemplates,
+            consumerModule: consumerModule
         )
 
         // One graph per scope — default, per-`@Container`, and per-seed.
@@ -101,6 +96,7 @@ struct WireGen {
             aggregate.imports
             + foreignImports(in: allBindingsFlat, consumerModule: consumerModule)
             + conformanceOriginImports(aggregate.graphConformances, consumerModule: consumerModule)
+            + factoryProducedTypeImports(synthesizedFactories, consumerModule: consumerModule)
 
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
         let generated = renderWireGraph(
@@ -109,7 +105,8 @@ struct WireGen {
             containerTopologicalOrders: containerOrders,
             seedScopeOrders: seedScopeOrders,
             graphConformances: aggregate.graphConformances,
-            multibindingKeys: aggregate.multibindingKeys
+            multibindingKeys: aggregate.multibindingKeys,
+            syntheticTypeDeclarations: synthesizedFactories.map(renderFactoryDeclaration)
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -155,6 +152,7 @@ struct WireGen {
         var bindingKeys: [DiscoveredBindingKey] = []
         var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
         var aliasUseSites: [ContributionAliasUseSite] = []
+        var factoryTemplates: [DiscoveredFactoryTemplate] = []
         var resultBuilders: [DiscoveredResultBuilder] = []
         var graphConformances: [DiscoveredGraphConformance] = []
     }
@@ -205,6 +203,7 @@ struct WireGen {
             aggregate.bindingKeys.append(contentsOf: result.bindingKeys)
             aggregate.adapterAnnotations.append(contentsOf: result.adapterAnnotations)
             aggregate.aliasUseSites.append(contentsOf: result.aliasUseSites)
+            aggregate.factoryTemplates.append(contentsOf: result.factoryTemplates)
             aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
             aggregate.graphConformances.append(contentsOf: result.graphConformances)
         }
@@ -600,4 +599,37 @@ extension WireGen {
         )
         exit(1)
     }
+}
+
+/// Run the pre-graph binding rewrites in order — contribution aliases, adapter
+/// dependencies, then factory synthesis — mutating `allBindings` in place and
+/// returning the synthesised factories the emitter declares. Each pass consumes
+/// the previous pass's output, so ordering is load-bearing: an aliased
+/// contribution or injected dependency is visible to synthesis.
+private func applyPreGraphBindingPasses(
+    to allBindings: inout [Partition: [DiscoveredBinding]],
+    adapterAnnotations: [DiscoveredAdapterAnnotation],
+    aliasUseSites: [ContributionAliasUseSite],
+    factoryTemplates: [DiscoveredFactoryTemplate],
+    consumerModule: String
+) -> [SynthesizedFactory] {
+    allBindings = applyAliasContributions(
+        to: allBindings,
+        aliases: adapterAnnotations,
+        useSites: aliasUseSites
+    )
+    allBindings = applyAdapterDependencies(
+        to: allBindings,
+        annotations: adapterAnnotations,
+        useSites: aliasUseSites
+    )
+    let synthesis = applyFactorySynthesis(
+        to: allBindings,
+        templates: factoryTemplates,
+        annotations: adapterAnnotations,
+        useSites: aliasUseSites,
+        consumerModule: consumerModule
+    )
+    allBindings = synthesis.bindings
+    return synthesis.factories
 }

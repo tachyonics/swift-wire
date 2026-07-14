@@ -30,6 +30,35 @@ struct CodeEmissionTests {
         )
     }
 
+    @Test func syntheticTypeDeclarationsEmitAtModuleScopeBeforeTheGraph() throws {
+        // A plugin-synthesised type (e.g. a `@Factory` factory struct) is emitted
+        // verbatim above the graph struct, and its registered binding is constructed
+        // like any other. Mirrors what factory synthesis feeds `renderWireGraph`.
+        let factoryDeclaration = """
+            struct _WireFactory_MyMiddleware_session {
+                let store: SessionStore
+            }
+            """
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [
+                singleton("SessionStore"),
+                singleton(
+                    "_WireFactory_MyMiddleware_session",
+                    dependencies: [(name: "store", type: "SessionStore")]
+                ),
+            ],
+            syntheticTypeDeclarations: [factoryDeclaration]
+        )
+        #expect(output.contains(factoryDeclaration))
+        // Declared before the graph struct so the binding that constructs it is in scope.
+        let declarationOffset = try #require(output.firstRange(of: "struct _WireFactory_MyMiddleware_session {"))
+        let graphOffset = try #require(output.firstRange(of: "struct _WireGraph"))
+        #expect(declarationOffset.lowerBound < graphOffset.lowerBound)
+        // The factory binding is constructed from the resolved dependency.
+        #expect(output.contains("_WireFactory_MyMiddleware_session(store: sessionStore)"))
+    }
+
     private func providerProperty(
         _ accessPath: String,
         boundType: String
