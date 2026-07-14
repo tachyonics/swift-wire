@@ -2,11 +2,11 @@ import SwiftSyntax
 
 // Contribution-alias resolution — the M2.3 replacement for the `_wireRegister`
 // side-effect. An adapter declares `WireAdapterAnnotationV1(annotation: "X",
-// contributesTo: key)`, meaning the attribute `@X` on a binding is an alias for
-// `@Contributes(to: key)`. Use-sites are captured name-agnostically (the defining
-// module may differ from the use module), then classified against the declared
-// aliases after aggregation, injecting a synthetic contribution onto each matched
-// binding so it flows through the ordinary multibinding fan-in — no new emission.
+// capability: .contributes(to: key))`, meaning the attribute `@X` on a binding is an
+// alias for `@Contributes(to: key)`. Use-sites are captured name-agnostically (the
+// defining module may differ from the use module), then classified against the
+// `.contributes` aliases after aggregation, injecting a synthetic contribution onto each
+// matched binding so it flows through the ordinary multibinding fan-in — no new emission.
 
 /// A candidate contribution-alias use-site: an attribute on a binding declaration —
 /// a scope-bound type, or a `@Provides` function/property — captured before it's
@@ -17,17 +17,23 @@ package struct ContributionAliasUseSite: Sendable, Equatable {
     /// a scope-bound type, or the `@Provides` access path for a provider. Matched
     /// against `DiscoveredBinding.aliasTargetIdentity` after aggregation.
     package let targetIdentity: String
+    /// The attribute's first argument, verbatim (e.g. `"SomeType.self"`), or `nil` if
+    /// the attribute takes none. Unused by contribution-alias matching (which is
+    /// name-only); read by adapter-dependency matching, which needs the referenced type.
+    package let argument: String?
     package let location: SourceLocation
     package let originModule: String
 
     package init(
         annotationName: String,
         targetIdentity: String,
+        argument: String? = nil,
         location: SourceLocation,
         originModule: String
     ) {
         self.annotationName = annotationName
         self.targetIdentity = targetIdentity
+        self.argument = argument
         self.location = location
         self.originModule = originModule
     }
@@ -47,10 +53,13 @@ func scanContributionAliasUseSites(
     var sites: [ContributionAliasUseSite] = []
     for element in attributes {
         guard let attribute = element.as(AttributeSyntax.self) else { continue }
+        let firstArgument = attribute.arguments?.as(LabeledExprListSyntax.self)?
+            .first?.expression.trimmedDescription
         sites.append(
             ContributionAliasUseSite(
                 annotationName: attribute.attributeName.trimmedDescription,
                 targetIdentity: targetIdentity,
+                argument: firstArgument,
                 location: makeSourceLocation(of: attribute, sourcePath: sourcePath, converter: converter),
                 originModule: module
             )
@@ -78,7 +87,9 @@ func injectAliasContributions(
 ) -> [DiscoveredBinding] {
     var keyByAnnotation: [String: String] = [:]
     for alias in aliases {
-        keyByAnnotation[alias.annotationName] = alias.contributesToKey
+        if case .contributes(let key) = alias.capability {
+            keyByAnnotation[alias.annotationName] = key
+        }
     }
     guard !keyByAnnotation.isEmpty else { return bindings }
 
