@@ -24,25 +24,78 @@ attributes they bind, and "type-transforming middleware ⇒ compile error" falls
 terminal passing the projected values into the handler's typed parameters — nothing asserts it,
 the compiler enforces it.
 
+## Short-circuit & the box shape (Model B) — a *consequence* of the middleware shape
+
+The single most load-bearing fact about the whole middleware model is that it is **entailed by the
+proposal's `Middleware.intercept<Return>(input:, next:) -> Return` signature**, not chosen against
+HTTP-middleware precedent. The entailment (each step forced by the previous, proven with the compiler
+in [spike-17](../../../swift-wire-spikes/spike-17-wiremvc-poison-box/)):
+
+1. `Return` is universally generic — the middleware is compiled once for *all* `Return`, so it can't
+   assume it's `Void` or construct one (a literal `return ()` fails: *cannot convert '()' to `Return`*).
+2. ⟹ the only value of type `Return` reachable inside `intercept` is what `next` hands back.
+3. ⟹ control flow must reach `next` to return at all → **every middleware runs the continuation**; there
+   is no control-flow short-circuit (throwing is the only non-`next` exit, and that's the error channel).
+4. ⟹ a middleware can't produce the response *as a value* → the response is only ever a **sender
+   side-channel effect**.
+5. ⟹ since the chain always completes, "who responded / stop handling" can't be control flow — it must
+   be **state carried forward** in the box.
+
+So "everyone always runs," "the decision is state in the box," and "a middleware that responds *writes*
+via the sender" are one consequence with one cause. The upside is deliberate and matches Wire's
+philosophy: participation is **structural, not positional** — an audit/metrics/tracing middleware can't
+be silently skipped by an upstream gate. To get classic control-flow short-circuit (inner middleware
+skipped) you would have to **change the middleware shape** (pin `Return` to a concrete/associated type
+so a middleware can `return` one) — i.e. stop being the proposal's `Middleware`. Staying proposal-native
+and this model are the same decision. (Prior art for data-flow short-circuit: Envoy filter-status
+enums, railway-oriented / `Either`, http4s `OptionT` — the streaming-first stacks land here too.)
+
+**The box is therefore a `~Copyable` enum, not a struct** (`Sources/WireMVC/Middleware.swift`):
+
+```swift
+public enum RequestResponseMiddlewareBox<RequestContext, Reader, ResponseSender>: ~Copyable where … {
+    case pending(request: HTTPRequest, requestContext: RequestContext, reader: Reader, responseSender: ResponseSender)
+    case responded(request: HTTPRequest)                 // sender consumed & gone; request kept for observation
+
+    public var peekedRequest: HTTPRequest { … }          // borrowing, both states
+    public var isPending: Bool { … }
+    public consuming func responding(_ write: (consuming ResponseSender) async throws -> Void) async throws -> Self
+    public consuming func withPendingContents(_ handler: (HTTPRequest, consuming RequestContext, consuming Reader, consuming ResponseSender) async throws -> Void) async throws
+}
+```
+
+- A gate that rejects calls `input.responding { sender in … write 403 … }` — it *is* handling the
+  request; the sender is consumed, the box becomes `.responded`, and it still calls `next`.
+- The generated terminal calls `withPendingContents { … bind → handler → send … }`, which **no-ops when
+  the box is `.responded`** — the handler is skipped, exactly once, without any control-flow branch in
+  the chain.
+- **Single-write and first-wins are enforced by the type**: `.responded` has no sender, so nothing can
+  write again or override an earlier decision. No discipline required.
+- **Sender is *not* reachable after a write** (the reason for the enum over a struct-with-optional-flag):
+  a middleware that responds owns the write and can even stream it; afterward there is structurally no
+  sender to hand out. What survives in `.responded` is only the Copyable `request` (add `status` if a
+  downstream metrics middleware needs it).
+- **No response post-processing** — once the terminal (or a gate) streams via the sender, outer
+  middleware can't touch the response. That's inherent to a streaming, sender-based response, and it's
+  the same root as `Return` being vestigial; it is not a limitation this shape adds.
+
 ## The box & projection
 
-- **The box is `RequestResponseMiddlewareBox<RequestContext, Reader, ResponseSender>`, WireMVC-owned
-  but structurally the proposal's.** It bundles a fixed `request: HTTPRequest`, the capability-typed
-  `RequestContext`, the `~Copyable` `Reader`, and the `~Copyable` `ResponseSender`. **Correction
-  (grounding for 4a):** the proposal's own `RequestResponseMiddlewareBox` lives *only* in the
-  `HTTPClientConformance` **test module** (under `HTTPServerForTesting`) and is referenced by nothing
-  — not the test server, not any example; that module also drags in the whole NIO server stack, so it
-  is not a viable runtime dependency for WireMVC's framework-agnostic core. WireMVC therefore ships an
-  **identical** box in its own runtime module (the exact shape spike-15 vendored: `init` +
-  `withContents<T>`). Middleware stay the proposal's `Middleware` (the shippable `Middleware` module —
-  protocol + `MiddlewareBuilder` + `ChainedMiddleware`); only the `Input`/`NextInput` box type is
-  WireMVC's. There is no proposal-native middleware pipeline to be incompatible with (the box is
-  unused upstream), so owning it is free. [spike-16](../../../swift-wire-spikes/spike-16-wiremvc-generic-fold/)
-  confirms the fold over this box compiles when parameterised on a *generic* builder's associated types.
-- **Explode = the box's `withContents`.** `consuming func withContents { request, context, reader, sender in … }`
-  is the one-shot consuming destructure; the generated terminal calls it. (`@Explode` is only
-  for a *custom* box — e.g. one that retypes `request` — where the author supplies the
-  destructure; the standard path never writes it.)
+- **The box is WireMVC-owned `RequestResponseMiddlewareBox`** — the `pending`/`responded` `~Copyable`
+  enum above (see *Short-circuit & the box shape*). **Grounding (4a):** the proposal's own
+  `RequestResponseMiddlewareBox` lives *only* in the `HTTPClientConformance` **test module** (under
+  `HTTPServerForTesting`), is referenced by nothing, and drags in the whole NIO server stack — not a
+  viable dependency for WireMVC's framework-agnostic core. WireMVC ships its own (initially the struct
+  spike-15 vendored; now the Model-B enum). Middleware stay the proposal's `Middleware` (the shippable
+  `Middleware` module — protocol + `MiddlewareBuilder` + `ChainedMiddleware`); only the
+  `Input`/`NextInput` box type is WireMVC's, and the box being unused upstream is why owning it is free.
+  [spike-16](../../../swift-wire-spikes/spike-16-wiremvc-generic-fold/) confirms the fold compiles over a
+  *generic* builder's associated types; [spike-17](../../../swift-wire-spikes/spike-17-wiremvc-poison-box/)
+  confirms the enum + `responding`/`withPendingContents` and the always-run short-circuit.
+- **Explode = the box's `withPendingContents`.** `consuming func withPendingContents { request, context, reader, sender in … }`
+  runs the terminal on a `.pending` box and no-ops on `.responded`; the generated terminal calls it.
+  (`@Explode` is only for a *custom* box — e.g. one that retypes `request` — where the author supplies
+  the destructure; the standard path never writes it.)
 - **Enrichment rides `RequestContext`.** A capability is a child protocol of
   `HTTPServerCapability.RequestContext` (e.g. `protocol AuthenticatedContext: RequestContext { var principal: User { get } }`);
   a middleware's output context conforms to the ones it adds. The `request`/`reader`/`sender`
@@ -76,13 +129,13 @@ the compiler enforces it.
 - Each route's chain is a `MiddlewareBuilder` result-builder **fold** over its middleware,
   terminating in the generated terminal. The final box type is **compiler-inferred** from the
   fold (`MiddlewareBuilder`'s `First.NextInput == Second.Input` thread) — the macro never names
-  it; the terminal just explodes it via `withContents`.
+  it; the terminal just explodes it via `withPendingContents`.
 - **The fold is witness-local concrete codegen, not a graph binding** — proven by
   [spike-15](../../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/). It is *not* a
   `BuilderKey` fold: `BuilderKey` yields a binding whose type must be nameable/opaque, but
   `Middleware` has two primary associated types (`Input`, `NextInput`) that can't be partially
   bound, so "pinned input, opaque output" is not expressible. So the chain is built inline in the
-  route witness (where the final box stays concrete-inferred and `withContents` works), with the
+  route witness (where the final box stays concrete-inferred and `withPendingContents` works), with the
   *middleware* pulled from the graph (concrete binding / specialised factory).
 
 ## The compile-time guarantee & forwarding
@@ -148,14 +201,14 @@ specialized (`Factory.make<…>()` → "cannot explicitly specialize static meth
 **The fold, per route** (built inline in `registerWireRoutes`, witness-local concrete): build the base
 `RequestResponseMiddlewareBox` from the register closure's `(request, requestContext, reader,
 responseSender)`, `wireCompose { … }` the middleware (controller-outer → route-inner), then
-`intercept(input: baseBox) { finalBox in finalBox.withContents { … terminal … } }`. Routes with no
+`intercept(input: baseBox) { finalBox in finalBox.withPendingContents { … terminal … } }`. Routes with no
 `@Middleware` keep the direct path (conditional emission — internal witness shape, not user surface).
 
-**The `sending` relaxation (load-bearing correctness fix).** The box's `withContents` can only yield
-plain `consuming` values (its stored fields aren't provably in a disconnected region — the proposal's
+**The `sending` relaxation (load-bearing correctness fix).** The box's `withPendingContents` can only
+yield plain `consuming` values (its payload isn't provably in a disconnected region — the proposal's
 box yields `consuming` for exactly this reason). But `RoutableHTTPServerBuilder.register` hands the
 witness `consuming sending` reader/sender at the boundary, and the terminal's consumers were declared
-`consuming sending` to match. Through a fold the sender/reader arrive from `withContents` as plain
+`consuming sending` to match. Through a fold the sender/reader arrive from `withPendingContents` as plain
 `consuming`, so those consumers must **not require `sending`**. Fix: `WireMVCOutcome.send(on:)` and
 `WireMVCRequest.collectBody` take `consuming` (not `consuming sending`), and **`@RawRoute` handlers take
 `consuming` too** (a raw handler streams within its own region; `consuming` works both directly and
