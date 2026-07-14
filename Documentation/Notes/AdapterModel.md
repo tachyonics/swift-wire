@@ -46,15 +46,20 @@ about routing, HTTP, or middleware:
   symmetric complement of `.contributes` (`appendingDependencies` mirrors
   `appendingContributions`).
 - **`.injectsFactoryOnArgument`** — an **input** edge to a *synthesised factory*. The
-  consumer-side half of the factory model (Increment 2): `@X(key)` on a binding
-  declares that the binding requires the factory for `key` — synthesised from the
-  matching `@Factory(key)` template (see [WireMVCMiddleware.md](WireMVCMiddleware.md),
-  *Generic middleware: the `@Factory` template*) — to be injected. Discovery
+  consumer-side half of the factory model: `@X(key)` on a binding declares that the
+  binding requires the factory for `key` — synthesised from the matching `@Factory(key)`
+  template (see [WireMVCMiddleware.md](WireMVCMiddleware.md), *Generic middleware: the
+  `@Factory` template + `@MiddlewareFactory` mapping*) — to be injected. Discovery
   discriminates the argument per use-site: a `FactoryKey` reference demands template
   synthesis and injects that factory; a `Type.self` reference is the concrete case,
   injecting a pass-through factory over an existing binding. `@Middleware` declares
   this capability. (Distinct from `.injectsDependencyOnArgument`, which injects an
-  existing binding *by type* and never synthesises.)
+  existing binding *by type* and never synthesises.) The **producer** side of this
+  model is a two-annotation split: a fixed native `@Factory(key)` (which the plugin
+  gates the expensive template extraction behind) plus a domain adapter annotation
+  (`@MiddlewareFactory`) that carries an opaque assisted-parameter *role mapping*,
+  joined to the template by type identity. A planned producer-side capability formalises
+  that mapping-carrying annotation; until then, `@Factory` is discovered by fixed name.
 - **`.rewritesInjection`** — reserved for the M5.4 request-scope proxy (an adapter
   that redirects an injection through a scope re-entry); not yet consumed.
 

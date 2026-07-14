@@ -343,12 +343,13 @@ Controller- and route-scoped middleware as nested wrappers; the standard
 > [spike-15](../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/) found the opaque
 > graph-binding form isn't expressible (`Middleware` can't partial-bind its two primary associated
 > types), so there is nothing opaque to build. The one Core-codegen item the design reduces to is
-> the **generic-with-deps** tier: the middleware is declared a `@Factory(key)` template and
-> referenced `@Middleware(key)`; the plugin synthesises one concrete factory per consumed key
-> (holding the deps, with a metatype-parameter `create`) and injects it onto the controller via the
-> consumer-side capability `@Middleware` declares — `.injectsFactoryOnArgument` (the factory input edge) —
-> *not* a graph back-reference. See [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *Generic
-> middleware: the `@Factory` template*. The derivation below records how each decision was reached.
+> the **generic-with-deps** tier: the middleware is declared `@Factory(key) @MiddlewareFactory` and
+> referenced `@Middleware(key)`; the plugin synthesises one factory per consumed key — generic over
+> the *injected* axis (threaded by ordinary graph specialisation) with a `create` generic over the
+> *assisted* box roles (metatype parameters) — and injects it onto the controller via the consumer-side
+> `.injectsFactoryOnArgument` capability, *not* a graph back-reference. See
+> [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *Generic middleware: the `@Factory`
+> template + `@MiddlewareFactory` mapping*. The derivation below records how each decision was reached.
 
 **Scope:**
 - `@Middleware(expr)` at controller scope (wraps every route) and route scope (wraps one
@@ -576,10 +577,10 @@ transport-only contributor mounts through its own adapter.
   capability forwarding for the specialisations the folds surface. The fold is **witness-local
   concrete** codegen (spike-15): the opaque `BuilderKey` graph-binding fold isn't expressible for
   `Middleware` (two primary associated types can't partial-bind), so nothing opaque is built. The
-  one Core-codegen item is the **generic-with-deps** tier: declared `@Factory(key)`, referenced
-  `@Middleware(key)`, the plugin synthesises one concrete factory per consumed key (metatype-parameter
-  `create`) and injects it onto the controller via `.injectsFactoryOnArgument` — not a back-reference;
-  concrete and generic-dep-free middleware work today. `Middleware` is `26.2`-gated
+  one Core-codegen item is the **generic-with-deps** tier: declared `@Factory(key) @MiddlewareFactory`,
+  referenced `@Middleware(key)`, the plugin synthesises one factory per consumed key (generic over the
+  injected axis, `create` metatypes over the box roles) and injects it via `.injectsFactoryOnArgument`
+  — not a back-reference; concrete and generic-dep-free middleware work today. `Middleware` is `26.2`-gated
   above the core's `26.0` floor, so per-route middleware lands when the deployment floor reaches it.
   Hummingbird's `RouterMiddleware` is incompatible (bidirectional, context-typed). Full record:
   [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
@@ -604,9 +605,11 @@ transport-only contributor mounts through its own adapter.
   existing binding by type — Increment 1) and `.injectsFactoryOnArgument` (synthesise a `@Factory`
   template and inject it, the capability `@Middleware` declares — Increment 2), plus the
   reserved `.rewritesInjection`. Otherwise M5 rides shipped machinery — graph-conformance
-  emission, the `@Contributes` alias, the `BuilderKey`→opaque-member fold — plus the
-  `FactoryKey`/`@Factory` template synthesis the factory edge carries; the shared "adapter
-  replaces the binding" primitive is reserved for M5.4's request scope (also serving
+  emission, the `@Contributes` alias, the `BuilderKey`→opaque-member fold — plus the factory
+  synthesis the factory edge carries: a native `@Factory(key)`/`FactoryKey` plus WireMVC's
+  `@MiddlewareFactory` role mapping, whose *injected* axis reuses demand-driven generic
+  specialisation and whose *assisted* box-role axis is the one new `create`-metatype codegen. The
+  shared "adapter replaces the binding" primitive is reserved for M5.4's request scope (also serving
   `@Configuration`).
 - The external **WireMVC repo** builds + serves against pushed swift-wire main on macOS
   and Linux (its own CI); the **example repo** ports through the M5.1–M5.4 gate set.
