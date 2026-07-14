@@ -52,6 +52,14 @@ struct WireGen {
             useSites: aggregate.aliasUseSites
         )
 
+        // Adapter dependencies (`@X(T.self)` → the annotated binding depends on T) inject a
+        // synthetic input edge, the symmetric complement of the contribution aliases above.
+        aggregate.allBindings = applyAdapterDependencies(
+            to: aggregate.allBindings,
+            annotations: aggregate.adapterAnnotations,
+            useSites: aggregate.aliasUseSites
+        )
+
         // One graph per scope — default, per-`@Container`, and per-seed.
         let graphs = buildAllGraphs(in: aggregate)
         let defaultGraph = graphs.defaultGraph

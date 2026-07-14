@@ -2,25 +2,25 @@ import Testing
 
 @testable import WireGenCore
 
-/// M2.3: contribution aliases. An adapter declares `WireAdapterAnnotationV1(annotation:
-/// "X", contributesTo: key)`, so `@X` on a binding aliases `@Contributes(to: key)`.
-/// These pin the three moving parts: discovery of the `contributesTo` form (legacy
-/// `registerSignature` still works), name-agnostic use-site capture, and the
-/// post-aggregation injection of a synthetic contribution.
+/// M2.3: contribution aliases — the `.contributes(to:)` capability of
+/// `WireAdapterAnnotationV1`. An adapter declares `WireAdapterAnnotationV1(annotation: "X",
+/// capability: .contributes(to: key))`, so `@X` on a binding aliases `@Contributes(to: key)`.
+/// These pin the three moving parts: discovery of the capability, name-agnostic use-site
+/// capture, and the post-aggregation injection of a synthetic contribution.
 @Suite("Contribution alias")
 struct ContributionAliasTests {
     @Test func discoversContributesToForm() throws {
         let source = """
             enum HummingbirdAdapter {
                 static let route = WireAdapterAnnotationV1(
-                    annotation: "HummingbirdRoute", contributesTo: HummingbirdKeys.routes)
+                    annotation: "HummingbirdRoute", capability: .contributes(to: HummingbirdKeys.routes))
             }
             """
         let annotation = try #require(
             discover(in: source, sourcePath: "Adapter.swift", module: testModule).adapterAnnotations.first
         )
         #expect(annotation.annotationName == "HummingbirdRoute")
-        #expect(annotation.contributesToKey == "HummingbirdKeys.routes")
+        #expect(annotation.capability == .contributes(key: "HummingbirdKeys.routes"))
     }
 
     @Test func capturesAliasUseSitesNameAgnostically() {
@@ -58,7 +58,7 @@ struct ContributionAliasTests {
         )
         let alias = DiscoveredAdapterAnnotation(
             annotationName: "HummingbirdRoute",
-            contributesToKey: "HummingbirdKeys.routes",
+            capability: .contributes(key: "HummingbirdKeys.routes"),
             location: mockLocation("Adapter.swift"),
             originModule: testModule
         )
@@ -89,7 +89,7 @@ struct ContributionAliasTests {
         )
         let alias = DiscoveredAdapterAnnotation(
             annotationName: "BackgroundService",
-            contributesToKey: "WireMVCKeys.services",
+            capability: .contributes(key: "WireMVCKeys.services"),
             location: mockLocation("Adapter.swift"),
             originModule: testModule
         )

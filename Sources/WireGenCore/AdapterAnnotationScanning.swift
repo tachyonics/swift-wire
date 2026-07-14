@@ -10,26 +10,35 @@ import SwiftSyntax
 // so an adapter package's definitions reach WireGen without a manifest file. See
 // `MultiModuleComposition.md`.
 
+/// What a discovered adapter annotation does — the source-read form of `WireAdapterCapability`.
+package enum DiscoveredAdapterCapability: Sendable, Equatable {
+    /// `@X` aliases `@Contributes(to: key)` — the multibinding-key reference (an output edge).
+    case contributes(key: String)
+    /// `@X(T.self)` makes the annotated binding depend on `T` (an input edge).
+    case injectsDependencyOnArgument
+    /// `@X(...)` rewrites a consumer's injection resolution. Reserved — no pass yet.
+    case rewritesInjection
+}
+
 /// One adapter-annotation definition found in source — a `WireAdapterAnnotationV1`
-/// declaration mapping an annotation the module publishes to a multibinding key.
+/// declaration stating what an annotation the module publishes does to its use-sites.
 package struct DiscoveredAdapterAnnotation: Sendable, Equatable {
     /// The attribute spelling without the leading `@` — `"RoutedBy"`. Matches
     /// use-sites to this definition.
     package let annotationName: String
-    /// The multibinding-key reference the annotation contributes to — `@X` on a
-    /// binding aliases `@Contributes(to: contributesToKey)`.
-    package let contributesToKey: String
+    /// What the annotation does — read from the `capability:` argument.
+    package let capability: DiscoveredAdapterCapability
     package let location: SourceLocation
     package let originModule: String
 
     package init(
         annotationName: String,
-        contributesToKey: String,
+        capability: DiscoveredAdapterCapability,
         location: SourceLocation,
         originModule: String
     ) {
         self.annotationName = annotationName
-        self.contributesToKey = contributesToKey
+        self.capability = capability
         self.location = location
         self.originModule = originModule
     }
@@ -53,23 +62,43 @@ func adapterAnnotation(
     else { return nil }
 
     var annotationName: String?
-    var contributesToKey: String?
+    var capability: DiscoveredAdapterCapability?
     for argument in call.arguments {
         switch argument.label?.text {
         case "annotation":
             annotationName = argument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
-        case "contributesTo":
-            contributesToKey = argument.expression.trimmedDescription
+        case "capability":
+            capability = adapterCapability(from: argument.expression)
         default:
             break
         }
     }
 
-    guard let annotationName, let contributesToKey else { return nil }
+    guard let annotationName, let capability else { return nil }
     return DiscoveredAdapterAnnotation(
         annotationName: annotationName,
-        contributesToKey: contributesToKey,
+        capability: capability,
         location: makeSourceLocation(of: pattern.identifier, sourcePath: sourcePath, converter: converter),
         originModule: module
     )
+}
+
+/// Read a `WireAdapterCapability` literal syntactically: `.contributes(to: KEY)`,
+/// `.injectsDependencyOnArgument`, or `.rewritesInjection`.
+func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapability? {
+    if let call = expression.as(FunctionCallExprSyntax.self),
+        let member = call.calledExpression.as(MemberAccessExprSyntax.self),
+        member.declName.baseName.text == "contributes",
+        let toArgument = call.arguments.first(where: { $0.label?.text == "to" })
+    {
+        return .contributes(key: toArgument.expression.trimmedDescription)
+    }
+    if let member = expression.as(MemberAccessExprSyntax.self) {
+        switch member.declName.baseName.text {
+        case "injectsDependencyOnArgument": return .injectsDependencyOnArgument
+        case "rewritesInjection": return .rewritesInjection
+        default: return nil
+        }
+    }
+    return nil
 }
