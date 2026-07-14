@@ -21,14 +21,39 @@ and [WireOpenAPIDesign.md](WireOpenAPIDesign.md) for the two shipped adapters.)
 
 ```swift
 public let openAPIController = WireAdapterAnnotationV1(
-    annotation: "OpenAPIController",         // the attribute spelling, without `@`
-    contributesTo: TransportKeys.handlers    // the multibinding key `@OpenAPIController` aliases into
-)
+    annotation: "OpenAPIController",              // the attribute spelling, without `@`
+    capability: .contributes(to: TransportKeys.handlers))  // what `@OpenAPIController` aliases into
 ```
 
-Read *syntactically* — like a binding-key declaration, never executed:
-`contributesTo` is captured as its written key reference, not its runtime value.
-Versioned by type name (a shape change ships `WireAdapterAnnotationV2`).
+One annotation, one `capability`. Read *syntactically* — like a binding-key
+declaration, never executed: the capability's key/type argument is captured as its
+written reference text, not its runtime value. Versioned by type name (a shape
+change ships `WireAdapterAnnotationV2`).
+
+### The capability axis
+
+`capability: WireAdapterCapability` names *what edge* the annotation synthesises
+onto the binding it decorates. Three cases, all domain-free — Wire learns nothing
+about routing, HTTP, or middleware:
+
+- **`.contributes(to: key)`** — an **output** edge. `@X` on a binding injects a
+  synthetic `@Contributes(to: key)`, flowing the binding into `key`'s aggregate
+  (the collation model below). The original and only M2.3 capability.
+- **`.injectsDependencyOnArgument`** — an **input** edge. `@X(T.self)` on a binding
+  appends a synthetic dependency on the type named in the attribute argument (`T`),
+  delivered at construction through a wrapping init the adapter's macro generates.
+  The symmetric complement of `.contributes` (`appendingDependencies` mirrors
+  `appendingContributions`). This is the primitive WireMVC's generic-middleware
+  factory rides on — see [WireMVCMiddleware.md](WireMVCMiddleware.md), *Generic
+  middleware: the `@Factory` template*.
+- **`.rewritesInjection`** — reserved for the M5.4 request-scope proxy (an adapter
+  that redirects an injection through a scope re-entry); not yet consumed.
+
+The input-edge case keeps swift-wire ignorant of what the injected type *is*: it
+sees "this binding gains a dependency on the type written in the attribute
+argument, named `_wire<Type>`," and the adapter's macro is responsible for a
+wrapping init that accepts that parameter. The plugin's synthesis (Increment 2)
+supplies the binding that satisfies the edge.
 
 ## How it works
 

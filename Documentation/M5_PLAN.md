@@ -337,17 +337,18 @@ Controller- and route-scoped middleware as nested wrappers; the standard
 > the compiler infers; the terminal projects the handler's params off that box (`withContents`),
 > and the "remove the middleware ⇒ won't compile" guarantee is the compiler's, from the
 > projection type-check — not asserted by the macro. The plugin generates the capability
-> *forwarding* conformances for the specialisations the folds surface. It rests on generic
-> `@Provides` factories, so the adapter contract stays `@Contributes`. The fold is **witness-local
-> concrete** codegen, *not* a `BuilderKey`/opaque fold —
+> *forwarding* conformances for the specialisations the folds surface. Concrete and
+> generic-dep-free middleware rest on generic `@Provides` factories with no Core change. The fold is
+> **witness-local concrete** codegen, *not* a `BuilderKey`/opaque fold —
 > [spike-15](../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/) found the opaque
 > graph-binding form isn't expressible (`Middleware` can't partial-bind its two primary associated
-> types), so there is nothing opaque to build. The one Core-codegen item the design reduces to is a
-> **generic-middleware factory object** (a plugin-generated concrete struct holding the middleware's
-> deps with a generic `make<In>()`, lifted as an ordinary binding — *not* a graph back-reference);
-> concrete and generic-dep-free middleware need no Core change. See
-> [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *Generic middleware*. The derivation
-> below records how each decision was reached.
+> types), so there is nothing opaque to build. The one Core-codegen item the design reduces to is
+> the **generic-with-deps** tier: the middleware is declared a `@Factory(key)` template and
+> referenced `@Middleware(key)`; the plugin synthesises one concrete factory per consumed key
+> (holding the deps, with a metatype-parameter `create`) and injects it onto the controller via the
+> adapter contract's input-edge capability (`.injectsDependencyOnArgument`, Increment 1) — *not* a
+> graph back-reference. See [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *Generic
+> middleware: the `@Factory` template*. The derivation below records how each decision was reached.
 
 **Scope:**
 - `@Middleware(expr)` at controller scope (wraps every route) and route scope (wraps one
@@ -575,9 +576,10 @@ transport-only contributor mounts through its own adapter.
   capability forwarding for the specialisations the folds surface. The fold is **witness-local
   concrete** codegen (spike-15): the opaque `BuilderKey` graph-binding fold isn't expressible for
   `Middleware` (two primary associated types can't partial-bind), so nothing opaque is built. The
-  one Core-codegen item is a **generic-middleware factory object** (plugin-generated concrete struct
-  holding the middleware's deps + a generic `make<In>()`, lifted as an ordinary binding — not a
-  back-reference); concrete and generic-dep-free middleware work today. `Middleware` is `26.2`-gated
+  one Core-codegen item is the **generic-with-deps** tier: declared `@Factory(key)`, referenced
+  `@Middleware(key)`, the plugin synthesises one concrete factory per consumed key (metatype-parameter
+  `create`) and injects it onto the controller via the input-edge capability — not a back-reference;
+  concrete and generic-dep-free middleware work today. `Middleware` is `26.2`-gated
   above the core's `26.0` floor, so per-route middleware lands when the deployment floor reaches it.
   Hummingbird's `RouterMiddleware` is incompatible (bidirectional, context-typed). Full record:
   [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
@@ -596,10 +598,14 @@ transport-only contributor mounts through its own adapter.
   generated routing (type-transforming middleware surfacing as compile errors); the raw
   escape-hatch handler; request-scoped controllers; and the Tier-2 `@WireHummingbird`
   composition-root macro.
-- Wire Core gains no new *contract* form — M5 rides the shipped
-  graph-conformance emission, the `@Contributes` alias, and the (previously unused)
-  `BuilderKey`→opaque-member fold; the one new *primitive* is the shared "adapter
-  replaces the binding" mechanism (also serving `@Configuration`).
+- Wire Core's adapter contract gains one axis — `WireAdapterAnnotationV1`'s unified
+  `capability:` (Increment 1) adds the `.injectsDependencyOnArgument` **input-edge** case
+  alongside the shipped `.contributes(to:)` **output-edge** case (and the reserved
+  `.rewritesInjection`). Otherwise M5 rides shipped machinery — graph-conformance
+  emission, the `@Contributes` alias, the `BuilderKey`→opaque-member fold — plus the
+  `FactoryKey`/`@Factory` template synthesis (Increment 2) that the input edge carries; the
+  shared "adapter replaces the binding" primitive is reserved for M5.4's request scope
+  (also serving `@Configuration`).
 - The external **WireMVC repo** builds + serves against pushed swift-wire main on macOS
   and Linux (its own CI); the **example repo** ports through the M5.1–M5.4 gate set.
 - task-cluster demonstrates WireMVC + WireOpenAPI coexisting on one graph/transport.
