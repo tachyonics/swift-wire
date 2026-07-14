@@ -66,7 +66,10 @@ struct AdapterDependencyTests {
         )
 
         let injected = injectAdapterDependencies(
-            into: [binding], annotations: [annotation], useSites: [useSite])
+            into: [binding],
+            annotations: [annotation],
+            useSites: [useSite]
+        )
         let deps = try #require(injected.first?.dependencies)
         #expect(deps.contains { $0.type == "SessionMiddlewareFactory" && $0.name == "_wireSessionMiddlewareFactory" })
     }
@@ -97,7 +100,10 @@ struct AdapterDependencyTests {
             originModule: testModule
         )
         let injected = injectAdapterDependencies(
-            into: [binding], annotations: [annotation], useSites: [useSite])
+            into: [binding],
+            annotations: [annotation],
+            useSites: [useSite]
+        )
         #expect(injected.first?.dependencies.isEmpty == true)
     }
 }
