@@ -14,8 +14,12 @@ import SwiftSyntax
 package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// `@X` aliases `@Contributes(to: key)` — the multibinding-key reference (an output edge).
     case contributes(key: String)
-    /// `@X(T.self)` makes the annotated binding depend on `T` (an input edge).
+    /// `@X(T.self)` makes the annotated binding depend on `T` (an input edge to an
+    /// existing binding).
     case injectsDependencyOnArgument
+    /// `@X(key)` makes the annotated binding depend on the factory synthesised from the
+    /// `@Factory(key)` template (an input edge to a synthesised value).
+    case injectsFactoryOnArgument
     /// `@X(...)` rewrites a consumer's injection resolution. Reserved — no pass yet.
     case rewritesInjection
 }
@@ -96,6 +100,7 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
     if let member = expression.as(MemberAccessExprSyntax.self) {
         switch member.declName.baseName.text {
         case "injectsDependencyOnArgument": return .injectsDependencyOnArgument
+        case "injectsFactoryOnArgument": return .injectsFactoryOnArgument
         case "rewritesInjection": return .rewritesInjection
         default: return nil
         }

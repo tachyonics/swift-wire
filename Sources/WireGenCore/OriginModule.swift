@@ -30,6 +30,21 @@ package func foreignImports(in bindings: [DiscoveredBinding], consumerModule: St
         .map { "import \($0)" }
 }
 
+/// `import <module>` lines for the modules that own the produced (template) types of
+/// the synthesised factories. Each factory's declaration names its middleware type in
+/// `create`'s return and construction, so the generated file needs an import to reach a
+/// template that lives in a dependency — the factory analogue of `foreignImports`.
+/// Sorted, the consumer's own module excluded.
+package func factoryProducedTypeImports(
+    _ factories: [SynthesizedFactory],
+    consumerModule: String
+) -> [String] {
+    Set(factories.map(\.producedTypeModule))
+        .subtracting([consumerModule])
+        .sorted()
+        .map { "import \($0)" }
+}
+
 /// `import <module>` lines for the modules that declare the graph conformances. The
 /// generated `extension _WireGraph: <Protocol>` names the protocol (and, through its
 /// members, the element types) which live in the declaring module, so the file needs

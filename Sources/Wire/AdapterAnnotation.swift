@@ -29,7 +29,15 @@ public enum WireAdapterCapability {
 
     /// `@X(T.self)` on a binding makes the binding depend on `T` (an *input* edge),
     /// delivered at construction through a wrapping init the adapter's macro generates.
+    /// `T` resolves to an *existing* binding.
     case injectsDependencyOnArgument
+
+    /// `@X(key)` on a binding makes the binding depend on the factory for `key` (an
+    /// *input* edge to a *synthesised* value): the build plugin synthesises one concrete
+    /// factory per `FactoryKey` from the matching `@Factory(key)` template and injects it,
+    /// delivered through the adapter's macro-generated wrapping init. The `.self` form of
+    /// the argument is the concrete case — a pass-through factory over an existing binding.
+    case injectsFactoryOnArgument
 
     /// `@X(...)` on a consumer's injection point rewrites how that dependency resolves
     /// (e.g. `@Configuration("port")`). Reserved — no pass yet.

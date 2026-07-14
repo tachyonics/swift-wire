@@ -60,6 +60,19 @@ struct WireGen {
             useSites: aggregate.aliasUseSites
         )
 
+        // Factory synthesis (`@X(key)` → the annotated binding depends on the factory for
+        // `key`): synthesise one concrete factory per consumed `@Factory(key)` template,
+        // register it as a binding, and append the factory input edge onto each consumer.
+        let synthesis = applyFactorySynthesis(
+            to: aggregate.allBindings,
+            templates: aggregate.factoryTemplates,
+            annotations: aggregate.adapterAnnotations,
+            useSites: aggregate.aliasUseSites,
+            consumerModule: consumerModule
+        )
+        aggregate.allBindings = synthesis.bindings
+        let synthesizedFactories = synthesis.factories
+
         // One graph per scope — default, per-`@Container`, and per-seed.
         let graphs = buildAllGraphs(in: aggregate)
         let defaultGraph = graphs.defaultGraph
@@ -101,6 +114,7 @@ struct WireGen {
             aggregate.imports
             + foreignImports(in: allBindingsFlat, consumerModule: consumerModule)
             + conformanceOriginImports(aggregate.graphConformances, consumerModule: consumerModule)
+            + factoryProducedTypeImports(synthesizedFactories, consumerModule: consumerModule)
 
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
         let generated = renderWireGraph(
@@ -109,7 +123,8 @@ struct WireGen {
             containerTopologicalOrders: containerOrders,
             seedScopeOrders: seedScopeOrders,
             graphConformances: aggregate.graphConformances,
-            multibindingKeys: aggregate.multibindingKeys
+            multibindingKeys: aggregate.multibindingKeys,
+            syntheticTypeDeclarations: synthesizedFactories.map(renderFactoryDeclaration)
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -155,6 +170,7 @@ struct WireGen {
         var bindingKeys: [DiscoveredBindingKey] = []
         var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
         var aliasUseSites: [ContributionAliasUseSite] = []
+        var factoryTemplates: [DiscoveredFactoryTemplate] = []
         var resultBuilders: [DiscoveredResultBuilder] = []
         var graphConformances: [DiscoveredGraphConformance] = []
     }
@@ -205,6 +221,7 @@ struct WireGen {
             aggregate.bindingKeys.append(contentsOf: result.bindingKeys)
             aggregate.adapterAnnotations.append(contentsOf: result.adapterAnnotations)
             aggregate.aliasUseSites.append(contentsOf: result.aliasUseSites)
+            aggregate.factoryTemplates.append(contentsOf: result.factoryTemplates)
             aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
             aggregate.graphConformances.append(contentsOf: result.graphConformances)
         }
