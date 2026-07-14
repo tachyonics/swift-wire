@@ -3,7 +3,7 @@ import SwiftSyntax
 // Recognition of adapter-annotation definitions — `WireAdapterAnnotationV1`
 // declarations. An adapter package declares one per annotation it publishes (e.g.
 // `@RoutedBy`, `@HummingbirdRoute`): the attribute `@annotation` on a binding is an
-// alias for `@Contributes(to: contributesTo)`.
+// alias for `@Contributes(to: key)`.
 //
 // Discovered anywhere in source, syntax-only — the same discipline as
 // `BindingKeyScanning`. A consumer re-parses its Wire-aware dependencies' sources,
@@ -45,7 +45,7 @@ package struct DiscoveredAdapterAnnotation: Sendable, Equatable {
 }
 
 /// Recognise an adapter-annotation definition — a `let`/`static let` whose
-/// initialiser is a `WireAdapterAnnotationV1(annotation:, contributesTo:)` call —
+/// initialiser is a `WireAdapterAnnotationV1(annotation:, capability:)` call —
 /// and capture its annotation name and key reference. Returns `nil` for any
 /// declaration that doesn't construct `WireAdapterAnnotationV1` with both arguments.
 func adapterAnnotation(

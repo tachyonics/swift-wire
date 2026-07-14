@@ -21,6 +21,6 @@ public macro HarnessRoute() =
 enum RoutingAdapter {
     static let harnessRoute = WireAdapterAnnotationV1(
         annotation: "HarnessRoute",
-        contributesTo: RoutingKeys.controllers
+        capability: .contributes(to: RoutingKeys.controllers)
     )
 }
