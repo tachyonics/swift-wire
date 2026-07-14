@@ -158,7 +158,7 @@ M3.2 implementation detail; the surface is: *path in → `serverURL` out*.
 ```swift
 public let wireOpenAPIControllerAlias = WireAdapterAnnotationV1(
     annotation: "OpenAPIController",
-    contributesTo: TransportKeys.handlers
+    capability: .contributes(to: TransportKeys.handlers)
 )
 ```
 

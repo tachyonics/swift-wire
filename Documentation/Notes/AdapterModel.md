@@ -21,14 +21,49 @@ and [WireOpenAPIDesign.md](WireOpenAPIDesign.md) for the two shipped adapters.)
 
 ```swift
 public let openAPIController = WireAdapterAnnotationV1(
-    annotation: "OpenAPIController",         // the attribute spelling, without `@`
-    contributesTo: TransportKeys.handlers    // the multibinding key `@OpenAPIController` aliases into
-)
+    annotation: "OpenAPIController",              // the attribute spelling, without `@`
+    capability: .contributes(to: TransportKeys.handlers))  // what `@OpenAPIController` aliases into
 ```
 
-Read *syntactically* — like a binding-key declaration, never executed:
-`contributesTo` is captured as its written key reference, not its runtime value.
-Versioned by type name (a shape change ships `WireAdapterAnnotationV2`).
+One annotation, one `capability`. Read *syntactically* — like a binding-key
+declaration, never executed: the capability's key/type argument is captured as its
+written reference text, not its runtime value. Versioned by type name (a shape
+change ships `WireAdapterAnnotationV2`).
+
+### The capability axis
+
+`capability: WireAdapterCapability` names *what edge* the annotation synthesises
+onto the binding it decorates. Four cases, all domain-free — Wire learns nothing
+about routing, HTTP, or middleware:
+
+- **`.contributes(to: key)`** — an **output** edge. `@X` on a binding injects a
+  synthetic `@Contributes(to: key)`, flowing the binding into `key`'s aggregate
+  (the collation model below). The original and only M2.3 capability.
+- **`.injectsDependencyOnArgument`** — an **input** edge to an *existing* binding.
+  `@X(T.self)` on a binding appends a synthetic dependency on the concrete type named
+  in the attribute argument (`T`), resolved to a graph binding of that type and
+  delivered at construction through a wrapping init the adapter's macro generates. The
+  symmetric complement of `.contributes` (`appendingDependencies` mirrors
+  `appendingContributions`).
+- **`.injectsFactoryOnArgument`** — an **input** edge to a *synthesised factory*. The
+  consumer-side half of the factory model (Increment 2): `@X(key)` on a binding
+  declares that the binding requires the factory for `key` — synthesised from the
+  matching `@Factory(key)` template (see [WireMVCMiddleware.md](WireMVCMiddleware.md),
+  *Generic middleware: the `@Factory` template*) — to be injected. Discovery
+  discriminates the argument per use-site: a `FactoryKey` reference demands template
+  synthesis and injects that factory; a `Type.self` reference is the concrete case,
+  injecting a pass-through factory over an existing binding. `@Middleware` declares
+  this capability. (Distinct from `.injectsDependencyOnArgument`, which injects an
+  existing binding *by type* and never synthesises.)
+- **`.rewritesInjection`** — reserved for the M5.4 request-scope proxy (an adapter
+  that redirects an injection through a scope re-entry); not yet consumed.
+
+Both input-edge cases keep swift-wire ignorant of what the injected value *is*: it
+sees "this binding gains a dependency on the thing named in the attribute argument,
+named `_wire<…>`," and the adapter's macro is responsible for a wrapping init that
+accepts that parameter. `.injectsDependencyOnArgument` resolves an existing binding;
+`.injectsFactoryOnArgument` synthesises one (the `@Factory` template) — in both cases Wire
+never learns "middleware".
 
 ## How it works
 

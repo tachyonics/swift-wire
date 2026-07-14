@@ -116,11 +116,13 @@ public enum RequestResponseMiddlewareBox<RequestContext, Reader, ResponseSender>
   1. **Concrete** — `@Middleware(Concrete.self)`, constructed inline. A fully concrete middleware pins
      its box, so it fits *only downstream of an erasing middleware* (one whose `NextInput` is a concrete
      box); it can never unify with the generic base box. Real, but a niche position.
-  2. **Generic** — `@Middleware(Generic<WireContext, WireReader, WireSender>.self)`. The common form;
-     dep-free ones construct inline (no graph). Both non-transforming and context-transforming.
-  3. **Generic with `@Inject` deps** — same spelling, but the plugin synthesises a hidden factory (the
-     metatype-parameter form below) and lifts it onto the controller. The one form needing a swift-wire
-     change; deferred past 4a.
+  2. **Generic, dep-free** — `@Middleware(Generic<WireContext, WireReader, WireSender>.self)`. The
+     common logging/timing form; constructs inline (no graph). Both non-transforming and
+     context-transforming.
+  3. **Generic with `@Inject` deps** — declared as a `@Factory(key)` template and referenced
+     `@Middleware(key)`; the plugin synthesises one concrete factory per consumed key and injects it
+     onto the controller. The one form needing a swift-wire change (Increment 1's input edge +
+     Increment 2's synthesis); see *Generic middleware: the `@Factory` template*.
 
 ## Chains = per-route folds
 
@@ -195,8 +197,9 @@ specialized (`Factory.make<…>()` → "cannot explicitly specialize static meth
   (`WireContext`/`WireReader`/`WireSender`, shipped by WireMVC, never instantiated) exist only so the
   annotation's metatype type-checks. This is the common form. Dep-free → inline construction, **no
   swift-wire change**.
-- `@Middleware(someKey)` — not `.self` → diagnosed. Referencing a bound middleware by key needs graph
-  injection into the witness; deferred (see below).
+- `@Middleware(someKey)` — a `FactoryKey`, not `.self` → the factory case. The key references a
+  `@Factory` template; the plugin injects the synthesised factory and the witness calls `.create(…)`
+  (Increment 2 — see *Generic middleware: the `@Factory` template*).
 
 **The fold, per route** (built inline in `registerWireRoutes`, witness-local concrete): build the base
 `RequestResponseMiddlewareBox` from the register closure's `(request, requestContext, reader,
@@ -216,14 +219,17 @@ through a fold). A `sending` value still passes fine to a `consuming` parameter,
 and raw-direct paths are unaffected. This refines the M5.2 raw-handler contract: `consuming`, not
 `consuming sending`.
 
-**Generic-with-deps: the metatype-parameter factory.** The deferred piece. The factory's `make` takes
-the box types as **metatype parameters** — `make(_: Ctx.Type, _: R.Type, _: S.Type) -> Mw<Ctx,R,S>` —
-so the specialization is *inferred from arguments*, sidestepping the forbidden explicit method
-specialization. This also **fixes the design's own factory** (whose `make<In>()` would not have
-compiled). The developer never writes a factory: the plugin reads the middleware's `@Inject` deps,
-emits the factory, lifts it onto the controller (macro-generated `@Inject` is invisible to Wire's
-plugin, so the plugin must do the lift), and the witness calls `self._factory.make(Builder.RequestContext.self, …)`.
-This is the one swift-wire Core change; everything above ships as 4a with no swift-wire change.
+**Generic-with-deps: the `@Factory` template (Increment 2).** The deferred piece. The developer
+declares the middleware `@Factory(key)` and references it `@Middleware(key)`; the plugin synthesises
+one concrete factory struct per consumed key whose `create` takes the box types as **metatype
+parameters** — `create(_: Ctx.Type, _: R.Type, _: S.Type) -> Mw<Ctx,R,S>` — so the specialisation is
+*inferred from arguments*, sidestepping the forbidden explicit method specialisation. The developer
+never writes the factory struct: the plugin reads the template's `@Inject` deps, synthesises the
+factory, and injects it onto the controller via the input-edge capability (macro-generated `@Inject`
+is invisible to Wire's plugin, so the plugin must do the injection); the witness calls
+`self._factory_session.create(Builder.RequestContext.self, …)`. This is the swift-wire Core change
+(Increment 1's input edge + Increment 2's synthesis); everything above ships as 4a with no swift-wire
+change. See *Generic middleware: the `@Factory` template* for the full record.
 
 ## Who does what
 
@@ -252,9 +258,12 @@ Request flow: `base box → ctrl-mw… → route-mw… → [ explode → project
 ## What this rests on
 
 - **Shipped Wire:** generic `@Provides` factories (demand-driven specialisation, dedup,
-  ambiguity diagnostics). The adapter contract stays `@Contributes` — WireMVC does **not** need a
-  new "inject arbitrary bindings" power; the middleware are ordinary user-declared bindings, and
-  the chain fold is witness-local codegen that references them (not a contributed binding).
+  ambiguity diagnostics). Dep-free and concrete middleware need nothing more — the chain fold is
+  witness-local codegen that references ordinary bindings. The **generic-with-deps** tier is the one
+  exception: it needs the adapter contract's input-edge capability
+  (`.injectsDependencyOnArgument`, Increment 1) plus the `@Factory` template synthesis (Increment 2)
+  to deliver a specialisable factory the fold can call. Both stay domain-free in Wire — it injects a
+  synthesised binding onto a decorated binding; it never learns "middleware".
 - **Shipped proposal:** `Middleware`/`ChainedMiddleware`/`MiddlewareBuilder`,
   `RequestResponseMiddlewareBox` + `withContents`, `HTTPServerCapability.RequestContext`.
 - **No opaque fold to build — corrected by
@@ -264,58 +273,136 @@ Request flow: `base box → ctrl-mw… → route-mw… → [ explode → project
   bound, so a fold can't be returned through a `some Middleware`-with-pinned-input boundary. The
   fold is therefore **witness-local concrete** (which spike-15 proves works end-to-end with the
   real proposal types), so it is *not* a `BuilderKey`/opaque-member fold and there is nothing
-  opaque to emit. The one Core-codegen item the design reduces to is the **generic-middleware
-  factory object** — see the next section.
+  opaque to emit. The one Core-codegen item the design reduces to is the **generic-with-deps
+  `@Factory` template** — see the next section.
 - **Codegen detail (spike-15):** every plugin-generated forwarding conformance must restate
   `& ~Copyable` in its `where` clause (`extension …: Cap where Base: Cap & ~Copyable`) or Swift
   silently re-imposes `Copyable` and it fails to compile.
 
-## Generic middleware: the factory-object extension
+## Generic middleware: the `@Factory` template
+
+> **Status:** settled Increment 2 design. Supersedes the earlier "metatype-parameter factory" /
+> "factory-object extension" model (a hidden `make<In>()` object the plugin lifted onto the
+> controller). That model worked but read as a *non-binding* injectable type — the developer
+> couldn't see, name, or reason about the factory as a graph citizen. The settled model makes the
+> template **a binding that looks like a binding**, referenced by key, parallel to `@Singleton`.
 
 For multi-stage chains, middleware are generally **generic over their input box** (a middleware
 pinned to one concrete input can only sit where that exact box appears). How the witness obtains
 such a middleware splits by whether it has dependencies:
 
-- **Works today, no Core change:** *concrete* middleware (an ordinary binding, lifted onto the
+- **Works today, no Core change:** *concrete* middleware (an ordinary binding, injected onto the
   controller) and *generic dep-free* middleware (the witness constructs `Mw<In>()` inline — proven
   in [spike-15](../../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/)). Covers the
   logging/timing tier.
-- **Needs one extension:** *generic middleware with `@Inject` deps* (auth-with-a-verifier,
-  session-with-a-store). The reason it doesn't fit shipped Wire: the `_WireGraph` is a struct of
-  **pre-constructed stored properties, one per binding**, and generic bindings are only ever
-  *specialised into concrete stored properties, demand-driven by written dependency types*. A
-  middleware in a fold is specialised at the **compiler-inferred** box type — never written — so it
-  can be neither a stored property nor demand-specialised. (Wire does already emit some helper
-  *methods* on the graph — the `BuilderKey` `_wireFold…`, `@Inject func` setters — so method
-  emission itself isn't new; a *generic* one is.)
+- **Needs the `@Factory` template:** *generic middleware with `@Inject` deps*
+  (auth-with-a-verifier, session-with-a-store). The reason it doesn't fit as a plain binding: the
+  `_WireGraph` is a struct of **pre-constructed stored properties, one per binding**, and generic
+  bindings are only ever *specialised into concrete stored properties, demand-driven by written
+  dependency types*. A middleware in a fold is specialised at the **compiler-inferred** box type —
+  never written — so it can be neither a stored property nor demand-specialised.
 
-**The extension is a factory *object*, not a graph back-reference.** The plugin generates, per
-generic-with-deps middleware, a small concrete type holding the middleware's deps and exposing a
-generic `make`:
+### The template: `@Factory(key)`, a factory binding
+
+The developer declares the middleware as a **factory template** — a binding, spelled parallel to
+`@Singleton`, that is referenced by key rather than by type:
 
 ```swift
-// plugin-generated — an ordinary binding: concrete struct, concrete deps resolved like any binding
-struct _WireSessionMiddlewareFactory {
-    let store: SessionStore
-    func make<In>() -> SessionMiddleware<In> { SessionMiddleware<In>(store: store) }
+@Factory(MyMiddleware.session)                       // FactoryKey — a namespace identifier
+struct SessionMiddleware<Ctx, Reader, Sender>: Middleware where … {
+    @Inject var store: SessionStore                  // injected dep — resolved from the graph
+    // Ctx, Reader, Sender are the *assisted* params — supplied per fold position, as metatypes
+}
+
+extension MyMiddleware {
+    static let session = FactoryKey()                // the key: identity is its written text
 }
 ```
 
-The controller lifts this factory as a hidden dependency and the macro-witness calls it in the
-fold — `self._sessionMiddlewareFactory.make()`, with `In` inferred from the fold position. This
-splits exactly along the macro/plugin line: only the **plugin** (global view) sees the middleware's
-`@Inject` deps and writes its construction, into the factory; the **macro-witness** (syntactic)
-only *names* the factory and calls `.make()`, never touching the deps. It's therefore an ordinary
-lifted binding — constructed once, deduped across controllers that use the same middleware — **not**
-a whole-graph reference. (A back-reference is reserved for M5.4's request-scope proxy, which
-genuinely must re-enter the graph; middleware construction doesn't.) The generic method lives on a
-*concrete* struct, so it's liftable, sidestepping the "a bare generic function isn't a first-class
-value" problem.
+`@Factory` is to a factory what `@Singleton` is to a singleton: it marks the type a Wire component
+and reads its `@Inject` members as construction deps. The split between the two axes is what makes
+it a factory rather than a singleton (prior art: Koin `single` vs `factory` for the lifetime axis;
+Dagger `@AssistedInject`/`@Assisted` for the injected-vs-call-time-params axis):
 
-Scope of the extension: a new plugin emission (recognise a generic `@Middleware(X.self)`, read
-`X`'s `@Inject` deps, emit the factory + its conformance) that **composes shipped pieces** — ordinary
-binding resolution for the factory's deps, the existing method-emission capability, and lift-the-
-minimum for the factory itself. Not a new binding kind; no change to how deps resolve.
+- **`@Inject` members = injected deps** — resolved from the graph, once, when the factory object is
+  constructed (Koin's/Dagger's injected axis).
+- **generic parameters = assisted params** — supplied at the *`create` call*, per fold position, as
+  metatype arguments (`SessionMiddleware<Ctx, Reader, Sender>`). Cleaner than Dagger's `@Assisted`:
+  the generic parameters *are* the assisted params, so nothing needs marking.
+
+The function form `@Provides(key) func …` is the secondary spelling (a generic `@Provides` is
+already a factory in this sense); `@Factory` on the type is the primary form because the middleware
+*is* a type with its own deps.
+
+### `FactoryKey` — a namespace identifier
+
+`FactoryKey` joins Wire's key family (`BindingKey` / `CollectedKey` / `MappedKey` / `BuilderKey`).
+Unlike those, it is **not** typed to the produced value — the produced type is generic and varies
+per consumer, so no single `Value` could be fixed. It is a **namespace identifier**: its identity
+is the canonical text of its declaring reference (`MyMiddleware.session`), and the synthesised
+factory type name derives from it (`_WireFactory_<key>`). This is a lighter compile-time check than
+a typed key; the real type safety lands at the `create` call, where the compiler unifies the
+assisted metatypes against the template's generic signature.
+
+### Consumer-driven synthesis
+
+Like a generic `@Provides` factory, the template *defines* a factory but synthesises nothing on its
+own. Synthesis is **consumer-driven** — the consumer is `@Middleware(key)`:
+
+1. Collate every `@Middleware(key)` use-site across the module.
+2. Dedupe by key — one factory object per consumed key, shared across every controller that uses it.
+3. For each consumed key, synthesise **one** concrete factory struct, register it as an ordinary
+   binding (its `@Inject` deps resolve like any binding's), and inject it into the consuming
+   controllers via the consumer-side capability `@Middleware` declares — **`.injectsFactoryOnArgument`**
+   (the factory input edge; see [AdapterModel.md](AdapterModel.md), *The capability axis*).
+
+The synthesised factory:
+
+```swift
+// plugin-generated — an ordinary binding: concrete struct, concrete deps resolved like any binding
+struct _WireFactory_session {
+    let store: SessionStore
+    func create<Ctx, Reader, Sender>(_: Ctx.Type, _: Reader.Type, _: Sender.Type)
+        -> SessionMiddleware<Ctx, Reader, Sender> where … {
+        SessionMiddleware(store: store)
+    }
+}
+```
+
+The `create` method takes the box types as **metatype parameters**, so the specialisation is
+*inferred from arguments* — sidestepping the forbidden explicit method specialisation
+(`Factory.make<…>()` → "cannot explicitly specialize static method"). The `@Controller` macro's
+witness calls `self._factory_session.create(Builder.RequestContext.self, Builder.Reader.self,
+Builder.ResponseSender.self)`, with the assisted types spelled from the fold's builder.
+
+This splits exactly along the macro/plugin line: only the **plugin** (global view) sees the
+template's `@Inject` deps and writes the factory's construction; the **macro-witness** (syntactic)
+only *names* the factory and calls `.create(…)`, never touching the deps. It's an ordinary binding —
+constructed once, deduped — **not** a whole-graph reference. (A back-reference is reserved for
+M5.4's request-scope proxy, which genuinely must re-enter the graph; middleware construction
+doesn't.) The generic method lives on a *concrete* struct, so it's liftable, sidestepping the "a
+bare generic function isn't a first-class value" problem.
+
+### The two consumer cases
+
+`@Middleware` declares one capability — **`.injectsFactoryOnArgument`** — and discovery discriminates the two
+cases by the argument's *syntax* per use-site:
+
+- **`@Middleware(key)` — the factory case.** The key references a `@Factory` template; the plugin
+  synthesises the factory, injects it, and the witness calls `.create(…)`.
+- **`@Middleware(ConcreteType.self)` — the concrete case.** `.self`, not a key: there is an ordinary
+  binding in the graph we want to inject and use directly, wrapped in a trivial pass-through factory
+  that returns the already-created instance — so the witness call site is uniform (`.create(…)`),
+  but there is no template to specialise. `.self` is reserved for this concrete case; a generic
+  middleware always moves to a keyed `@Factory` template (retiring the earlier
+  `@Middleware(Generic<WireContext, WireReader, WireSender>.self)` placeholder-generic spelling).
+
+Scope of the work: `FactoryKey` + the `@Factory` macro + template discovery (swift-wire); consumer
+collation + factory synthesis + emission (swift-wire, riding Increment 1's input-edge capability);
+and the WireMVC `@Controller` macro side (factory ivars + wrapping init + the `create` witness call,
+deriving the factory type name from the key). It **composes shipped pieces** — ordinary binding
+resolution for the factory's deps, the existing method-emission capability, and the input-edge
+primitive — not a new binding kind, and no change to how deps resolve.
 
 ## Open sub-decisions
 
