@@ -684,6 +684,11 @@ package struct SourceFileDiscovery: Sendable {
     /// Contribution-alias candidates (every type-decl attribute) found in this
     /// file. Aggregated and classified against declared aliases.
     package let aliasUseSites: [ContributionAliasUseSite]
+    /// `@Factory(key)` factory templates found in this file. Aggregated across
+    /// the module by `WireGen`; consumer-driven synthesis (`@Middleware(key)`)
+    /// turns each demanded key into one concrete factory binding. See
+    /// `FactoryTemplates`.
+    package let factoryTemplates: [DiscoveredFactoryTemplate]
     /// `@resultBuilder` types found in this file, with their fold result
     /// type. Matched against `BuilderKey<Builder>` keys so a builder
     /// aggregate knows its producer-side result type.
@@ -705,6 +710,7 @@ package struct SourceFileDiscovery: Sendable {
         bindingKeys: [DiscoveredBindingKey] = [],
         adapterAnnotations: [DiscoveredAdapterAnnotation] = [],
         aliasUseSites: [ContributionAliasUseSite] = [],
+        factoryTemplates: [DiscoveredFactoryTemplate] = [],
         resultBuilders: [DiscoveredResultBuilder] = [],
         graphConformances: [DiscoveredGraphConformance] = []
     ) {
@@ -719,6 +725,7 @@ package struct SourceFileDiscovery: Sendable {
         self.bindingKeys = bindingKeys
         self.adapterAnnotations = adapterAnnotations
         self.aliasUseSites = aliasUseSites
+        self.factoryTemplates = factoryTemplates
         self.resultBuilders = resultBuilders
         self.graphConformances = graphConformances
     }
@@ -778,6 +785,7 @@ package func discover(
         bindingKeys: visitor.bindingKeys,
         adapterAnnotations: visitor.adapterAnnotations,
         aliasUseSites: visitor.aliasUseSites,
+        factoryTemplates: visitor.factoryTemplates,
         resultBuilders: visitor.resultBuilders,
         graphConformances: visitor.graphConformances
     )

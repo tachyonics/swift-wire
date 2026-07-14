@@ -68,6 +68,38 @@ public macro Singleton<T>(as: T.Type, allowUnused: Bool = false) =
 public macro Scoped<Seed>(seed: Seed.Type, allowUnused: Bool = false) =
     #externalMacro(module: "WireMacrosImpl", type: "ScopedMacro")
 
+/// Declares a generic type as a factory *template*, identified by a
+/// `FactoryKey`. A factory template is to a factory what `@Singleton` is
+/// to a singleton — it makes the type a Wire component and reads its
+/// `@Inject` members as construction dependencies — but on two axes it
+/// differs:
+///
+/// - The type's **generic parameters are assisted parameters**, supplied
+///   per use-site (as metatypes) at the synthesised factory's `create`
+///   call, not resolved from the graph.
+/// - It is **not a binding of its own**. The build plugin synthesises one
+///   concrete factory per `FactoryKey` its consumers demand, resolving the
+///   template's `@Inject` deps once and injecting the factory where it's
+///   consumed.
+///
+///     extension MyMiddleware {
+///         static let session = FactoryKey()
+///     }
+///
+///     @Factory(MyMiddleware.session)
+///     struct SessionMiddleware<Ctx, Reader, Sender>: Middleware where … {
+///         @Inject var store: SessionStore
+///     }
+///
+/// The macro generates only the initialiser the synthesised factory calls
+/// (from `@Inject` members, following the same rules as `@Singleton`); no
+/// `static key` — the key is the `FactoryKey` argument. See
+/// [`FactoryKey`](FactoryKey) and `AdapterModel.md`'s
+/// `.injectsFactoryOnArgument` capability for the consumer side.
+@attached(member, names: named(init))
+public macro Factory(_ key: FactoryKey) =
+    #externalMacro(module: "WireMacrosImpl", type: "FactoryMacro")
+
 /// Marks a stored property (or init parameter) as an injection point.
 /// The enclosing type's scope macro (`@Singleton` or `@Scoped`) reads
 /// these markers to synthesise its initialiser, and the build plugin

@@ -169,6 +169,16 @@ func asTypeExpression(from attribute: AttributeSyntax) -> String? {
     return base.trimmedDescription
 }
 
+/// The canonical key reference of a `@Factory(key)` template, or `nil` when the
+/// type carries no `@Factory`. Read syntactically, like a `@Provides(key)`
+/// reference: `@Factory(MyMiddleware.session)` → "MyMiddleware.session". Returns
+/// `nil` for a `@Factory` with no positional key argument (a malformed use the
+/// macro's signature already rejects).
+func factoryKeyReference(in attributes: AttributeListSyntax) -> String? {
+    guard let factoryAttribute = attribute(in: attributes, named: "Factory") else { return nil }
+    return keyIdentifier(from: factoryAttribute)
+}
+
 /// The scope macro's arguments read off a type's attributes.
 struct ScopeMacroArguments {
     /// The scope partition: `nil` for `@Singleton`, the seed for `@Scoped`.
