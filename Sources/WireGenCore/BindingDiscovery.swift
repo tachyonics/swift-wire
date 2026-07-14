@@ -108,6 +108,11 @@ final class BindingDiscovery: SyntaxVisitor {
     /// Contribution-alias candidates — every type-decl attribute, classified
     /// against declared aliases after aggregation. See `ContributionAliasResolution`.
     var aliasUseSites: [ContributionAliasUseSite] = []
+    /// `@Factory(key)` factory templates found in this file, in source order.
+    /// The producer side of the factory model — consumer-driven synthesis
+    /// (`@Middleware(key)`) turns each demanded key into one concrete factory.
+    /// See `FactoryTemplates`.
+    var factoryTemplates: [DiscoveredFactoryTemplate] = []
     /// Graph-conformance declarations (`WireGraphConformanceV1`) found in this
     /// file — an adapter asking Wire to emit a graph conformance to its protocol.
     var graphConformances: [DiscoveredGraphConformance] = []
@@ -197,6 +202,14 @@ final class BindingDiscovery: SyntaxVisitor {
             modifiers: node.modifiers,
             members: node.memberBlock.members
         )
+        processFactoryTemplate(
+            typeKind: "struct",
+            nameToken: node.name,
+            generics: node.genericParameterClause,
+            attributes: node.attributes,
+            modifiers: node.modifiers,
+            members: node.memberBlock.members
+        )
         return .visitChildren
     }
     override func visitPost(_ node: StructDeclSyntax) {
@@ -237,6 +250,14 @@ final class BindingDiscovery: SyntaxVisitor {
             modifiers: node.modifiers,
             members: node.memberBlock.members
         )
+        processFactoryTemplate(
+            typeKind: "class",
+            nameToken: node.name,
+            generics: node.genericParameterClause,
+            attributes: node.attributes,
+            modifiers: node.modifiers,
+            members: node.memberBlock.members
+        )
         return .visitChildren
     }
     override func visitPost(_ node: ClassDeclSyntax) {
@@ -270,6 +291,14 @@ final class BindingDiscovery: SyntaxVisitor {
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
         processScopeBoundType(
+            typeKind: "actor",
+            nameToken: node.name,
+            generics: node.genericParameterClause,
+            attributes: node.attributes,
+            modifiers: node.modifiers,
+            members: node.memberBlock.members
+        )
+        processFactoryTemplate(
             typeKind: "actor",
             nameToken: node.name,
             generics: node.genericParameterClause,
@@ -715,6 +744,54 @@ extension BindingDiscovery {
                     teardown: injectResult.teardown,
                     originModule: module
                 )
+            )
+        )
+    }
+
+    /// Process a primary type declaration for a `@Factory(key)` annotation,
+    /// recording the factory template. Returns early when the type carries no
+    /// `@Factory`. Disjoint from `processScopeBoundType`: a `@Factory` template
+    /// is not a `@Singleton`/`@Scoped`, so a type is recorded as at most one of
+    /// the two. Assisted parameters come from the generic clause; injected
+    /// dependencies come from `@Inject` members, extracted exactly as a
+    /// `@Singleton`'s are.
+    fileprivate func processFactoryTemplate(
+        typeKind: String,
+        nameToken: TokenSyntax,
+        generics: GenericParameterClauseSyntax?,
+        attributes: AttributeListSyntax,
+        modifiers: DeclModifierListSyntax,
+        members: MemberBlockItemListSyntax
+    ) {
+        guard let keyReference = factoryKeyReference(in: attributes) else { return }
+        let genericParameterNames = generics?.parameters.map { $0.name.text } ?? []
+        let genericParameterConstraints = Dictionary(
+            uniqueKeysWithValues: (generics?.parameters ?? []).compactMap { parameter in
+                parameter.inheritedType.map { (parameter.name.text, $0.trimmedDescription) }
+            }
+        )
+        let injectResult = extractInjectDependencies(
+            from: members,
+            hostTypeKind: typeKind,
+            sourcePath: sourcePath,
+            converter: converter
+        )
+        warnings.append(contentsOf: injectResult.diagnostics)
+        // `scopes` already includes this type's own frame (pushed by
+        // `enterTypeDecl`), so the joined names are the full qualified path.
+        let qualified = scopes.map(\.typeName).joined(separator: ".")
+        factoryTemplates.append(
+            DiscoveredFactoryTemplate(
+                keyReference: keyReference,
+                typeName: nameToken.text,
+                qualifiedTypeName: qualified,
+                typeKind: typeKind,
+                genericParameterNames: genericParameterNames,
+                genericParameterConstraints: genericParameterConstraints,
+                dependencies: injectResult.dependencies,
+                accessLevel: accessLevel(from: modifiers),
+                location: location(of: nameToken),
+                originModule: module
             )
         )
     }
