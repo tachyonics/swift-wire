@@ -346,8 +346,8 @@ Controller- and route-scoped middleware as nested wrappers; the standard
 > the **generic-with-deps** tier: the middleware is declared a `@Factory(key)` template and
 > referenced `@Middleware(key)`; the plugin synthesises one concrete factory per consumed key
 > (holding the deps, with a metatype-parameter `create`) and injects it onto the controller via the
-> adapter contract's input-edge capability (`.injectsDependencyOnArgument`, Increment 1) — *not* a
-> graph back-reference. See [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *Generic
+> consumer-side capability `@Middleware` declares — `.injectsFactoryOnArgument` (the factory input edge) —
+> *not* a graph back-reference. See [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md), *Generic
 > middleware: the `@Factory` template*. The derivation below records how each decision was reached.
 
 **Scope:**
@@ -578,7 +578,7 @@ transport-only contributor mounts through its own adapter.
   `Middleware` (two primary associated types can't partial-bind), so nothing opaque is built. The
   one Core-codegen item is the **generic-with-deps** tier: declared `@Factory(key)`, referenced
   `@Middleware(key)`, the plugin synthesises one concrete factory per consumed key (metatype-parameter
-  `create`) and injects it onto the controller via the input-edge capability — not a back-reference;
+  `create`) and injects it onto the controller via `.injectsFactoryOnArgument` — not a back-reference;
   concrete and generic-dep-free middleware work today. `Middleware` is `26.2`-gated
   above the core's `26.0` floor, so per-route middleware lands when the deployment floor reaches it.
   Hummingbird's `RouterMiddleware` is incompatible (bidirectional, context-typed). Full record:
@@ -598,14 +598,16 @@ transport-only contributor mounts through its own adapter.
   generated routing (type-transforming middleware surfacing as compile errors); the raw
   escape-hatch handler; request-scoped controllers; and the Tier-2 `@WireHummingbird`
   composition-root macro.
-- Wire Core's adapter contract gains one axis — `WireAdapterAnnotationV1`'s unified
-  `capability:` (Increment 1) adds the `.injectsDependencyOnArgument` **input-edge** case
-  alongside the shipped `.contributes(to:)` **output-edge** case (and the reserved
-  `.rewritesInjection`). Otherwise M5 rides shipped machinery — graph-conformance
+- Wire Core's adapter contract gains a capability axis — `WireAdapterAnnotationV1`'s
+  unified `capability:` adds two **input-edge** cases alongside the shipped
+  `.contributes(to:)` **output-edge** case: `.injectsDependencyOnArgument` (inject an
+  existing binding by type — Increment 1) and `.injectsFactoryOnArgument` (synthesise a `@Factory`
+  template and inject it, the capability `@Middleware` declares — Increment 2), plus the
+  reserved `.rewritesInjection`. Otherwise M5 rides shipped machinery — graph-conformance
   emission, the `@Contributes` alias, the `BuilderKey`→opaque-member fold — plus the
-  `FactoryKey`/`@Factory` template synthesis (Increment 2) that the input edge carries; the
-  shared "adapter replaces the binding" primitive is reserved for M5.4's request scope
-  (also serving `@Configuration`).
+  `FactoryKey`/`@Factory` template synthesis the factory edge carries; the shared "adapter
+  replaces the binding" primitive is reserved for M5.4's request scope (also serving
+  `@Configuration`).
 - The external **WireMVC repo** builds + serves against pushed swift-wire main on macOS
   and Linux (its own CI); the **example repo** ports through the M5.1–M5.4 gate set.
 - task-cluster demonstrates WireMVC + WireOpenAPI coexisting on one graph/transport.

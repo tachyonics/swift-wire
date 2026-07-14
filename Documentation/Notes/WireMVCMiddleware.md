@@ -353,7 +353,8 @@ own. Synthesis is **consumer-driven** — the consumer is `@Middleware(key)`:
 2. Dedupe by key — one factory object per consumed key, shared across every controller that uses it.
 3. For each consumed key, synthesise **one** concrete factory struct, register it as an ordinary
    binding (its `@Inject` deps resolve like any binding's), and inject it into the consuming
-   controllers via the adapter input-edge capability (`.injectsDependencyOnArgument`, Increment 1).
+   controllers via the consumer-side capability `@Middleware` declares — **`.injectsFactoryOnArgument`**
+   (the factory input edge; see [AdapterModel.md](AdapterModel.md), *The capability axis*).
 
 The synthesised factory:
 
@@ -384,14 +385,17 @@ bare generic function isn't a first-class value" problem.
 
 ### The two consumer cases
 
+`@Middleware` declares one capability — **`.injectsFactoryOnArgument`** — and discovery discriminates the two
+cases by the argument's *syntax* per use-site:
+
 - **`@Middleware(key)` — the factory case.** The key references a `@Factory` template; the plugin
-  injects the synthesised factory and the witness calls `.create(…)`.
+  synthesises the factory, injects it, and the witness calls `.create(…)`.
 - **`@Middleware(ConcreteType.self)` — the concrete case.** `.self`, not a key: there is an ordinary
-  binding in the graph we want to inject and use directly. It may still be wrapped in a trivial
-  factory that returns the already-created instance, but there is no template to specialise. `.self`
-  is reserved for this concrete case; a generic middleware always moves to a keyed `@Factory`
-  template (retiring the earlier `@Middleware(Generic<WireContext, WireReader, WireSender>.self)`
-  placeholder-generic spelling).
+  binding in the graph we want to inject and use directly, wrapped in a trivial pass-through factory
+  that returns the already-created instance — so the witness call site is uniform (`.create(…)`),
+  but there is no template to specialise. `.self` is reserved for this concrete case; a generic
+  middleware always moves to a keyed `@Factory` template (retiring the earlier
+  `@Middleware(Generic<WireContext, WireReader, WireSender>.self)` placeholder-generic spelling).
 
 Scope of the work: `FactoryKey` + the `@Factory` macro + template discovery (swift-wire); consumer
 collation + factory synthesis + emission (swift-wire, riding Increment 1's input-edge capability);
