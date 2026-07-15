@@ -5,8 +5,9 @@ import PackagePlugin
 /// declares bindings and `@Factory` templates for a graph consumer to compose, but builds no graph of
 /// its own. It runs `WireGen` in library mode over the module's sources and emits the module's
 /// *owned* factory types (`_WireFactory.swift`) — so the module's own controllers' macro-generated
-/// wrapping inits resolve against a type declared here rather than in the far-away graph consumer —
-/// plus an exports placeholder (the module's published export interface is M6). No graph.
+/// wrapping inits resolve against a type declared here rather than in the far-away graph consumer.
+/// No graph. (A module's published export interface — and retiring the hand-declared `_WireExports.swift`
+/// Wire-awareness marker in favour of manifest-derived detection — is M6; see MultiModuleComposition.md.)
 ///
 /// Contributor vs graph consumer is an *architectural* choice — which module calls `Wire.bootstrap()`
 /// — not a property of target kind, so it's explicit: a composition root applies `WireBuildPlugin`; a
@@ -37,13 +38,8 @@ struct WireContributorPlugin: BuildToolPlugin {
 
         let wireGen = try context.tool(named: "WireGen")
         let factoryURL = context.pluginWorkDirectoryURL.appendingPathComponent("_WireFactory.swift")
-        // Empty for now — the export interface a module publishes to a consumer's graph is M6 (the
-        // presence marker in the module's sources still drives Wire-awareness detection).
-        let exportsURL = context.pluginWorkDirectoryURL.appendingPathComponent(
-            "_WireGeneratedExports.swift"
-        )
         let arguments =
-            ["--library", factoryURL.path, exportsURL.path, "--module", sourceModule.moduleName]
+            ["--library", factoryURL.path, "--module", sourceModule.moduleName]
             + swiftSources.map(\.path)
 
         return [
@@ -52,7 +48,7 @@ struct WireContributorPlugin: BuildToolPlugin {
                 executable: wireGen.url,
                 arguments: arguments,
                 inputFiles: swiftSources,
-                outputFiles: [factoryURL, exportsURL]
+                outputFiles: [factoryURL]
             )
         ]
     }
