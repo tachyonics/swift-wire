@@ -36,6 +36,13 @@ struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
         guard arguments.count >= 3 else { printUsageAndExit() }
+        // Library mode: a non-graph-consuming module emits only what it *owns* — its `@Factory`
+        // factory types (so its own controllers' wrapping inits resolve). No graph, no bootstrap.
+        // Graph consumers (the default) build the full graph.
+        if arguments[1] == "--library" {
+            try runLibraryMode(arguments: arguments)
+            return
+        }
         let graphOutputPath = arguments[1]
         let keyChecksOutputPath = arguments[2]
         let groups = parseModuleGroups(Array(arguments.dropFirst(3)))
@@ -98,7 +105,12 @@ struct WireGen {
             + conformanceOriginImports(aggregate.graphConformances, consumerModule: consumerModule)
             + factoryProducedTypeImports(synthesizedFactories, consumerModule: consumerModule)
 
+        // Factory TYPES are owned by the `@Factory` template's module, so this graph consumer
+        // declares only its own-module factories; dependency-module factories are declared by
+        // those modules' own plugin runs and referenced here via import. Construction/injection
+        // (in `allBindings`) stays consumer-driven and spans every consumed factory.
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
+        let ownedFactoryTypes = renderOwnedFactoryTypes(templates: aggregate.factoryTemplates, module: consumerModule)
         let generated = renderWireGraph(
             imports: imports,
             topologicalOrder: defaultOrder,
@@ -106,7 +118,7 @@ struct WireGen {
             seedScopeOrders: seedScopeOrders,
             graphConformances: aggregate.graphConformances,
             multibindingKeys: aggregate.multibindingKeys,
-            syntheticTypeDeclarations: synthesizedFactories.map(renderFactoryDeclaration)
+            syntheticTypeDeclarations: ownedFactoryTypes
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -599,6 +611,34 @@ extension WireGen {
         )
         exit(1)
     }
+}
+
+/// Library mode — emit a contributor module's owned factory types, no graph.
+/// `WireGen --library <factory-output> --module <self> <sources…>`. Only the module's own sources
+/// are read: factory types are template-driven (own-module) and need no dependency graph. The
+/// module's `import`s are propagated so foreign dependency types the factories reference resolve.
+private func runLibraryMode(arguments: [String]) throws {
+    guard arguments.count >= 3 else { WireGen.printUsageAndExit() }
+    let factoryOutputPath = arguments[2]
+    let groups = WireGen.parseModuleGroups(Array(arguments.dropFirst(3)))
+    guard let ownGroup = groups.first else { WireGen.printUsageAndExit() }
+
+    var templates: [DiscoveredFactoryTemplate] = []
+    var imports: [String] = []
+    for path in ownGroup.sources {
+        let result = discover(in: WireGen.readSource(at: path), sourcePath: path, module: ownGroup.module)
+        templates.append(contentsOf: result.factoryTemplates)
+        if !result.factoryTemplates.isEmpty {
+            imports.append(contentsOf: result.imports)
+        }
+    }
+
+    let factoryFile = renderFactoryModule(
+        imports: imports,
+        typeDeclarations: renderOwnedFactoryTypes(templates: templates, module: ownGroup.module)
+    )
+    try factoryFile.write(toFile: factoryOutputPath, atomically: true, encoding: .utf8)
+    print("wrote \(factoryOutputPath)")
 }
 
 /// Run the pre-graph binding rewrites in order — contribution aliases, adapter

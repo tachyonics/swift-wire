@@ -1,10 +1,15 @@
 import Foundation
 import PackagePlugin
 
-/// `WireBuildPlugin` — SPM build-tool plugin that runs the `WireGen`
-/// executable over every Swift source file in a target and emits
-/// `_WireGraph.swift` into the plugin work directory. The generated file
-/// is automatically picked up and compiled into the consumer target.
+/// `WireBuildPlugin` — SPM build-tool plugin for a Wire **graph consumer** (the composition root
+/// that calls `Wire.bootstrap()`). It runs the `WireGen` executable over the target's sources (and
+/// its Wire-aware dependencies') and emits `_WireGraph.swift` into the plugin work directory, picked
+/// up and compiled into the target.
+///
+/// Whether a module is a graph consumer or a **contributor** (a module that declares bindings/
+/// factories for a consumer to compose but builds no graph of its own) is an *architectural* choice —
+/// which module bootstraps — not a property of target kind. So the two are separate, explicit plugins:
+/// a composition root applies this; a contributor applies `WireContributorPlugin`.
 ///
 /// Consumers opt in per-target:
 ///
@@ -39,6 +44,8 @@ struct WireBuildPlugin: BuildToolPlugin {
             return []
         }
 
+        let wireGen = try context.tool(named: "WireGen")
+
         let graphURL = context.pluginWorkDirectoryURL.appendingPathComponent("_WireGraph.swift")
         // Compile-time type assertions for keyed @Inject / @Provides
         // annotations live in a separate file so the bootstrap stays
@@ -47,7 +54,6 @@ struct WireBuildPlugin: BuildToolPlugin {
         let keyChecksURL = context.pluginWorkDirectoryURL.appendingPathComponent(
             "_WireKeyChecks.swift"
         )
-        let wireGen = try context.tool(named: "WireGen")
 
         // Cross-module composition (7d): activation is the dependency.
         // Re-parse the sources of every Wire-aware library this target
