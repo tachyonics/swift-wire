@@ -16,6 +16,7 @@ let package = Package(
     products: [
         .library(name: "Wire", targets: ["Wire"]),
         .plugin(name: "WireBuildPlugin", targets: ["WireBuildPlugin"]),
+        .plugin(name: "WireContributorPlugin", targets: ["WireContributorPlugin"]),
     ],
     dependencies: [
         // Floor at 603.0.0 (Swift 6.3) so Wire can use SE-0491 module
@@ -50,6 +51,11 @@ let package = Package(
         ),
         .plugin(
             name: "WireBuildPlugin",
+            capability: .buildTool(),
+            dependencies: ["WireGen"]
+        ),
+        .plugin(
+            name: "WireContributorPlugin",
             capability: .buildTool(),
             dependencies: ["WireGen"]
         ),

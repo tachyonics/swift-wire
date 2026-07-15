@@ -214,7 +214,7 @@ struct FactorySynthesisTests {
             location: mockLocation("M.swift")
         )
         let expected = """
-            struct _WireFactory_MyMiddleware_session {
+            struct _WireFactory_MyMiddleware_session: Sendable {
                 let store: SessionStore
                 func create<Ctx, Reader, Sender>(_: Ctx.Type, _: Reader.Type, _: Sender.Type) -> SessionMiddleware<Ctx, Reader, Sender> where Ctx: RequestContext {
                     SessionMiddleware(store: store)
@@ -251,6 +251,44 @@ struct FactorySynthesisTests {
                 "where Ctx: RequestContext & ~Copyable, Reader.ReadElement == UInt8, Reader: ~Copyable"
             )
         )
+    }
+
+    @Test func rendersOnlyOwnModuleFactoryTypesAtTemplateVisibility() {
+        // Factory types are owned by the template's module and carry the template's access; a
+        // template in another module is emitted by THAT module's run, not here.
+        let owned = DiscoveredFactoryTemplate(
+            keyReference: "Keys.session",
+            typeName: "SessionMiddleware",
+            qualifiedTypeName: "SessionMiddleware",
+            typeKind: "struct",
+            genericParameterNames: ["Ctx"],
+            dependencies: [
+                DependencyParameter(
+                    name: "store",
+                    type: "Store",
+                    kind: .injectProperty,
+                    location: mockLocation("M.swift")
+                )
+            ],
+            accessLevel: .public,
+            location: mockLocation("M.swift"),
+            originModule: "MyLib"
+        )
+        let foreign = DiscoveredFactoryTemplate(
+            keyReference: "Keys.other",
+            typeName: "OtherMiddleware",
+            qualifiedTypeName: "OtherMiddleware",
+            typeKind: "struct",
+            genericParameterNames: ["Ctx"],
+            dependencies: [],
+            location: mockLocation("O.swift"),
+            originModule: "OtherLib"
+        )
+        let rendered = renderOwnedFactoryTypes(templates: [owned, foreign], module: "MyLib")
+        #expect(rendered.count == 1)
+        #expect(rendered.first?.contains("public struct _WireFactory_Keys_session: Sendable {") == true)
+        #expect(rendered.first?.contains("public let store: Store") == true)
+        #expect(rendered.first?.contains("public func create") == true)
     }
 
     // MARK: - End-to-end through discovery
