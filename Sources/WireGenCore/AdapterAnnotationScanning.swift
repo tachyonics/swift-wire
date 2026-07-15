@@ -14,6 +14,10 @@ import SwiftSyntax
 package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// `@X` aliases `@Contributes(to: key)` — the multibinding-key reference (an output edge).
     case contributes(key: String)
+    /// `@X` contributes a generated proxy (`<proxyTypePrefix><Binding>`) into the multibinding
+    /// key, not the binding itself — the plugin synthesises the proxy binding (depending on the
+    /// binding + its demanded factories) and contributes that.
+    case contributesProxy(key: String, proxyTypePrefix: String)
     /// `@X(T.self)` makes the annotated binding depend on `T` (an input edge to an
     /// existing binding).
     case injectsDependencyOnArgument
@@ -91,11 +95,20 @@ func adapterAnnotation(
 /// `.injectsDependencyOnArgument`, or `.rewritesInjection`.
 func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapability? {
     if let call = expression.as(FunctionCallExprSyntax.self),
-        let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-        member.declName.baseName.text == "contributes",
-        let toArgument = call.arguments.first(where: { $0.label?.text == "to" })
+        let member = call.calledExpression.as(MemberAccessExprSyntax.self)
     {
-        return .contributes(key: toArgument.expression.trimmedDescription)
+        if member.declName.baseName.text == "contributes",
+            let toArgument = call.arguments.first(where: { $0.label?.text == "to" })
+        {
+            return .contributes(key: toArgument.expression.trimmedDescription)
+        }
+        if member.declName.baseName.text == "contributesProxy",
+            let toArgument = call.arguments.first(where: { $0.label?.text == "to" }),
+            let prefixArgument = call.arguments.first(where: { $0.label?.text == "proxyTypePrefix" }),
+            let prefix = prefixArgument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
+        {
+            return .contributesProxy(key: toArgument.expression.trimmedDescription, proxyTypePrefix: prefix)
+        }
     }
     if let member = expression.as(MemberAccessExprSyntax.self) {
         switch member.declName.baseName.text {

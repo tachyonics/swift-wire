@@ -37,7 +37,7 @@ struct WireGen {
         let arguments = CommandLine.arguments
         guard arguments.count >= 3 else { printUsageAndExit() }
         // Library mode: a non-graph-consuming module emits only what it *owns* — its `@Factory`
-        // factory types (so its own controllers' wrapping inits resolve). No graph, no bootstrap.
+        // factory types (so its own bindings that reference them resolve). No graph, no bootstrap.
         // Graph consumers (the default) build the full graph.
         if arguments[1] == "--library" {
             try runLibraryMode(arguments: arguments)
@@ -658,16 +658,25 @@ private func applyPreGraphBindingPasses(
         aliases: adapterAnnotations,
         useSites: aliasUseSites
     )
-    allBindings = applyAdapterDependencies(
+    // Synthesise contributor proxies before the input-edge passes: it re-attributes the proxied
+    // bindings' factory/dependency use-sites onto their proxies, so those edges land on the proxy.
+    let proxied = applyContributorProxies(
         to: allBindings,
         annotations: adapterAnnotations,
         useSites: aliasUseSites
+    )
+    allBindings = proxied.bindings
+    let useSites = proxied.useSites
+    allBindings = applyAdapterDependencies(
+        to: allBindings,
+        annotations: adapterAnnotations,
+        useSites: useSites
     )
     let synthesis = applyFactorySynthesis(
         to: allBindings,
         templates: factoryTemplates,
         annotations: adapterAnnotations,
-        useSites: aliasUseSites,
+        useSites: useSites,
         consumerModule: consumerModule
     )
     allBindings = synthesis.bindings
