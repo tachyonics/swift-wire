@@ -458,10 +458,18 @@ final class BindingDiscovery: SyntaxVisitor {
     }
 
     override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
-        if hasAttribute(node.attributes, named: "Provides"),
-            isAtRecognisedProvidesPosition(modifiers: node.modifiers)
-        {
+        let isProvides = hasAttribute(node.attributes, named: "Provides")
+        if isProvides, isAtRecognisedProvidesPosition(modifiers: node.modifiers) {
             extractProvidesFunction(node)
+        } else if !isProvides, !scopes.isEmpty {
+            // A route-scope `@Middleware(key)` on a member method lifts its factory onto the
+            // *enclosing type*'s binding (methods aren't bindings), so its adapter use-sites attribute
+            // to that type. `scopes` already holds the enclosing type here. `@Provides` funcs are their
+            // own bindings, captured with their access path, so they're excluded.
+            recordAdapterUseSites(
+                targetIdentity: scopes.map(\.typeName).joined(separator: "."),
+                attributes: node.attributes
+            )
         }
         warnings.append(contentsOf: producerlessMarkerDiagnostics(in: node.attributes))
         return .skipChildren

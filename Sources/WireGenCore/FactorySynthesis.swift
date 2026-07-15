@@ -211,10 +211,14 @@ package func applyFactorySynthesis(
         annotations.filter { $0.capability == .injectsFactoryOnArgument }.map(\.annotationName)
     )
 
-    // Each consuming binding identity → the demanded keys that have a factory.
+    // Each consuming binding identity → the demanded keys that have a factory, deduped by key: a key
+    // referenced at both controller and route scope is one lifted factory (one input edge), matching
+    // the adapter macro's per-key dedup in the wrapping init. First occurrence wins (source order).
     var demandsByIdentity: [String: [(key: String, location: SourceLocation)]] = [:]
+    var seenKeysByIdentity: [String: Set<String>] = [:]
     for site in useSites where factoryAnnotations.contains(site.annotationName) {
         guard let key = factoryKeyArgument(site.argument), factoriesByKey[key] != nil else { continue }
+        guard seenKeysByIdentity[site.targetIdentity, default: []].insert(key).inserted else { continue }
         demandsByIdentity[site.targetIdentity, default: []].append((key, site.location))
     }
     guard !demandsByIdentity.isEmpty else { return (allBindings, factories) }
@@ -298,11 +302,23 @@ package func renderFactoryDeclaration(_ factory: SynthesizedFactory) -> String {
 
     // `Sendable`: the factory holds graph bindings (all `Sendable` in Wire's model) and is stored on
     // the — typically `Sendable` — controller it's lifted onto, so it must conform.
+    // Explicit init at the factory's access — a `public`/`package` struct's *memberwise* init is
+    // still `internal`, so the graph consumer (another module) couldn't construct the factory
+    // without one.
+    let initParameters = factory.dependencies.map { "\($0.name ?? $0.type): \($0.type)" }
+        .joined(separator: ", ")
+
     var lines: [String] = []
     lines.append("\(access)struct \(factory.factoryTypeName): Sendable {")
     for dependency in factory.dependencies {
         lines.append("    \(access)let \(dependency.name ?? dependency.type): \(dependency.type)")
     }
+    lines.append("    \(access)init(\(initParameters)) {")
+    for dependency in factory.dependencies {
+        let name = dependency.name ?? dependency.type
+        lines.append("        self.\(name) = \(name)")
+    }
+    lines.append("    }")
     lines.append(
         "    \(access)func create\(genericClause)(\(createParameters)) -> \(returnType)\(whereClause) {"
     )
