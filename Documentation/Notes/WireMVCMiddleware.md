@@ -228,8 +228,9 @@ the assisted box roles** as metatype parameters, `create(_: RequestContext.Type,
 ResponseSender.Type) -> Mw<…>` — so the box-role specialisation is *inferred from arguments*,
 sidestepping the forbidden explicit method specialisation. The developer never writes the factory:
 the plugin reads the deps and the `@MiddlewareFactory` role mapping, synthesises the factory, and
-injects it onto the controller via the input-edge capability (macro-generated `@Inject` is invisible
-to Wire's plugin, so the plugin must do the injection); the witness calls the uniform
+injects it onto the controller's **route-contributor proxy** via the input-edge capability
+(macro-generated `@Inject` is invisible to Wire's plugin, so the plugin must do the injection); the
+witness calls the uniform
 `self._wireFactory_….create(Builder.RequestContext.self, Builder.Reader.self, Builder.ResponseSender.self)`.
 This is the swift-wire Core change; everything above ships as 4a with no swift-wire change. See
 *Generic middleware: the `@Factory` template + `@MiddlewareFactory` mapping* for the full record.
@@ -242,9 +243,10 @@ For a controller with two controller-scope and two route-scope middleware on a t
   `@Middleware`.
 - **`@Singleton` / Wire graph** — makes the controller (and each middleware) a graph binding /
   factory and constructs them (lift-the-minimum).
-- **`@Controller` macro** — aliases to `@Contributes(to: WireMVCKeys.routeContributors)`,
-  generates the `RouteContributor` witness, and reads the controller-scope `@Middleware` as the
-  outer wrapping for every route.
+- **`@Controller` macro** — generates a `RouteContributor` **proxy** (`_WireRouteContributor_<C>`)
+  holding the plain controller plus any lifted factories (`.contributesProxy(to:
+  WireMVCKeys.routeContributors)`), carries the witness, and reads the controller-scope `@Middleware`
+  as the outer wrapping for every route. The controller itself stays a footgun-free `@Singleton`.
 - **`@Get`/`@JSONResponse`/route `@Middleware`** — synthesise this route's fold
   (`[ctrl-outer…, route-inner…]` through `MiddlewareBuilder` → terminal) and the terminal
   (explode → project → call handler → encode the return via the sender).

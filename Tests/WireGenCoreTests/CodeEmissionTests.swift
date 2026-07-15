@@ -2174,4 +2174,56 @@ struct CodeEmissionTests {
         )
         #expect(output == expected)
     }
+
+    @Test func transitiveLiftNodeThreadsParameterThroughParameterisedDependency() {
+        // The route-contributor proxy (3.1c): a structural lift node
+        // `_WireRouteContributor_TodosController<Repository: TodoRepository>` whose only lift signal is
+        // its dependency on ANOTHER structural lift node, `TodosController<Repository>`. It threads the
+        // repo parameter `T0` transitively (never depends on the bare `Repository`), renders as
+        // `<T0>`, and its `controller:` argument resolves to the plain controller — which is itself
+        // constructed with no factory argument.
+        let proxy = DiscoveredScopeBoundType(
+            typeName: "_WireRouteContributor_TodosController",
+            typeKind: "struct",
+            genericParameterNames: ["Repository"],
+            genericParameterConstraints: ["Repository": "TodoRepository"],
+            dependencies: [
+                DependencyParameter(
+                    name: "controller",
+                    type: "TodosController<Repository>",
+                    kind: .injectInitParameter,
+                    location: mockLocation("Proxy.swift")
+                )
+            ],
+            location: mockLocation("Proxy.swift"),
+            originModule: testModule
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [
+                providerProperty("Wiring.repo", boundType: "some TodoRepository"),
+                structuralLiftNode(
+                    "TodosController",
+                    parameter: "Repository",
+                    constraint: "TodoRepository",
+                    depName: "repository"
+                ),
+                .scopeBound(proxy),
+            ]
+        )
+        // The proxy field is threaded by the repo's own lift parameter.
+        #expect(
+            output.contains(
+                "let _WireRouteContributor_TodosControllerOfSomeTodoRepository: _WireRouteContributor_TodosController<T0>"
+            )
+        )
+        // The controller is built plainly — no factory argument.
+        #expect(
+            output.contains("let todosControllerOfSomeTodoRepository = TodosController(repository: someTodoRepository)")
+        )
+        // The proxy resolves its controller dependency to that plain controller (transitive bridge).
+        #expect(
+            output.contains("_WireRouteContributor_TodosController(controller: todosControllerOfSomeTodoRepository)")
+        )
+    }
 }

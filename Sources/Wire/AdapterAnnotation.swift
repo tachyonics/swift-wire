@@ -27,6 +27,15 @@ public enum WireAdapterCapability {
     /// multibinding key (an *output* edge).
     case contributes(to: Any)
 
+    /// `@X` on a binding contributes a **generated proxy** — not the binding itself — into a
+    /// multibinding key. The adapter's macro generates a peer type `<proxyTypePrefix><Binding>`
+    /// that holds the binding (constructed its ordinary way) plus any factories the binding's
+    /// input-edge use-sites demand, and carries the adapter's witness; the build plugin
+    /// synthesises the proxy binding (depending on the binding + those factories), and the proxy,
+    /// not the binding, flows into the multibinding. Keeps the annotated binding an ordinary
+    /// footgun-free type — nothing about it depends on being constructed "the right way".
+    case contributesProxy(to: Any, proxyTypePrefix: String)
+
     /// `@X(T.self)` on a binding makes the binding depend on `T` (an *input* edge),
     /// delivered at construction through a wrapping init the adapter's macro generates.
     /// `T` resolves to an *existing* binding.

@@ -33,7 +33,7 @@ subset the box roles), or handle the **injected axis** (a generic dep). Those ar
 2. **`@MiddlewareFactory` + the role mapping** — explicit, validated box-role ordering; reorder /
    subset support.
 3. **The injected axis** — a middleware generic over an `@Inject`-typed dependency (the factory
-   becomes a generic binding), and the wrapping-init type-naming that entails.
+   becomes a generic binding), and the proxy-field type-naming that entails.
 
 ## Increments
 
@@ -103,6 +103,93 @@ the driver.
 > marker (manifest-derived detection + reachability) is M6/M5.4 — see
 > [MultiModuleComposition.md](MultiModuleComposition.md), *The marker is detection-only*.
 
+### 3.1c — Route-contributor proxy; retire the wrapping-init footgun (swift-wire + WireMVC) — **DONE**
+
+**The property being restored.** Everywhere else in Wire a binding is an ordinary Swift type: annotate
+it, and it's still constructible the normal way with no wrong way to hold it. The 3.1/3.1b factory-lift
+broke that for controllers. `@Controller` makes the controller *itself* the `RouteContributor`, but the
+conformance silently depends on the macro-generated **wrapping init** having populated the IUO factory
+ivar. Build the controller its natural way (`TodosController(repository:)`) and the first route that
+folds the factory traps at runtime — `Unexpectedly found nil` (the exact crash 3.1b's fix chased). It's
+the one binding in the framework with a footgun initialiser.
+
+**The solve — a generated proxy is the `RouteContributor`; the controller stays pure.** `@Controller`
+stops touching the controller's storage and init entirely (the member role is dropped). Instead it
+generates a **peer proxy type** that holds the controller (built through its ordinary `@Singleton`
+init) plus the lifted factories, conforms to `RouteContributor`, and carries `registerWireRoutes`. The
+controller is a plain `@Singleton` again — no IUO, no wrapping init, no wrong way to build it. The
+footgun is now structurally impossible: the only type that needs the factories is the proxy, and the
+proxy has no initialiser that omits them.
+
+**Shape.**
+
+- Controller: `@Singleton @Controller("/todos") struct TodosController<R: TodoRepository>` — `@Singleton`
+  generates the normal `init(repository:)`; `@Controller` adds **no members**.
+- Proxy (peer): `struct _WireRouteContributor_TodosController<R: TodoRepository>: RouteContributor,
+  Sendable { let controller: TodosController<R>; let _wireFactory_<key>: _WireFactory_<key>;
+  init(controller:, _wireFactory_<key>:) {…}; func registerWireRoutes<Builder>(…) {…} }`. The witness
+  body is 3.1's, rebased: handler calls `self.controller.method(…)`, the fold keeps
+  `self._wireFactory_<key>.create(…)` (now a proxy field). The proxy restates the controller's generic
+  parameter + `where` clauses; it's Sendable because both fields are.
+- Graph: construct the controller normally, construct `proxy(controller, factory)`, contribute the
+  **proxy** into `[any RouteContributor]` — the two lines 3.1b emitted (wrapping-init construction,
+  then `[controller] as [any RouteContributor]`) become (normal construction, proxy construction,
+  `[proxy] as …`).
+
+**Scope, swift-wire.** A new adapter capability `.contributesProxy(to:)` — the adapter declares the
+proxy type-name prefix, keeping the plugin framework-agnostic (as `.contributes(to:)` carries the
+multibinding key rather than hardcoding `routeContributors`). It replaces `.contributes(to:)` on the
+controller and means: synthesise a proxy binding named `<prefix><T>` that depends on `<T>` plus the
+factory demands `<T>`'s `@Middleware(key)` use-sites raise, and contribute the **proxy**, not `<T>`.
+The factory-lift target therefore flips from the annotated binding to its proxy — `@Middleware`'s
+`.injectsFactoryOnArgument` is unchanged; only where the plugin lands the factory edge moves. The proxy
+binding is a lift node whenever the controller is generic (same demand-driven specialisation the
+controller gets today).
+
+**Scope, WireMVC.** Drop `ControllerMacro`'s `MemberMacro` role (the IUO ivar + wrapping init). The
+`ExtensionMacro` stops emitting `extension <Controller>: RouteContributor` and instead emits the peer
+proxy `struct` with the rebased witness. `@Controller`'s adapter alias switches its output edge from
+`.contributes(to:)` to `.contributesProxy(to:)` carrying the `_WireRouteContributor_` prefix.
+
+**Unconditional — decision.** Every `@Controller` gets a proxy, even one with zero factories (uniform
+generated surface, per [[feedback_consistent_api_over_conditional_shape]] — the contributor shape
+doesn't shift the first time a middleware factory appears). It is also the shape request-scoped
+controllers need *universally*: a request-scoped controller can't be a held singleton, so its proxy
+**builds** the controller (and its request scope) per request instead of holding it. So this isn't a
+wrapper-when-a-feature-appears — it's the end-state contributor, and request scope becomes a different
+proxy body, not the introduction of proxies. That's the reason to land it now rather than at request
+scope.
+
+**What it retires / preserves.** Retires [spike-18](../../../swift-wire-spikes/spike-18-wiremvc-factory-lift/)'s
+premise — the IUO-ivar + wrapping-init peer-coexistence with `@Singleton`. The controller is untouched
+now, so there is no `@Singleton`/`@Controller` member coordination left to prove; the whole
+peer-invisibility gymnastic is gone (the proxy is a separate type with its own fully-visible init).
+Preserves 3.1/3.1b's factory **type** synthesis and cross-module ownership wholesale — the proxy
+references `_WireFactory_<key>` exactly as the wrapping init did; the hard part (3.1b) does not move.
+
+**Gate.** wire-mvc self-test + all three example runtimes build and **serve identically** — behaviour
+is unchanged (DELETE with `x-api-key: secret` succeeds, without → 401). A regression test constructs a
+controller its plain `@Singleton` way and confirms it's a valid, footgun-free binding (no route path
+can fold a nil factory). swift-wire unit tests: `.contributesProxy` synthesis — the derived proxy
+binding, factory demands retargeted onto it, and the generic lift-node proxy.
+
+> **Ships as:** swift-wire (capability + proxy synthesis) first, pushed; then wire-mvc (`@Controller`
+> → proxy) after a `swift package update swift-wire`; then wire-mvc-examples re-validated with **no
+> source change** — the same controllers regenerate through the proxy.
+
+**Gate — met.** swift-wire: the transitive-lift extension is unit-tested (determination + bridge) and
+the emission is proven by a `renderWireGraph` test that produces the exact proxy graph (`_WireGraph<T0>`
+with `_WireRouteContributor_<C><T0>` threaded through its dependency on `C<T0>`); contributor-proxy
+synthesis is unit-tested (proxy binding, factory re-attribution). The generated-graph shape is
+de-risked by [spike-19](../../../swift-wire-spikes/spike-19-wiremvc-contributor-proxy/). wire-mvc: the
+`@Controller` peer macro emits the proxy (macro tests updated), and `WireMVCExample` serves every route
+through it. wire-mvc-examples: `SwiftHttpServerExample`'s `servesTodosCRUDOverCouchDB` passes over a
+real CouchDB — the generic `TodosController<Repository>` served with `RequireAPIKey` lifted onto its
+proxy, the DELETE gate intact. The controller is now built `TodosController(repository:)` — plainly, no
+factory argument — so the former `Unexpectedly found nil` is structurally impossible (the factory is a
+non-optional `let` on the proxy). The injected axis and box-role subsetting (3.2/3.3) are unchanged by
+this pivot.
+
 ### 3.2 — `@MiddlewareFactory` + the role-mapping contract (swift-wire + WireMVC)
 
 **Scope, swift-wire.** A producer-side "factory role mapping" adapter capability; extend use-site
@@ -137,16 +224,16 @@ demand-driven specialisation threads the injected type through the dependency ed
 generic over the assisted roles only. This is the tier where a generic controller and the middleware
 share a backend through the graph.
 
-**The hard sub-problem — wrapping-init type naming.** The `@Controller` macro must name the factory
-property's type in the wrapping init, and for a generic factory that type is
+**The hard sub-problem — proxy-field type naming.** The `@Controller` macro must name the factory
+field's type on the proxy (post-3.1c), and for a generic factory that type is
 `_WireFactory_<key><InjectedType>` — a specialisation the macro can't spell (it's blind to the
 template's injected axis, and the concrete backend is graph-resolved). The likely resolution: the
 injected-axis genericity is only meaningful when the **controller is itself generic over the shared
 type** (`TodosController<R: TodoRepository>` — the lifted-generic pattern, and the primary reason a
-controller is generic at all), so the macro threads the controller's own generic parameter into the
-factory type. Single-generic controller first; a multi-generic controller (ambiguous which parameter
-threads) is **gated with a diagnostic**, not resolved. The compiler backstops via the shared
-constraint.
+controller is generic at all), so the macro threads the controller's own generic parameter — which the
+proxy already restates — into the factory field type. Single-generic controller first; a multi-generic
+controller (ambiguous which parameter threads) is **gated with a diagnostic**, not resolved. The
+compiler backstops via the shared constraint.
 
 **Why last.** Rarer than 3.1/3.2, and it carries the one genuinely unresolved coordination detail —
 so it's risk-ordered last and **de-risked by a spike** before committing to the factory shape.
@@ -165,8 +252,9 @@ the record (*The consumer* section).
 ## Cross-cutting concerns
 
 - **The macro call is uniform across every increment** — always the canonical box-role triple. The
-  injected axis and box-role subsetting are absorbed producer-side, so the `@Controller` wiring built
-  in 3.1 does not change in 3.2/3.3 (except the wrapping-init *type* in 3.3).
+  injected axis and box-role subsetting are absorbed producer-side. After 3.1c the proxy's
+  `registerWireRoutes` is the stable witness: 3.2 changes only the `create` call's metatypes on it, and
+  3.3 changes only the proxy's factory-field *type*. Nothing else in the controller wiring moves.
 - **Naming is the handshake.** `_WireFactory_<sanitisedKey>` / `_wireFactory_<sanitisedKey>` must be
   derived identically by swift-wire's synthesis and the `@Controller` macro. It already is on the
   swift-wire side (`factoryTypeName(forKey:)` / `factoryDependencyName(forKey:)`); the macro re-derives

@@ -658,16 +658,25 @@ private func applyPreGraphBindingPasses(
         aliases: adapterAnnotations,
         useSites: aliasUseSites
     )
-    allBindings = applyAdapterDependencies(
+    // Synthesise contributor proxies before the input-edge passes: it re-attributes the proxied
+    // controllers' factory/dependency use-sites onto their proxies, so those edges land on the proxy.
+    let proxied = applyContributorProxies(
         to: allBindings,
         annotations: adapterAnnotations,
         useSites: aliasUseSites
+    )
+    allBindings = proxied.bindings
+    let useSites = proxied.useSites
+    allBindings = applyAdapterDependencies(
+        to: allBindings,
+        annotations: adapterAnnotations,
+        useSites: useSites
     )
     let synthesis = applyFactorySynthesis(
         to: allBindings,
         templates: factoryTemplates,
         annotations: adapterAnnotations,
-        useSites: aliasUseSites,
+        useSites: useSites,
         consumerModule: consumerModule
     )
     allBindings = synthesis.bindings

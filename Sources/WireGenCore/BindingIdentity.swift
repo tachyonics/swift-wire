@@ -19,6 +19,57 @@ package func canonicalTypeName(_ raw: String) -> String {
     raw.filter { !$0.isWhitespace }
 }
 
+/// Split a type expression into its maximal identifier runs (`[A-Za-z0-9_]+`), in written order:
+/// `Foo<Bar<Baz>>` → `["Foo", "Bar", "Baz"]`. Punctuation (`<`, `,`, `>`, `?`, `.`) delimits tokens.
+func identifierTokens(_ text: String) -> [String] {
+    var tokens: [String] = []
+    var current = ""
+    for character in text {
+        if character.isLetter || character.isNumber || character == "_" {
+            current.append(character)
+        } else if !current.isEmpty {
+            tokens.append(current)
+            current = ""
+        }
+    }
+    if !current.isEmpty { tokens.append(current) }
+    return tokens
+}
+
+/// Whether the generic parameter `parameter` appears as a generic *argument* — an identifier token
+/// after the base type — within `type` (e.g. `Repository` in `TodosController<Repository>`). Swift has
+/// no higher-kinded generics, so a parameter can never be a base type; a match anywhere after the first
+/// token is therefore a generic-argument use. Token-level, so a substring like `RepositoryStore` never
+/// matches. This is what lets a binding generic over `R` that depends on `Foo<R>` earn lift-node status
+/// (transitive lift) rather than only one that depends on the bare `R`.
+func parameterAppearsAsGenericArgument(_ parameter: String, in type: String) -> Bool {
+    identifierTokens(type).dropFirst().contains(parameter)
+}
+
+/// Rewrite each identifier token in `type` that is a key of `substitutions` to its value, leaving
+/// punctuation and every other token (including the base type) intact:
+/// `Foo<Repository>` with `["Repository": "someTodoRepository"]` → `Foo<someTodoRepository>`.
+func substitutingIdentifierTokens(_ type: String, _ substitutions: [String: String]) -> String {
+    var result = ""
+    var current = ""
+    func flush() {
+        if !current.isEmpty {
+            result += substitutions[current] ?? current
+            current = ""
+        }
+    }
+    for character in type {
+        if character.isLetter || character.isNumber || character == "_" {
+            current.append(character)
+        } else {
+            flush()
+            result.append(character)
+        }
+    }
+    flush()
+    return result
+}
+
 /// Split a canonical (whitespace-stripped) type into its base and whether
 /// it carried a single top-level optional layer. `T?` and `T!` (IUO) both
 /// yield `(base: "T", isOptional: true)`; `T` yields `(base: "T", false)`.
@@ -150,11 +201,32 @@ func bridgedDependencyIdentity(
     _ dependency: DependencyParameter,
     in binding: DiscoveredBinding
 ) -> BindingIdentity {
-    guard binding.isLiftNode,
-        let constraint = binding.genericParameterConstraints[canonicalTypeName(dependency.type)]
-    else { return dependency.identity }
-    let split = optionalityStripped(canonicalTypeName("some \(constraint)"))
-    return BindingIdentity(base: split.base, isOptional: split.isOptional, key: dependency.keyIdentifier)
+    guard binding.isLiftNode else { return dependency.identity }
+    let canonicalDependencyType = canonicalTypeName(dependency.type)
+
+    // Rule 2a — the dependency IS a bare generic parameter: resolve to its `some C` binding.
+    if let constraint = binding.genericParameterConstraints[canonicalDependencyType] {
+        let split = optionalityStripped(canonicalTypeName("some \(constraint)"))
+        return BindingIdentity(base: split.base, isOptional: split.isOptional, key: dependency.keyIdentifier)
+    }
+
+    // Rule 2b (transitive lift) — the dependency is a parameterised type whose generic arguments
+    // include the binding's determined parameters (`TodosController<Repository>`); substitute each
+    // with `some C`, yielding the wrapped lift node's structural identity
+    // (`TodosController<some TodoRepository>`) so the dependency resolves against it.
+    var substitutions: [String: String] = [:]
+    for (parameter, constraint) in binding.genericParameterConstraints
+    where constraintIsDetermining(constraint)
+        && parameterAppearsAsGenericArgument(parameter, in: canonicalDependencyType)
+    {
+        substitutions[parameter] = canonicalTypeName("some \(constraint)")
+    }
+    if !substitutions.isEmpty {
+        let split = optionalityStripped(substitutingIdentifierTokens(canonicalDependencyType, substitutions))
+        return BindingIdentity(base: split.base, isOptional: split.isOptional, key: dependency.keyIdentifier)
+    }
+
+    return dependency.identity
 }
 
 func matchProducer(
