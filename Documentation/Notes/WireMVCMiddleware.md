@@ -294,6 +294,7 @@ Request flow: `base box → ctrl-mw… → route-mw… → [ explode → project
 > `FactoryKey`, the `.injectsFactoryOnArgument` capability, and a first *positional, non-generic*
 > factory synthesis. **Not yet built:** the `@MiddlewareFactory` role mapping, the injected/assisted
 > axis split, and the generic-aware factory — this section is the target those steps land against.
+> The build sequencing is in [MiddlewareFactoryPlan.md](MiddlewareFactoryPlan.md).
 
 For multi-stage chains, middleware are generally **generic over their input box** (a middleware
 pinned to one concrete input can only sit where that exact box appears). How the witness obtains
