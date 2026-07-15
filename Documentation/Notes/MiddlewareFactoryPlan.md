@@ -89,9 +89,12 @@ property: `WireBuildPlugin` (graph consumer) and `WireContributorPlugin` (contri
 mode). A contributor applies the latter *only* when it declares `@Factory` templates; forgetting it
 is a loud, local compile error (`cannot find type '_WireFactory_<key>'`).
 
-**Visibility mirrors bindings.** An internal `@Factory` with no in-module consumer is a candidate
-dead-factory warning (task deferred); a `public`/`package` one stays silent (may be consumed in
-another package). Cross-module consumption therefore requires a `public`/`package` template.
+**Visibility mirrors bindings.** An internal `@Factory` with no in-module consumer warns
+(`deadFactoryDiagnostics`, fired in both full and library mode); a `public`/`package` one stays silent
+(may be consumed in another package). Cross-module consumption therefore requires a `public`/`package`
+template. Consumption is judged name-agnostically (any use-site referencing the key), because a
+contributor built in library mode doesn't compose the adapter package — the safe direction for a
+warning.
 
 **Gate — met.** The shared `Controllers` library compiles (factory type emitted there via
 `WireContributorPlugin`) and **all three runtimes build** — proposal-native, Hummingbird, Vapor —
