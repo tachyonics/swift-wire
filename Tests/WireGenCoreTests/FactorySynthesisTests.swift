@@ -216,6 +216,9 @@ struct FactorySynthesisTests {
         let expected = """
             struct _WireFactory_MyMiddleware_session: Sendable {
                 let store: SessionStore
+                init(store: SessionStore) {
+                    self.store = store
+                }
                 func create<Ctx, Reader, Sender>(_: Ctx.Type, _: Reader.Type, _: Sender.Type) -> SessionMiddleware<Ctx, Reader, Sender> where Ctx: RequestContext {
                     SessionMiddleware(store: store)
                 }
@@ -330,5 +333,48 @@ struct FactorySynthesisTests {
         #expect(
             bindings.contains { $0.aliasTargetIdentity == "_WireFactory_MyMiddleware_session" }
         )
+    }
+
+    @Test func routeScopeMiddlewareAttributesToEnclosingController() throws {
+        // A `@Middleware(key)` on a route *method* (not the controller type) must lift the factory
+        // onto the enclosing controller binding — methods aren't bindings. Deduped by key across
+        // scopes. (Regression: route-scope demand was silently dropped, so the lifted factory stayed
+        // nil at runtime.)
+        let source = """
+            enum WireMVCAdapter {
+                static let middleware = WireAdapterAnnotationV1(
+                    annotation: "Middleware", capability: .injectsFactoryOnArgument)
+            }
+
+            @Factory(MyMiddleware.session)
+            struct SessionMiddleware<Ctx, Reader, Sender> {
+                @Inject var store: SessionStore
+            }
+
+            @Singleton
+            @Controller
+            struct AccountController {
+                @Get
+                @Middleware(MyMiddleware.session)
+                func show() {}
+            }
+            """
+        let discovery = discover(in: source, sourcePath: "App.swift", module: testModule)
+        let result = applyFactorySynthesis(
+            to: discovery.allBindings,
+            templates: discovery.factoryTemplates,
+            annotations: discovery.adapterAnnotations,
+            useSites: discovery.aliasUseSites,
+            consumerModule: testModule
+        )
+        let bindings = try #require(result.bindings[.default])
+        let controller = try #require(
+            bindings.compactMap { binding -> DiscoveredScopeBoundType? in
+                guard case .scopeBound(let type) = binding, type.typeName == "AccountController" else { return nil }
+                return type
+            }.first
+        )
+        let edges = controller.dependencies.filter { $0.type == "_WireFactory_MyMiddleware_session" }
+        #expect(edges.count == 1)
     }
 }
