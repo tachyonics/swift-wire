@@ -27,6 +27,19 @@ struct FactoryTemplateTests {
         #expect(template.dependencies.first?.type == "SessionStore")
     }
 
+    @Test func capturesWhereClause() throws {
+        let source = """
+            @Factory(Keys.mw)
+            struct Mw<Ctx, Reader> where Reader.ReadElement == UInt8, Reader: ~Copyable {
+                @Inject var store: Store
+            }
+            """
+        let template = try #require(
+            discover(in: source, sourcePath: "M.swift", module: testModule).factoryTemplates.first
+        )
+        #expect(template.genericWhereClause == "Reader.ReadElement == UInt8, Reader: ~Copyable")
+    }
+
     @Test func capturesAssistedParameterConstraints() throws {
         let source = """
             @Factory(Keys.authed)

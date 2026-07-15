@@ -194,18 +194,11 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
-        processScopeBoundType(
+        processScopeAndFactory(
             typeKind: "struct",
             nameToken: node.name,
             generics: node.genericParameterClause,
-            attributes: node.attributes,
-            modifiers: node.modifiers,
-            members: node.memberBlock.members
-        )
-        processFactoryTemplate(
-            typeKind: "struct",
-            nameToken: node.name,
-            generics: node.genericParameterClause,
+            whereClause: node.genericWhereClause,
             attributes: node.attributes,
             modifiers: node.modifiers,
             members: node.memberBlock.members
@@ -242,18 +235,11 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
-        processScopeBoundType(
+        processScopeAndFactory(
             typeKind: "class",
             nameToken: node.name,
             generics: node.genericParameterClause,
-            attributes: node.attributes,
-            modifiers: node.modifiers,
-            members: node.memberBlock.members
-        )
-        processFactoryTemplate(
-            typeKind: "class",
-            nameToken: node.name,
-            generics: node.genericParameterClause,
+            whereClause: node.genericWhereClause,
             attributes: node.attributes,
             modifiers: node.modifiers,
             members: node.memberBlock.members
@@ -290,18 +276,11 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         )
         enterTypeDecl(name: node.name.text, attributes: node.attributes, modifiers: node.modifiers)
-        processScopeBoundType(
+        processScopeAndFactory(
             typeKind: "actor",
             nameToken: node.name,
             generics: node.genericParameterClause,
-            attributes: node.attributes,
-            modifiers: node.modifiers,
-            members: node.memberBlock.members
-        )
-        processFactoryTemplate(
-            typeKind: "actor",
-            nameToken: node.name,
-            generics: node.genericParameterClause,
+            whereClause: node.genericWhereClause,
             attributes: node.attributes,
             modifiers: node.modifiers,
             members: node.memberBlock.members
@@ -748,6 +727,38 @@ extension BindingDiscovery {
         )
     }
 
+    /// Dispatch a primary type declaration to both scope-bound (`@Singleton`/`@Scoped`)
+    /// and factory-template (`@Factory`) processing. Each returns early when its
+    /// annotation is absent, so a type is recorded as at most one; bundling the two
+    /// calls keeps the struct/class/actor visits compact.
+    fileprivate func processScopeAndFactory(
+        typeKind: String,
+        nameToken: TokenSyntax,
+        generics: GenericParameterClauseSyntax?,
+        whereClause: GenericWhereClauseSyntax?,
+        attributes: AttributeListSyntax,
+        modifiers: DeclModifierListSyntax,
+        members: MemberBlockItemListSyntax
+    ) {
+        processScopeBoundType(
+            typeKind: typeKind,
+            nameToken: nameToken,
+            generics: generics,
+            attributes: attributes,
+            modifiers: modifiers,
+            members: members
+        )
+        processFactoryTemplate(
+            typeKind: typeKind,
+            nameToken: nameToken,
+            generics: generics,
+            whereClause: whereClause,
+            attributes: attributes,
+            modifiers: modifiers,
+            members: members
+        )
+    }
+
     /// Process a primary type declaration for a `@Factory(key)` annotation,
     /// recording the factory template. Returns early when the type carries no
     /// `@Factory`. Disjoint from `processScopeBoundType`: a `@Factory` template
@@ -759,6 +770,7 @@ extension BindingDiscovery {
         typeKind: String,
         nameToken: TokenSyntax,
         generics: GenericParameterClauseSyntax?,
+        whereClause: GenericWhereClauseSyntax?,
         attributes: AttributeListSyntax,
         modifiers: DeclModifierListSyntax,
         members: MemberBlockItemListSyntax
@@ -788,6 +800,7 @@ extension BindingDiscovery {
                 typeKind: typeKind,
                 genericParameterNames: genericParameterNames,
                 genericParameterConstraints: genericParameterConstraints,
+                genericWhereClause: whereClause?.requirements.trimmedDescription,
                 dependencies: injectResult.dependencies,
                 accessLevel: accessLevel(from: modifiers),
                 location: location(of: nameToken),

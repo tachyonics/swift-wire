@@ -224,6 +224,35 @@ struct FactorySynthesisTests {
         #expect(renderFactoryDeclaration(factory) == expected)
     }
 
+    @Test func rendersTemplateWhereClauseAfterParameterConstraints() {
+        // Associated-type / ~Copyable requirements can't be per-parameter inheritance, so they're
+        // restated on `create` after the per-parameter constraints — without them a constrained
+        // middleware won't construct.
+        let factory = SynthesizedFactory(
+            keyReference: "Keys.mw",
+            factoryTypeName: "_WireFactory_Keys_mw",
+            producedTypeName: "Mw",
+            assistedParameterNames: ["Ctx", "Reader"],
+            assistedParameterConstraints: ["Ctx": "RequestContext & ~Copyable"],
+            whereClause: "Reader.ReadElement == UInt8, Reader: ~Copyable",
+            dependencies: [
+                DependencyParameter(
+                    name: "store",
+                    type: "Store",
+                    kind: .injectProperty,
+                    location: mockLocation("M.swift")
+                )
+            ],
+            producedTypeModule: testModule,
+            location: mockLocation("M.swift")
+        )
+        #expect(
+            renderFactoryDeclaration(factory).contains(
+                "where Ctx: RequestContext & ~Copyable, Reader.ReadElement == UInt8, Reader: ~Copyable"
+            )
+        )
+    }
+
     // MARK: - End-to-end through discovery
 
     @Test func synthesisFromDiscoveredSource() throws {
