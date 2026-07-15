@@ -3,9 +3,10 @@ import Testing
 @testable import WireGenCore
 
 /// Increment 3.1c — contributor-proxy synthesis. `.contributesProxy` synthesises a proxy binding beside
-/// the annotated controller (depending on it, contributing in its place) and re-attributes the
-/// controller's factory use-sites onto the proxy, so the factory-synthesis pass lands the factory edge
-/// on the proxy — the type that folds the middleware — leaving the controller a plain binding.
+/// the annotated binding (depending on it, contributing in its place) and re-attributes the binding's
+/// factory use-sites onto the proxy, so the factory-synthesis pass lands the factory edge on the proxy —
+/// the type it is lifted onto — leaving the subject a plain binding. The fixtures are WireMVC-flavoured
+/// (`Controller` / `Middleware`) as concrete examples; the pass itself is domain-free.
 @Suite("Contributor-proxy synthesis")
 struct ContributorProxySynthesisTests {
     private let key = "WireMVCKeys.routeContributors"
@@ -90,10 +91,11 @@ struct ContributorProxySynthesisTests {
 
         let proxy = binding(named: "_WireRouteContributor_TodosController", in: bindings)
         #expect(proxy != nil)
-        // Generic exactly as the controller, depending on Controller<Repository> (threads transitively).
+        // Generic exactly as the subject, depending on TodosController<Repository> (threads transitively).
         #expect(proxy?.genericParameterNames == ["Repository"])
         #expect(proxy?.genericParameterConstraints == ["Repository": "TodoRepository"])
-        #expect(proxy?.dependencies.first?.name == "controller")
+        // The subject is the proxy's first, unlabelled dependency (Wire names no member of the proxy).
+        #expect(proxy?.dependencies.first?.name == nil)
         #expect(proxy?.dependencies.first?.type == "TodosController<Repository>")
         #expect(proxy?.contributions.first?.keyReference == key)
         #expect(proxy?.accessLevel == .public)
@@ -177,12 +179,12 @@ struct ContributorProxySynthesisTests {
         )
         let bindings = synthesis.bindings[.default] ?? []
 
-        // The factory edge is on the proxy...
+        // The factory edge is on the proxy, alongside the (unlabelled) subject dependency...
         let proxy = binding(named: "_WireRouteContributor_TodosController", in: bindings)
         #expect(proxy?.dependencies.contains { $0.type == "_WireFactory_Keys_factory" } == true)
-        #expect(proxy?.dependencies.contains { $0.name == "controller" } == true)
-        // ...and NOT on the plain controller.
-        let plainController = binding(named: "TodosController", in: bindings)
-        #expect(plainController?.dependencies.contains { $0.type == "_WireFactory_Keys_factory" } == false)
+        #expect(proxy?.dependencies.contains { $0.type == "TodosController<Repository>" } == true)
+        // ...and NOT on the plain subject.
+        let plainSubject = binding(named: "TodosController", in: bindings)
+        #expect(plainSubject?.dependencies.contains { $0.type == "_WireFactory_Keys_factory" } == false)
     }
 }

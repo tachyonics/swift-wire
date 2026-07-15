@@ -2189,7 +2189,7 @@ struct CodeEmissionTests {
             genericParameterConstraints: ["Repository": "TodoRepository"],
             dependencies: [
                 DependencyParameter(
-                    name: "controller",
+                    name: nil,  // the subject is the proxy's first, unlabelled dependency
                     type: "TodosController<Repository>",
                     kind: .injectInitParameter,
                     location: mockLocation("Proxy.swift")
@@ -2221,9 +2221,9 @@ struct CodeEmissionTests {
         #expect(
             output.contains("let todosControllerOfSomeTodoRepository = TodosController(repository: someTodoRepository)")
         )
-        // The proxy resolves its controller dependency to that plain controller (transitive bridge).
+        // The proxy resolves its (unlabelled) subject dependency to that plain binding (transitive bridge).
         #expect(
-            output.contains("_WireRouteContributor_TodosController(controller: todosControllerOfSomeTodoRepository)")
+            output.contains("_WireRouteContributor_TodosController(todosControllerOfSomeTodoRepository)")
         )
     }
 }

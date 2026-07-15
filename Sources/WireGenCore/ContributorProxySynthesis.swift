@@ -1,60 +1,56 @@
-// Contributor-proxy synthesis — the plugin half of the route-contributor proxy (M5.3, 3.1c).
+// Contributor-proxy synthesis — the plugin half of the contributor proxy (M5.3, 3.1c).
 //
-// An adapter annotation declaring `.contributesProxy(to: key, proxyTypePrefix: prefix)` (WireMVC's
+// An adapter annotation declaring `.contributesProxy(to: key, proxyTypePrefix: prefix)` (e.g. WireMVC's
 // `@Controller`) does NOT contribute the annotated binding itself. Its macro generates a peer type
 // `<prefix><Binding>` that holds the binding (constructed its ordinary way) plus any factories the
 // binding's input-edge use-sites demand, conforms to the adapter's contributor protocol, and carries
-// the witness. This pass synthesises that proxy's *binding*: a scope-bound type depending on the
-// controller — and, after the factory pass runs, on the demanded factories — that contributes to the
-// key in the controller's place. The controller stays a plain, footgun-free binding.
+// the adapter's witness. This pass synthesises that proxy's *binding*: a scope-bound type depending on
+// the subject binding — and, after the factory pass runs, on the demanded factories — that contributes
+// to the key in the subject's place. The subject stays a plain, footgun-free binding.
 //
-// The proxy is generic exactly when the controller is (the lifted-repository pattern): it restates the
-// controller's generic parameters and depends on `Controller<Params>`, which threads the graph's lift
-// parameter transitively (see `undeterminedGenericParameters` / `bridgedDependencyIdentity`).
+// The proxy is generic exactly when the subject is: it restates the subject's generic parameters and
+// depends on `Subject<Params>`, which threads the graph's lift parameter transitively (see
+// `undeterminedGenericParameters` / `bridgedDependencyIdentity`).
 //
-// Domain-free: Wire wraps a binding in a synthesised contributor and never learns "controller".
+// Domain-free: Wire wraps a binding in a synthesised contributor; it never learns what the binding is.
 
 /// Synthesise a contributor proxy beside each `.contributesProxy` binding and re-attribute that
 /// binding's input-edge use-sites (factory / dependency) onto the proxy, so the later factory and
-/// adapter-dependency passes land those edges on the proxy — which folds the middleware — rather than
-/// the now-plain controller. Returns the updated bindings and use-sites; runs after alias contributions
-/// and before adapter-dependency / factory synthesis.
+/// adapter-dependency passes land those edges on the proxy — the type they are lifted onto — rather
+/// than the now-plain subject. Returns the updated bindings and use-sites; runs after alias
+/// contributions and before adapter-dependency / factory synthesis.
 package func applyContributorProxies(
     to allBindings: [Partition: [DiscoveredBinding]],
     annotations: [DiscoveredAdapterAnnotation],
     useSites: [ContributionAliasUseSite]
 ) -> (bindings: [Partition: [DiscoveredBinding]], useSites: [ContributionAliasUseSite]) {
-    let directiveByController = contributorProxyDirectives(annotations: annotations, useSites: useSites)
-    guard !directiveByController.isEmpty else { return (allBindings, useSites) }
+    let directiveBySubject = contributorProxyDirectives(annotations: annotations, useSites: useSites)
+    guard !directiveBySubject.isEmpty else { return (allBindings, useSites) }
 
-    // Synthesise a proxy beside each proxied controller, recording controller identity → proxy identity.
-    var proxyIdentityByController: [String: String] = [:]
+    // Synthesise a proxy beside each proxied subject, recording subject identity → proxy identity.
+    var proxyBySubject: [String: String] = [:]
     var result = allBindings
     for (partition, bindings) in allBindings {
         var proxies: [DiscoveredBinding] = []
         for binding in bindings {
-            guard case .scopeBound(let controller) = binding,
+            guard case .scopeBound(let subject) = binding,
                 let identity = binding.aliasTargetIdentity,
-                let directive = directiveByController[identity]
+                let directive = directiveBySubject[identity]
             else { continue }
-            let proxy = contributorProxyBinding(for: controller, key: directive.key, prefix: directive.prefix)
-            proxyIdentityByController[identity] = proxy.qualifiedTypeName
+            let proxy = contributorProxyBinding(for: subject, key: directive.key, prefix: directive.prefix)
+            proxyBySubject[identity] = proxy.qualifiedTypeName
             proxies.append(.scopeBound(proxy))
         }
         if !proxies.isEmpty { result[partition] = bindings + proxies }
     }
 
-    let reattributed = reattributingInputEdges(
-        useSites,
-        toProxies: proxyIdentityByController,
-        annotations: annotations
-    )
+    let reattributed = reattributingInputEdges(useSites, toProxies: proxyBySubject, annotations: annotations)
     return (result, reattributed)
 }
 
-/// Map each proxied controller's identity to the proxy directive (multibinding key + type-name prefix)
-/// it carries, reading the `.contributesProxy` annotations' use-sites. Empty when nothing requests a
-/// proxy — the pass then no-ops.
+/// Map each proxied subject's identity to the proxy directive (multibinding key + type-name prefix) it
+/// carries, reading the `.contributesProxy` annotations' use-sites. Empty when nothing requests a proxy
+/// — the pass then no-ops.
 private func contributorProxyDirectives(
     annotations: [DiscoveredAdapterAnnotation],
     useSites: [ContributionAliasUseSite]
@@ -65,22 +61,22 @@ private func contributorProxyDirectives(
             proxyAnnotations[annotation.annotationName] = (key, prefix)
         }
     }
-    var directiveByController: [String: (key: String, prefix: String)] = [:]
+    var directiveBySubject: [String: (key: String, prefix: String)] = [:]
     for site in useSites {
         if let directive = proxyAnnotations[site.annotationName] {
-            directiveByController[site.targetIdentity] = directive  // first-seen wins
+            directiveBySubject[site.targetIdentity] = directive  // first-seen wins
         }
     }
-    return directiveByController
+    return directiveBySubject
 }
 
-/// Re-point each input-edge (factory / dependency) use-site sitting on a proxied controller at that
-/// controller's proxy, so the factory and adapter-dependency passes land the edge on the proxy — the
-/// type that folds the middleware. Other use-sites (and the inert `@Controller` site itself) pass
-/// through unchanged.
+/// Re-point each input-edge (factory / dependency) use-site sitting on a proxied subject at that
+/// subject's proxy, so the factory and adapter-dependency passes land the edge on the proxy — the type
+/// they are lifted onto. Other use-sites (and the inert proxy-annotation site itself) pass through
+/// unchanged.
 private func reattributingInputEdges(
     _ useSites: [ContributionAliasUseSite],
-    toProxies proxyIdentityByController: [String: String],
+    toProxies proxyBySubject: [String: String],
     annotations: [DiscoveredAdapterAnnotation]
 ) -> [ContributionAliasUseSite] {
     let inputEdgeAnnotations = Set(
@@ -90,7 +86,7 @@ private func reattributingInputEdges(
     )
     return useSites.map { site in
         guard inputEdgeAnnotations.contains(site.annotationName),
-            let proxyIdentity = proxyIdentityByController[site.targetIdentity]
+            let proxyIdentity = proxyBySubject[site.targetIdentity]
         else { return site }
         return ContributionAliasUseSite(
             annotationName: site.annotationName,
@@ -102,37 +98,38 @@ private func reattributingInputEdges(
     }
 }
 
-/// The proxy binding for one `.contributesProxy` controller — a scope-bound `<prefix><Controller>`
-/// generic exactly as the controller is, depending on the controller (spelled with the controller's
-/// own generic parameters, `Controller<Params>`, so a generic controller threads transitively), and
-/// contributing to the directive's key. The macro emits the type + its initialiser; the demanded
+/// The proxy binding for one `.contributesProxy` subject — a scope-bound `<prefix><Subject>` generic
+/// exactly as the subject is, depending on the subject (spelled with the subject's own generic
+/// parameters, `Subject<Params>`, so a generic subject threads transitively) and contributing to the
+/// directive's key. The subject is the proxy's first, **unlabelled** dependency, so Wire names no
+/// member of the adapter's proxy type; the macro emits the type + its initialiser, and the demanded
 /// factory dependencies are appended later by the factory-synthesis pass.
 func contributorProxyBinding(
-    for controller: DiscoveredScopeBoundType,
+    for subject: DiscoveredScopeBoundType,
     key: String,
     prefix: String
 ) -> DiscoveredScopeBoundType {
-    let controllerDependencyType =
-        controller.genericParameterNames.isEmpty
-        ? controller.typeName
-        : "\(controller.typeName)<\(controller.genericParameterNames.joined(separator: ", "))>"
+    let subjectDependencyType =
+        subject.genericParameterNames.isEmpty
+        ? subject.typeName
+        : "\(subject.typeName)<\(subject.genericParameterNames.joined(separator: ", "))>"
     return DiscoveredScopeBoundType(
-        typeName: prefix + controller.typeName,
-        qualifiedTypeName: prefix + controller.qualifiedTypeName,
+        typeName: prefix + subject.typeName,
+        qualifiedTypeName: prefix + subject.qualifiedTypeName,
         typeKind: "struct",
-        genericParameterNames: controller.genericParameterNames,
-        genericParameterConstraints: controller.genericParameterConstraints,
+        genericParameterNames: subject.genericParameterNames,
+        genericParameterConstraints: subject.genericParameterConstraints,
         dependencies: [
             DependencyParameter(
-                name: "controller",
-                type: controllerDependencyType,
+                name: nil,  // positional — the proxy's initialiser takes the subject unlabelled
+                type: subjectDependencyType,
                 kind: .injectInitParameter,
-                location: controller.location
+                location: subject.location
             )
         ],
-        location: controller.location,
-        accessLevel: controller.accessLevel,
-        contributions: [Contribution(keyReference: key, location: controller.location)],
-        originModule: controller.originModule
+        location: subject.location,
+        accessLevel: subject.accessLevel,
+        contributions: [Contribution(keyReference: key, location: subject.location)],
+        originModule: subject.originModule
     )
 }

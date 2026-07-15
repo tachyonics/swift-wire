@@ -33,11 +33,10 @@ extension DiscoveredBinding {
     /// unconstrained parameter, or one that appears in no dependency (so the
     /// constrained-parameter bridge can't resolve it to a `some P` binding).
     /// A parameter is determined when it appears as a bare-parameter dependency
-    /// (`repository: Repository` → the `some P` binding) *or* as a generic
-    /// argument inside a dependency on another lift node (`controller:
-    /// TodosController<Repository>` → the `TodosController<some P>` binding —
-    /// transitive lift). Empty for a fully-determined generic `@Singleton` and
-    /// for non-scope-bound or non-generic bindings.
+    /// (`item: Element` → the `some P` binding) *or* as a generic argument inside
+    /// a dependency on another lift node (`Box<Element>` → the `Box<some P>`
+    /// binding — transitive lift). Empty for a fully-determined generic
+    /// `@Singleton` and for non-scope-bound or non-generic bindings.
     package var undeterminedGenericParameters: [String] {
         guard case .scopeBound(let scopeBound) = self else { return [] }
         let dependencyTypes = Set(

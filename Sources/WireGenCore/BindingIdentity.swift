@@ -37,18 +37,18 @@ func identifierTokens(_ text: String) -> [String] {
 }
 
 /// Whether the generic parameter `parameter` appears as a generic *argument* — an identifier token
-/// after the base type — within `type` (e.g. `Repository` in `TodosController<Repository>`). Swift has
-/// no higher-kinded generics, so a parameter can never be a base type; a match anywhere after the first
-/// token is therefore a generic-argument use. Token-level, so a substring like `RepositoryStore` never
-/// matches. This is what lets a binding generic over `R` that depends on `Foo<R>` earn lift-node status
-/// (transitive lift) rather than only one that depends on the bare `R`.
+/// after the base type — within `type` (e.g. `Element` in `Box<Element>`). Swift has no higher-kinded
+/// generics, so a parameter can never be a base type; a match anywhere after the first token is
+/// therefore a generic-argument use. Token-level, so a substring like `ElementKind` never matches. This
+/// is what lets a binding generic over `T` that depends on `Box<T>` earn lift-node status (transitive
+/// lift) rather than only one that depends on the bare `T`.
 func parameterAppearsAsGenericArgument(_ parameter: String, in type: String) -> Bool {
     identifierTokens(type).dropFirst().contains(parameter)
 }
 
 /// Rewrite each identifier token in `type` that is a key of `substitutions` to its value, leaving
 /// punctuation and every other token (including the base type) intact:
-/// `Foo<Repository>` with `["Repository": "someTodoRepository"]` → `Foo<someTodoRepository>`.
+/// `Box<Element>` with `["Element": "someP"]` → `Box<someP>`.
 func substitutingIdentifierTokens(_ type: String, _ substitutions: [String: String]) -> String {
     var result = ""
     var current = ""
@@ -211,9 +211,9 @@ func bridgedDependencyIdentity(
     }
 
     // Rule 2b (transitive lift) — the dependency is a parameterised type whose generic arguments
-    // include the binding's determined parameters (`TodosController<Repository>`); substitute each
-    // with `some C`, yielding the wrapped lift node's structural identity
-    // (`TodosController<some TodoRepository>`) so the dependency resolves against it.
+    // include the binding's determined parameters (`Box<Element>`); substitute each with `some C`,
+    // yielding the wrapped lift node's structural identity (`Box<some P>`) so the dependency resolves
+    // against it.
     var substitutions: [String: String] = [:]
     for (parameter, constraint) in binding.genericParameterConstraints
     where constraintIsDetermining(constraint)
