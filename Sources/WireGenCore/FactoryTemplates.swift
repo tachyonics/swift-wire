@@ -31,6 +31,13 @@ package struct DiscoveredFactoryTemplate: Sendable {
     /// `["Ctx": "RequestContext"]`), carried onto the synthesised factory's
     /// `create` signature. Empty when no parameter is constrained.
     package let genericParameterConstraints: [String: String]
+    /// The template's `where`-clause requirements, verbatim and without the `where`
+    /// keyword (`"Reader.ReadElement == UInt8, Sender.Writer: ~Copyable"`), or `nil`
+    /// when there is none. Associated-type and same-type requirements can't be
+    /// expressed as per-parameter inheritance, so they're carried separately and
+    /// restated on the synthesised factory's `create` — without them a
+    /// `~Copyable`/associated-type-constrained middleware won't construct.
+    package let genericWhereClause: String?
     /// The injected dependencies — the template's `@Inject` members, resolved
     /// once from the graph when the factory object is constructed.
     package let dependencies: [DependencyParameter]
@@ -47,6 +54,7 @@ package struct DiscoveredFactoryTemplate: Sendable {
         typeKind: String,
         genericParameterNames: [String],
         genericParameterConstraints: [String: String] = [:],
+        genericWhereClause: String? = nil,
         dependencies: [DependencyParameter],
         accessLevel: AccessLevel = .internal,
         location: SourceLocation,
@@ -58,6 +66,7 @@ package struct DiscoveredFactoryTemplate: Sendable {
         self.typeKind = typeKind
         self.genericParameterNames = genericParameterNames
         self.genericParameterConstraints = genericParameterConstraints
+        self.genericWhereClause = genericWhereClause
         self.dependencies = dependencies
         self.accessLevel = accessLevel
         self.location = location

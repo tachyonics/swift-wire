@@ -33,6 +33,10 @@ package struct SynthesizedFactory: Sendable {
     package let assistedParameterNames: [String]
     /// Per-assisted-parameter protocol constraints, restated on `create`'s `where`.
     package let assistedParameterConstraints: [String: String]
+    /// The template's `where`-clause requirements (associated-type / same-type /
+    /// `~Copyable`), verbatim and without the `where` keyword, or `nil` — restated
+    /// on `create` after the per-parameter constraints.
+    package let whereClause: String?
     /// The injected dependencies — the template's `@Inject` members, resolved once
     /// when the factory is constructed. Carried verbatim (keys included) so the
     /// factory binding resolves them exactly as the template would have.
@@ -49,6 +53,7 @@ package struct SynthesizedFactory: Sendable {
         producedTypeName: String,
         assistedParameterNames: [String],
         assistedParameterConstraints: [String: String],
+        whereClause: String? = nil,
         dependencies: [DependencyParameter],
         producedTypeModule: String,
         location: SourceLocation
@@ -58,6 +63,7 @@ package struct SynthesizedFactory: Sendable {
         self.producedTypeName = producedTypeName
         self.assistedParameterNames = assistedParameterNames
         self.assistedParameterConstraints = assistedParameterConstraints
+        self.whereClause = whereClause
         self.dependencies = dependencies
         self.producedTypeModule = producedTypeModule
         self.location = location
@@ -119,6 +125,7 @@ package func synthesizeFactories(
             producedTypeName: template.qualifiedTypeName,
             assistedParameterNames: template.genericParameterNames,
             assistedParameterConstraints: template.genericParameterConstraints,
+            whereClause: template.genericWhereClause,
             dependencies: template.dependencies,
             producedTypeModule: template.originModule,
             location: template.location
@@ -253,11 +260,17 @@ package func renderFactoryDeclaration(_ factory: SynthesizedFactory) -> String {
     return lines.joined(separator: "\n")
 }
 
-/// The `where` clause restating the assisted parameters' constraints on `create`,
-/// in declared order (`" where Ctx: RequestContext"`), or empty when none.
+/// The `where` clause restating the template's generic requirements on `create` —
+/// the per-parameter constraints in declared order (`Ctx: RequestContext`) followed
+/// by the template's own `where`-clause requirements (associated-type / same-type /
+/// `~Copyable`). Both must be restated or a constrained middleware won't construct.
+/// Empty when the template has neither.
 private func renderAssistedConstraints(_ factory: SynthesizedFactory) -> String {
-    let constraints = factory.assistedParameterNames.compactMap { name in
+    var requirements = factory.assistedParameterNames.compactMap { name in
         factory.assistedParameterConstraints[name].map { "\(name): \($0)" }
     }
-    return constraints.isEmpty ? "" : " where \(constraints.joined(separator: ", "))"
+    if let whereClause = factory.whereClause, !whereClause.isEmpty {
+        requirements.append(whereClause)
+    }
+    return requirements.isEmpty ? "" : " where \(requirements.joined(separator: ", "))"
 }

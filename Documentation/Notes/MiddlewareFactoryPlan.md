@@ -37,27 +37,37 @@ subset the box roles), or handle the **injected axis** (a generic dep). Those ar
 
 ## Increments
 
-### 3.1 — `@Controller` factory wiring → first end-to-end (WireMVC only)
+### 3.1 — `@Controller` factory wiring → first end-to-end — **DONE**
 
 **Scope.** The `@Controller` macro, for each `@Middleware(key)` on the controller: derive the factory
 name from the key (`_wireFactory_<sanitisedKey>` / `_WireFactory_<sanitisedKey>`, matching swift-wire);
-add a stored factory property; generate a **wrapping init** that receives it (a macro-generated wrapping init is
-peer-invisible to `@Singleton`, so `@Singleton` doesn't reject it, and invisible to the plugin's
+add a stored factory property; generate a **wrapping init** that receives it (a macro-generated wrapping
+init is peer-invisible to `@Singleton`, so `@Singleton` doesn't reject it, and invisible to the plugin's
 pre-expansion scan, so the plugin's construction call resolves to it); and, in the route witness, call the
 **uniform** `self._wireFactory_<key>.create(Builder.RequestContext.self, Builder.Reader.self,
-Builder.ResponseSender.self)`, folding the result into the chain. Introduce the bare
-`@MiddlewareFactory` marker on the WireMVC side so the developer surface is stable, even though
-swift-wire ignores it until 3.2.
+Builder.ResponseSender.self)`, folding the result into the chain. Also on the WireMVC side: a
+`@Middleware(_ key: FactoryKey)` overload, the `wireMVCMiddlewareFactoryAlias`
+(`.injectsFactoryOnArgument`) so the plugin drives synthesis off `@Middleware(key)`, and the
+`contributesTo:` → `capability:` migration the swift-wire main pickup forces. The middleware is
+declared `@Factory(key)` only — the required `@MiddlewareFactory` marker arrives in 3.2.
 
-**Why now.** No swift-wire change needed — this closes the loop against the *shipped* step-2 synthesis
-and unlocks the bulk of real middleware (concrete-dep, box-role-generic: auth-with-a-verifier,
-session-with-a-store) immediately. Fastest value, lowest risk.
+**It needed a swift-wire change after all — the plan was wrong.** "WireMVC only" assumed the shipped
+step-2 synthesis was complete. It wasn't: a realistic middleware carries a `where` clause
+(associated-type + `~Copyable` requirements from the proposal's box), and step-2 **dropped it** — the
+synthesised `create` failed to compile (`Builder.ResponseSender.Writer` reverting to `Copyable`). So
+3.1 landed a small swift-wire fix: capture the template's `where` clause (`DiscoveredFactoryTemplate.
+genericWhereClause`) and restate it on `create` after the per-parameter constraints. This surfaces
+only with a real middleware, which is why it slipped the plan. Everything else was WireMVC-only.
 
-**Gate.** The wire-mvc repo builds + serves a generic middleware with a concrete `@Inject` dep on a
-controller, against pushed swift-wire main; a wire-mvc-examples route exercises it. Box roles are
-assumed written in canonical order (the compiler catches a wrong order at the witness call).
+**Gate — met.** The wire-mvc `WireMVCExample` self-test builds *and serves* a generic-with-deps
+middleware (`SessionMiddleware`, concrete `@Inject` dep) on `UsersController`, driven end-to-end with
+real HTTP requests; the mechanism is de-risked by
+[spike-18](../../../swift-wire-spikes/spike-18-wiremvc-factory-lift/). Box roles are assumed written in
+canonical order (the compiler catches a wrong order at the witness call) — the **convention 3.2
+removes**: the box-role order is implicit here, not yet declared.
 
-**Carries a convention** 3.2 removes: the box-role order is implicit here, not yet declared.
+> **Ships as two commits, ordered:** the swift-wire `where`-clause fix (new PR) first, then wire-mvc
+> after a `swift package update swift-wire` — the adapter validates against *pushed* main.
 
 ### 3.2 — `@MiddlewareFactory` + the role-mapping contract (swift-wire + WireMVC)
 
