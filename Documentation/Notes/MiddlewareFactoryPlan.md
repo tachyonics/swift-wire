@@ -69,6 +69,40 @@ removes**: the box-role order is implicit here, not yet declared.
 > **Ships as two commits, ordered:** the swift-wire `where`-clause fix (new PR) first, then wire-mvc
 > after a `swift package update swift-wire` — the adapter validates against *pushed* main.
 
+### 3.1b — Factory-lift across module boundaries — **DONE**
+
+**The gap 3.1 missed.** 3.1 validated a controller in the *same module* as the graph consumer. A
+controller in a **library** couldn't compile: the `@Controller` wrapping init references
+`_WireFactory_<key>`, which 3.1's synthesis emitted in the graph consumer (executable) — a
+library→executable reference the library can't resolve. It surfaced immediately on wire-mvc-examples'
+shared `Controllers` library.
+
+**The solve — the factory type is owned by its `@Factory` template's module.** Not the consumer's
+(a factory can have many consumers, in many packages; the *template* is the single home). Synthesis
+split into: (a) **type emission** — template-driven, at the template's visibility (`Sendable`;
+`public`/`package`/`internal` per the template), rendered by the template's module so every consumer
+references that one declaration; (b) **construction + injection** — consumer-driven in the graph
+consumer, which declares only *its own* module's factory types and imports the rest. WireGen gained a
+`--library` mode (owned factory types, no graph). Two **explicit** build plugins, because
+contributor-vs-graph-consumer is an architectural choice (who calls `bootstrap`), not a target-kind
+property: `WireBuildPlugin` (graph consumer) and `WireContributorPlugin` (contributor / library
+mode). A contributor applies the latter *only* when it declares `@Factory` templates; forgetting it
+is a loud, local compile error (`cannot find type '_WireFactory_<key>'`).
+
+**Visibility mirrors bindings.** An internal `@Factory` with no in-module consumer is a candidate
+dead-factory warning (task deferred); a `public`/`package` one stays silent (may be consumed in
+another package). Cross-module consumption therefore requires a `public`/`package` template.
+
+**Gate — met.** The shared `Controllers` library compiles (factory type emitted there via
+`WireContributorPlugin`) and **all three runtimes build** — proposal-native, Hummingbird, Vapor —
+constructing + injecting the library-owned factory. The `RequireAPIKey`-with-`APIKeyStore` example is
+the driver.
+
+> **Not the `_WireExports.swift` marker's problem.** The marker (Wire-awareness detection) is
+> pre-existing and orthogonal — 3.1b only *adds* the contributor plugin alongside it. Retiring the
+> marker (manifest-derived detection + reachability) is M6/M5.4 — see
+> [MultiModuleComposition.md](MultiModuleComposition.md), *The marker is detection-only*.
+
 ### 3.2 — `@MiddlewareFactory` + the role-mapping contract (swift-wire + WireMVC)
 
 **Scope, swift-wire.** A producer-side "factory role mapping" adapter capability; extend use-site

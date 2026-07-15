@@ -71,6 +71,37 @@ only your own code can reach it. (Order-sensitive collections also need
 `withOrder:`; cross-module element order is otherwise unspecified — see
 the `withOrder:` cross-module note below.)
 
+### The marker is detection-only — and can't be auto-generated
+
+`_WireExports.swift` does exactly one thing: signal Wire-awareness so a consumer
+re-parses (later: references) a direct dependency. It is **not** a future readable
+export interface, and it **can't be plugin-generated** — a consumer's plugin reads a
+dependency's committed *sources*, never its plugin *outputs*. Spike-1's check (4)
+(inspecting which plugins a dependency applies) is unavailable, and a 2026-07 re-check
+confirmed the consequence directly: emitting `_WireExports.swift` from the contributor
+plugin instead of hand-declaring it made the dependency **invisible** to the consumer's
+`sourceFiles` scan — the build succeeded but the dependency's bindings silently dropped
+out of the graph. So there is no plugin-generated export *file* a consumer can read
+(see *M6a* below); composition works by re-parsing committed sources for the data and
+referencing the dependency's public symbols **by derivable name** (compiler-linked) —
+which is exactly what the `@Factory` factory-lift does (`_WireFactory_<key>` is public
+in the template's module; the consumer emits a reference resolved at compile time).
+
+**Retirement plan.** The marker's whole job is replaceable by a signal the consumer
+*can* read: **a direct dependency that depends on the `Wire` product**. That drops the
+hand-declared file — a contributor applies `WireContributorPlugin` only when it declares
+`@Factory` templates (a missing plugin is a loud, local compile error, `cannot find type
+'_WireFactory_<key>'`); a pure-`@Singleton` contributor declares nothing. The catch is
+that the marker currently also *bounds* what composes, so its removal is **coupled to
+reachability pruning (M6b)** — the prerequisite, not a nicety: without a bound, every
+direct Wire-dependency's bindings are pulled in and eagerly constructed, so an
+incidentally-scanned binding with a consumer-unresolvable dep would break; reachability
+strips the unreachable before resolution. That work's bulk lands with **M5.4
+(request-scoped controllers)**. A public-keyed multibinding is the documented
+non-prunable exception (a public collection key can gain contributors outside the
+analysed graph, so it survives with no local consumer — the same rule as a public unused
+binding).
+
 ## Deferred optimizations (M6a / M6b)
 
 Two perf optimizations are split out of M1; each keeps the surface
@@ -84,12 +115,22 @@ contract unchanged and lands when its cost is felt:
   deserializing a manifest. Everything downstream (merge, graph, codegen,
   diagnostics) is unchanged — `originModule` is already per-binding and
   serializable, so it rides into the manifest exactly as stamped today.
-  `_WireExports.swift` evolves from a presence-only marker into the
-  manifest.
-- **M6b — reachability pruning.** M1 eager-constructs *every* binding in
-  the merged graph, including a library binding nothing reaches — so a
-  large dependency costs all its singletons even when the consumer uses a
-  few. M6b computes the bindings reachable from the home package's roots
+  **Constraint (2026-07):** the manifest can't be a per-build *plugin
+  output* — the consumer can't read another target's plugin outputs (see
+  *The marker is detection-only* above). So M6a's manifest is either a
+  **committed** artifact the consumer re-reads, or the library exposes its
+  contribution as **public symbols** the consumer references by name
+  (compiler-linked) rather than a file it parses — the direction the
+  `@Factory` factory-lift already takes. `_WireExports.swift` doesn't
+  "become the manifest"; it's retired (detection moves to the Wire-product
+  dependency).
+- **M6b — reachability pruning (bulk lands with M5.4).** M1 eager-
+  constructs *every* binding in the merged graph, including a library
+  binding nothing reaches — so a large dependency costs all its singletons
+  even when the consumer uses a few. Beyond the perf win, reachability is
+  the **prerequisite for retiring the marker** (it's what bounds
+  auto-composition once opt-in is manifest-derived). M6b computes the
+  bindings reachable from the home package's roots
   and strips the rest before codegen. The hard part is defining roots:
   the plugin sees `@Inject` edges but not external `graph.x` accesses, so
   `allowUnused` becomes "I'm a root, keep me" — valid **only** in the home
