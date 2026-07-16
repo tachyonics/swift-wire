@@ -21,6 +21,9 @@ package struct ContributionAliasUseSite: Sendable, Equatable {
     /// the attribute takes none. Unused by contribution-alias matching (which is
     /// name-only); read by adapter-dependency matching, which needs the referenced type.
     package let argument: String?
+    /// Every argument, verbatim and in order — the role list a `@MiddlewareFactory(.a, .b)` carries.
+    /// `argument` is `arguments.first`; a bare attribute has an empty list.
+    package let arguments: [String]
     package let location: SourceLocation
     package let originModule: String
 
@@ -28,12 +31,14 @@ package struct ContributionAliasUseSite: Sendable, Equatable {
         annotationName: String,
         targetIdentity: String,
         argument: String? = nil,
+        arguments: [String] = [],
         location: SourceLocation,
         originModule: String
     ) {
         self.annotationName = annotationName
         self.targetIdentity = targetIdentity
         self.argument = argument
+        self.arguments = arguments
         self.location = location
         self.originModule = originModule
     }
@@ -53,13 +58,15 @@ func scanContributionAliasUseSites(
     var sites: [ContributionAliasUseSite] = []
     for element in attributes {
         guard let attribute = element.as(AttributeSyntax.self) else { continue }
-        let firstArgument = attribute.arguments?.as(LabeledExprListSyntax.self)?
-            .first?.expression.trimmedDescription
+        let arguments =
+            attribute.arguments?.as(LabeledExprListSyntax.self)?
+            .map { $0.expression.trimmedDescription } ?? []
         sites.append(
             ContributionAliasUseSite(
                 annotationName: attribute.attributeName.trimmedDescription,
                 targetIdentity: targetIdentity,
-                argument: firstArgument,
+                argument: arguments.first,
+                arguments: arguments,
                 location: makeSourceLocation(of: attribute, sourcePath: sourcePath, converter: converter),
                 originModule: module
             )

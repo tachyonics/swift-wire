@@ -48,6 +48,16 @@ public enum WireAdapterCapability {
     /// the argument is the concrete case — a pass-through factory over an existing binding.
     case injectsFactoryOnArgument
 
+    /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the **role mapping** for the
+    /// factory's assisted (non-`@Inject`-typed) generic parameters. `roles` is the adapter's ordered
+    /// vocabulary of canonical slot names (e.g. `["RequestContext", "Reader", "ResponseSender"]`), read
+    /// by the plugin as **opaque ordered identifiers** — it names the synthesised `create`'s generic
+    /// parameters and, at the call site, the fixed order the consumer's macro passes them in. A bare
+    /// `@X` maps the template's assisted parameters to these roles *by order*; `@X(.a, .b, …)` maps them
+    /// *by the listed roles* (positional over the assisted parameters, referenced `.` + the role name
+    /// lower-cameled). Producer-side, joined to the template by type identity.
+    case mapsFactoryRoles(roles: [String])
+
     /// `@X(...)` on a consumer's injection point rewrites how that dependency resolves
     /// (e.g. `@Configuration("port")`). Reserved — no pass yet.
     case rewritesInjection

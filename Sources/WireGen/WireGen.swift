@@ -110,7 +110,7 @@ struct WireGen {
         // those modules' own plugin runs and referenced here via import. Construction/injection
         // (in `allBindings`) stays consumer-driven and spans every consumed factory.
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
-        let ownedFactoryTypes = renderOwnedFactoryTypes(templates: aggregate.factoryTemplates, module: consumerModule)
+        let ownedFactoryTypes = consumerOwnedFactoryTypes(aggregate)
         let generated = renderWireGraph(
             imports: imports,
             topologicalOrder: defaultOrder,
@@ -138,36 +138,6 @@ struct WireGen {
     }
 
     // MARK: - Helpers
-
-    /// Aggregated per-file discovery: a flat per-file inventory for
-    /// the discovery report plus the unified `(container, scope)`
-    /// binding partition for graph orchestration. Per-graph slices
-    /// (default, named container) are derived from `allBindings` at
-    /// the point of use via the helpers below.
-    private struct DiscoveryAggregate {
-        /// The consumer module these sources belong to — carried so the
-        /// graph-building pass can stamp synthetic seed bindings with it.
-        var module: String
-        /// Modules composed from external packages (the `--external-module`
-        /// groups). Drives the cross-module visibility threshold: a binding
-        /// from one of these needs `public`, not just `package`.
-        var externalModules: Set<String> = []
-        var perFile: [(path: String, items: [DiscoveredBinding])] = []
-        var allBindings: [Partition: [DiscoveredBinding]] = [:]
-        var imports: [String] = []
-        var warnings: [Diagnostic] = []
-        var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
-        var typealiases: [DiscoveredTypealias] = []
-        var declaredTypeNames: Set<String> = []
-        var nonInjectExtensionInits: [NonInjectExtensionInit] = []
-        var multibindingKeys: [DiscoveredMultibindingKey] = []
-        var bindingKeys: [DiscoveredBindingKey] = []
-        var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
-        var aliasUseSites: [ContributionAliasUseSite] = []
-        var factoryTemplates: [DiscoveredFactoryTemplate] = []
-        var resultBuilders: [DiscoveredResultBuilder] = []
-        var graphConformances: [DiscoveredGraphConformance] = []
-    }
 
     private static func discoverAllSources(
         groups: [(module: String, sources: [String], isExternal: Bool)],
@@ -368,6 +338,12 @@ struct WireGen {
         )
         diagnostics += deadFactoryDiagnostics(
             templates: aggregate.factoryTemplates,
+            useSites: aggregate.aliasUseSites,
+            owningModule: aggregate.module
+        )
+        diagnostics += factoryRoleMappingDiagnostics(
+            templates: aggregate.factoryTemplates,
+            annotations: aggregate.adapterAnnotations,
             useSites: aggregate.aliasUseSites,
             owningModule: aggregate.module
         )
@@ -620,6 +596,45 @@ func printDiagnostics(_ warnings: [Diagnostic]) {
     FileHandle.standardError.write(Data("\n".utf8))
 }
 
+/// Aggregated per-file discovery: a flat per-file inventory for the discovery report plus the unified
+/// `(container, scope)` binding partition for graph orchestration. Per-graph slices (default, named
+/// container) are derived from `allBindings` at the point of use.
+private struct DiscoveryAggregate {
+    /// The consumer module these sources belong to — carried so the
+    /// graph-building pass can stamp synthetic seed bindings with it.
+    var module: String
+    /// Modules composed from external packages (the `--external-module`
+    /// groups). Drives the cross-module visibility threshold: a binding
+    /// from one of these needs `public`, not just `package`.
+    var externalModules: Set<String> = []
+    var perFile: [(path: String, items: [DiscoveredBinding])] = []
+    var allBindings: [Partition: [DiscoveredBinding]] = [:]
+    var imports: [String] = []
+    var warnings: [Diagnostic] = []
+    var unannotatedExtensionProvides: [UnannotatedExtensionProvides] = []
+    var typealiases: [DiscoveredTypealias] = []
+    var declaredTypeNames: Set<String> = []
+    var nonInjectExtensionInits: [NonInjectExtensionInit] = []
+    var multibindingKeys: [DiscoveredMultibindingKey] = []
+    var bindingKeys: [DiscoveredBindingKey] = []
+    var adapterAnnotations: [DiscoveredAdapterAnnotation] = []
+    var aliasUseSites: [ContributionAliasUseSite] = []
+    var factoryTemplates: [DiscoveredFactoryTemplate] = []
+    var resultBuilders: [DiscoveredResultBuilder] = []
+    var graphConformances: [DiscoveredGraphConformance] = []
+}
+
+/// The factory types a graph consumer owns and declares in its generated file — with the role mapping
+/// (from its composed adapter annotations) that orders each `create`.
+private func consumerOwnedFactoryTypes(_ aggregate: DiscoveryAggregate) -> [String] {
+    renderOwnedFactoryTypes(
+        templates: aggregate.factoryTemplates,
+        module: aggregate.module,
+        annotations: aggregate.adapterAnnotations,
+        useSites: aggregate.aliasUseSites
+    )
+}
+
 private func runLibraryMode(arguments: [String]) throws {
     guard arguments.count >= 3 else { WireGen.printUsageAndExit() }
     let factoryOutputPath = arguments[2]
@@ -629,24 +644,52 @@ private func runLibraryMode(arguments: [String]) throws {
     var templates: [DiscoveredFactoryTemplate] = []
     var useSites: [ContributionAliasUseSite] = []
     var imports: [String] = []
+    var annotations: [DiscoveredAdapterAnnotation] = []
     for path in ownGroup.sources {
         let result = discover(in: WireGen.readSource(at: path), sourcePath: path, module: ownGroup.module)
         templates.append(contentsOf: result.factoryTemplates)
         useSites.append(contentsOf: result.aliasUseSites)
+        annotations.append(contentsOf: result.adapterAnnotations)
         if !result.factoryTemplates.isEmpty {
             imports.append(contentsOf: result.imports)
         }
     }
+    // Compose the Wire-aware dependency groups for their adapter annotations only — a middleware's
+    // `.mapsFactoryRoles` vocabulary is declared in the adapter package, and ordering the `create`
+    // needs it. This module still emits only its *own* factory types (`renderOwnedFactoryTypes` filters
+    // by `originModule`); it never builds a graph.
+    for group in groups.dropFirst() {
+        for path in group.sources {
+            annotations.append(
+                contentsOf:
+                    discover(in: WireGen.readSource(at: path), sourcePath: path, module: group.module)
+                    .adapterAnnotations
+            )
+        }
+    }
 
     // A contributor's own internal `@Factory` with no in-module consumer is dead — warn here, since a
-    // graph consumer never sees it (it's internal to this module).
+    // graph consumer never sees it (it's internal to this module). Role-mapping errors fail the build.
+    let roleDiagnostics = factoryRoleMappingDiagnostics(
+        templates: templates,
+        annotations: annotations,
+        useSites: useSites,
+        owningModule: ownGroup.module
+    )
     printDiagnostics(
         deadFactoryDiagnostics(templates: templates, useSites: useSites, owningModule: ownGroup.module)
+            + roleDiagnostics
     )
+    if roleDiagnostics.contains(where: { $0.severity == .error }) { exit(EXIT_FAILURE) }
 
     let factoryFile = renderFactoryModule(
         imports: imports,
-        typeDeclarations: renderOwnedFactoryTypes(templates: templates, module: ownGroup.module)
+        typeDeclarations: renderOwnedFactoryTypes(
+            templates: templates,
+            module: ownGroup.module,
+            annotations: annotations,
+            useSites: useSites
+        )
     )
     try factoryFile.write(toFile: factoryOutputPath, atomically: true, encoding: .utf8)
     print("wrote \(factoryOutputPath)")

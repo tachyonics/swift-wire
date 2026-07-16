@@ -439,10 +439,11 @@ reserved for M5.4's request-scope proxy; middleware construction doesn't need on
 `@MiddlewareFactory`'s *entire* job is to role-tag the **assisted** parameters — at most three, the
 box roles it knows about. Nothing about the injected params.
 
-- **Common case → defaulted.** Parameters named/ordered canonically → bare `@MiddlewareFactory`, no
-  arguments. (One dial to pick: name-based default forces the verbose names `RequestContext`/`Reader`/
-  `ResponseSender`; a positional default would let people write `<Ctx, Reader, Sender>` with a bare
-  marker and reach for the list only when subsetting.)
+- **Common case → defaulted.** Parameters ordered canonically → bare `@MiddlewareFactory`, no
+  arguments. The default is **positional** (resolved): `param[i]` takes `canonicalRole[i]`, so
+  `<Ctx, Reader, Sender>` works with a bare marker regardless of the names; subsetting or reordering
+  reaches for the explicit list. (Name-based was the rejected alternative — it maps by name and subsets
+  bare, but forces the verbose names `RequestContext`/`Reader`/`ResponseSender`.)
 - **Custom case → an ordered role list**, positional over the *non-injected* parameters, e.g.
   `@MiddlewareFactory(.requestContext, .responseSender)` for a middleware that pins its own reader.
   It deliberately doesn't *name* parameters inside the attribute (a type's own generics aren't in
@@ -484,9 +485,6 @@ the box-role subsetting and the injected axis are entirely absorbed producer-sid
 
 ## Open sub-decisions
 
-- **`@MiddlewareFactory` default-mapping dial** — name-based (self-documenting, forces verbose
-  `RequestContext`/`Reader`/`ResponseSender` parameter names) vs positional (lets people write
-  `<Ctx, Reader, Sender>` with a bare marker, less self-documenting). See *the role mapping* above.
 - **Chained generic specialisation** — the injected-axis factory is a generic binding a generic
   controller depends on (generic → generic → concrete backend). Rides the lifted-generic /
   constrained-parameter bridge, but the *chained* case wants explicit validation before it's assumed.
@@ -498,6 +496,9 @@ the box-role subsetting and the injected axis are entirely absorbed producer-sid
 
 ## Settled during design (no longer open)
 
+- **`@MiddlewareFactory` default-mapping dial** — **positional** (`param[i] → canonicalRole[i]`), so a
+  bare marker maps `<Ctx, Reader, Sender>` by order; subset/reorder uses the explicit role list.
+  Name-based (map by parameter name, subset bare, verbose names) was rejected.
 - **Middleware generic over a controller's *assisted* parameter** — disallowed, not supported. The
   real "shared with the controller" case is the *injected* axis (both `@Inject` the same backend),
   which rides graph specialisation; there is no other assisted axis than the box roles. A `.fromController`
