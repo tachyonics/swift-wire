@@ -24,6 +24,7 @@ extension DiscoveredScopeBoundType {
             typeKind: typeKind,
             genericParameterNames: genericParameterNames,
             genericParameterConstraints: genericParameterConstraints,
+            genericWhereClause: genericWhereClause,
             explicitIdentity: explicitIdentity,
             dependencies: dependencies + extra,
             location: location,

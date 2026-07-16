@@ -120,6 +120,9 @@ func contributorProxyBinding(
         typeKind: "struct",
         genericParameterNames: subject.genericParameterNames,
         genericParameterConstraints: subject.genericParameterConstraints,
+        // Restated on the emitted proxy struct (generic exactly as the subject) so a
+        // `where`-constrained subject's proxy still type-checks. See `renderContributorProxyDeclaration`.
+        genericWhereClause: subject.genericWhereClause,
         dependencies: [
             DependencyParameter(
                 name: nil,  // positional — the proxy's initialiser takes the subject unlabelled
