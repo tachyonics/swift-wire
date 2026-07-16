@@ -175,16 +175,28 @@ struct ContributorProxyEmissionTests {
     /// concern this test isn't about). Mirrors spike-23's compiler-checked handshake at the unit level.
     @Test func emittedInitMatchesGraphConstructionCall() {
         let subject = DiscoveredScopeBoundType(
-            typeName: "HealthController", typeKind: "struct", genericParameterNames: [],
-            dependencies: [], location: mockLocation("H.swift"), accessLevel: .public, originModule: testModule
+            typeName: "HealthController",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [],
+            location: mockLocation("H.swift"),
+            accessLevel: .public,
+            originModule: testModule
         )
         let factory = DiscoveredScopeBoundType(
-            typeName: "_WireFactory_Keys_backend", typeKind: "struct", genericParameterNames: [],
-            dependencies: [], location: mockLocation("M.swift"), originModule: testModule
+            typeName: "_WireFactory_Keys_backend",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [],
+            location: mockLocation("M.swift"),
+            originModule: testModule
         )
         let proxy = proxyBinding(
-            typeName: "_WireRouteContributor_HealthController", params: [], constraints: [:],
-            subjectType: "HealthController", factoryKeys: ["Keys.backend"]
+            typeName: "_WireRouteContributor_HealthController",
+            params: [],
+            constraints: [:],
+            subjectType: "HealthController",
+            factoryKeys: ["Keys.backend"]
         )
 
         // The emitted init accepts the subject positionally and the factory under its `_wireFactory_` label.
@@ -204,7 +216,8 @@ struct ContributorProxyEmissionTests {
         )
         #expect(
             output.contains(
-                "_WireRouteContributor_HealthController(healthController, _wireFactory_Keys_backend: ")
+                "_WireRouteContributor_HealthController(healthController, _wireFactory_Keys_backend: "
+            )
         )
     }
 
