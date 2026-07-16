@@ -366,6 +366,11 @@ struct WireGen {
             across: aggregate.allBindings,
             resolvedByContainer: resolvedBindingsByContainer
         )
+        diagnostics += deadFactoryDiagnostics(
+            templates: aggregate.factoryTemplates,
+            useSites: aggregate.aliasUseSites,
+            owningModule: aggregate.module
+        )
         diagnostics += multibindingLivenessDiagnostics(
             multibindingKeys: aggregate.multibindingKeys,
             bindingsByPartition: aggregate.allBindings,
@@ -400,17 +405,6 @@ struct WireGen {
                     return nil
                 }
         )
-    }
-
-    /// Emit warnings to stderr in the `file:line:col: warning:` form.
-    /// They need to be surfaced to the user, even when they don't fail
-    /// the build. WireGen prints them before
-    /// any validation-error block so a failing build's error message
-    /// remains the last thing on stderr.
-    private static func printDiagnostics(_ warnings: [Diagnostic]) {
-        guard !warnings.isEmpty else { return }
-        FileHandle.standardError.write(Data(renderDiagnostics(warnings).utf8))
-        FileHandle.standardError.write(Data("\n".utf8))
     }
 
     /// Print the generic templates combined across all graphs.
@@ -617,6 +611,15 @@ extension WireGen {
 /// `WireGen --library <factory-output> --module <self> <sources…>`. Only the module's own sources
 /// are read: factory types are template-driven (own-module) and need no dependency graph. The
 /// module's `import`s are propagated so foreign dependency types the factories reference resolve.
+/// Emit warnings to stderr in the `file:line:col: warning:` form. They need to be surfaced to the user,
+/// even when they don't fail the build. WireGen prints them before any validation-error block so a
+/// failing build's error message remains the last thing on stderr.
+func printDiagnostics(_ warnings: [Diagnostic]) {
+    guard !warnings.isEmpty else { return }
+    FileHandle.standardError.write(Data(renderDiagnostics(warnings).utf8))
+    FileHandle.standardError.write(Data("\n".utf8))
+}
+
 private func runLibraryMode(arguments: [String]) throws {
     guard arguments.count >= 3 else { WireGen.printUsageAndExit() }
     let factoryOutputPath = arguments[2]
@@ -624,14 +627,22 @@ private func runLibraryMode(arguments: [String]) throws {
     guard let ownGroup = groups.first else { WireGen.printUsageAndExit() }
 
     var templates: [DiscoveredFactoryTemplate] = []
+    var useSites: [ContributionAliasUseSite] = []
     var imports: [String] = []
     for path in ownGroup.sources {
         let result = discover(in: WireGen.readSource(at: path), sourcePath: path, module: ownGroup.module)
         templates.append(contentsOf: result.factoryTemplates)
+        useSites.append(contentsOf: result.aliasUseSites)
         if !result.factoryTemplates.isEmpty {
             imports.append(contentsOf: result.imports)
         }
     }
+
+    // A contributor's own internal `@Factory` with no in-module consumer is dead — warn here, since a
+    // graph consumer never sees it (it's internal to this module).
+    printDiagnostics(
+        deadFactoryDiagnostics(templates: templates, useSites: useSites, owningModule: ownGroup.module)
+    )
 
     let factoryFile = renderFactoryModule(
         imports: imports,
