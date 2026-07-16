@@ -195,28 +195,61 @@ this pivot.
 
 ### 3.2 — `@MiddlewareFactory` + the role-mapping contract (swift-wire + WireMVC)
 
-**Scope, swift-wire.** A producer-side "factory role mapping" adapter capability; extend use-site
-capture to carry the **full** mapping (all attribute arguments, not just the first — today
-`ContributionAliasUseSite.argument` holds one); join the mapping to the `@Factory` template by type
-identity; and drive **canonical-role-ordered** `create` emission — emit `create`'s generic parameters
-named by the canonical roles in fixed order, taking every role as a metatype, and map the used subset
-into the middleware's actual generic slots in the return type (an unused role stays a `_: Role.Type`
-parameter so it type-checks, absent from the return). No separate adapter type. Validation: every
-non-injected parameter must be assigned a role; a parameter that is neither role-mapped nor injected
-is an error.
+**The default-mapping dial — resolved: positional.** A bare `@MiddlewareFactory` maps the assisted
+parameters to the canonical roles *by order* (`param[i] → canonicalRole[i]`), so the common
+`<Ctx, Reader, Sender>` middleware works with a bare marker, unchanged. Subsetting or reordering needs
+the explicit list — a bare marker can't subset. (The rejected alternative, name-based, would map by
+parameter name and handle subset bare, but forces the verbose names `RequestContext`/`Reader`/
+`ResponseSender` on every middleware.)
 
-**Scope, WireMVC.** The `@MiddlewareFactory` macro + its `WireAdapterAnnotationV1` declaration + the
-role vocabulary (`RequestContext` / `Reader` / `ResponseSender`); the **default** form (bare — see the
-default-mapping dial in the design record) and the **custom** form (an ordered role list positional
-over the non-injected parameters, e.g. `@MiddlewareFactory(.requestContext, .responseSender)`); and the
+**Scope, swift-wire.** A producer-side "factory role mapping" adapter capability (a new
+`WireAdapterCapability` case declared by `@MiddlewareFactory`); extend use-site capture to carry the
+**full** argument list (today `ContributionAliasUseSite.argument` holds only the first); join the
+mapping to the `@Factory` template by type identity (the `@MiddlewareFactory` use-site sits on the same
+type — the hash-join `injectAliasContributions` uses); and drive **canonical-role-ordered** `create`
+emission. The mapping is **optional**: a template with no joined mapping keeps today's
+positional-declaration-order `create` (backward compatible), so the canonical case is unchanged.
+
+*Library composition of adapter annotations.* The factory type (with its `create`) is emitted by the
+template's **owning** module (3.1b) — for a middleware in a shared library, that's library mode
+(`WireContributorPlugin`). Library mode must therefore see the `.mapsFactoryRoles` vocabulary to order
+the `create`, but it currently parses own sources only. So `WireContributorPlugin` gains the same
+Wire-aware dependency-source collection `WireBuildPlugin` already does, and `runLibraryMode` reads the
+adapter annotations from them. It stays a pure type-emitter (still emits only its own module's factory
+types — `renderOwnedFactoryTypes` filters by `originModule`); it just gains the vocabulary. This means
+**reorder/subset middleware work in a shared library** (the idiomatic form) — no full-mode-only
+limitation. A canonical middleware needs no vocabulary (positional == canonical) and works either way.
+
+*The emission.* Because the macro always calls `create(Builder.RequestContext.self, Builder.Reader
+.self, Builder.ResponseSender.self)` — the fixed triple — the synthesised `create` is **always** generic
+over the three canonical role names in that order, each taken as a metatype. The middleware's own
+parameter names are **substituted → role names** (reusing the transitive-lift token substituter)
+throughout the return type *and the constraints*: a parameter named `Ctx` carrying role requestContext
+means `create`'s `RequestContext` generic restates `Ctx`'s constraint, and the return threads it into
+that middleware slot. An assisted role the middleware doesn't use stays a phantom `_: Role.Type`
+parameter (inferred from the call's metatype, absent from the return) — no separate adapter type; the
+reordering/subsetting *is* `create`'s signature. Validation: every assisted (non-`@Inject`-typed)
+parameter must be assigned a role; a parameter that is neither role-mapped nor injected is an error.
+(The **injected axis** — a factory generic over an `@Inject`-typed parameter — stays 3.3; 3.2's deps are
+concrete, so every generic parameter is assisted.)
+
+**Scope, WireMVC.** The `@MiddlewareFactory` macro + its `WireAdapterAnnotationV1` declaration carrying
+the new capability; the role vocabulary (`.requestContext` / `.reader` / `.responseSender`); the bare
+(positional-default) form and the custom form (an ordered role list positional over the assisted
+parameters, e.g. `@MiddlewareFactory(.requestContext, .responseSender)`); and the
 `@MiddlewareFactory`-without-`@Factory` diagnostic.
 
 **Why now.** Makes the box-role order explicit and validated (retiring 3.1's convention) and admits
 reordered / subsetting middleware — the first thing 3.1 can't express.
 
+**De-risk first (spike).** The subset/reorder `create` shape — a generic function with *phantom* role
+parameters (`<RequestContext, Reader, ResponseSender>` where only one appears in the return) called
+uniformly with the three metatypes, folded through the real box — is the one "does it compile + infer"
+question. A spike proves it before the emission changes land.
+
 **Gate.** swift-wire unit tests: mapping read from a stand-in adapter annotation, reorder/subset
-emission, validation diagnostics. wire-mvc: a middleware that pins its own reader (subset) and one
-with non-canonical parameter names (custom mapping) both serve; the 3.1 default case is unchanged.
+emission, validation diagnostics. wire-mvc: a middleware that pins its own reader (subset) and one that
+reorders its parameters both serve; the 3.1 default case is unchanged.
 
 ### 3.3 — The injected axis (swift-wire + WireMVC, de-risked by a spike)
 

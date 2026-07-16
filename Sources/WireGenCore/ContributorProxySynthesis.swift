@@ -92,6 +92,7 @@ private func reattributingInputEdges(
             annotationName: site.annotationName,
             targetIdentity: proxyIdentity,
             argument: site.argument,
+            arguments: site.arguments,
             location: site.location,
             originModule: site.originModule
         )

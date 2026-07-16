@@ -17,6 +17,22 @@
 // Everything here is domain-free: Wire injects a synthesised binding onto a
 // decorated binding and never learns "middleware".
 
+/// The role mapping a `.mapsFactoryRoles` annotation supplies for a factory template (M5.3, 3.2).
+/// `canonicalRoles` is the adapter's full ordered role vocabulary — the names `create`'s generic
+/// parameters take, in the fixed order the consumer's macro calls with. `parameterRoles` maps each of
+/// the template's assisted generic parameters to its role name (a subset/reorder of `canonicalRoles`);
+/// a role not in its values is unused by this template (a phantom `create` parameter). `nil` on a
+/// factory means no mapping was visible — `create` keeps the positional-declaration-order form.
+package struct FactoryRoleMapping: Sendable, Equatable {
+    package let canonicalRoles: [String]
+    package let parameterRoles: [String: String]
+
+    package init(canonicalRoles: [String], parameterRoles: [String: String]) {
+        self.canonicalRoles = canonicalRoles
+        self.parameterRoles = parameterRoles
+    }
+}
+
 /// A factory the plugin synthesises for one consumed `FactoryKey`. Carries what
 /// both the emitter (the struct declaration) and the binding registration
 /// (construction of the template's deps) need.
@@ -51,6 +67,9 @@ package struct SynthesizedFactory: Sendable {
     package let accessLevel: AccessLevel
     /// The template's declaration site, stamped onto the synthesised binding.
     package let location: SourceLocation
+    /// The role mapping, when a `.mapsFactoryRoles` annotation was joined to the template. `nil` keeps
+    /// `create` in positional-declaration-order form (3.1 / no mapping visible).
+    package let roleMapping: FactoryRoleMapping?
 
     package init(
         keyReference: String,
@@ -62,7 +81,8 @@ package struct SynthesizedFactory: Sendable {
         dependencies: [DependencyParameter],
         producedTypeModule: String,
         accessLevel: AccessLevel = .internal,
-        location: SourceLocation
+        location: SourceLocation,
+        roleMapping: FactoryRoleMapping? = nil
     ) {
         self.keyReference = keyReference
         self.factoryTypeName = factoryTypeName
@@ -74,12 +94,17 @@ package struct SynthesizedFactory: Sendable {
         self.producedTypeModule = producedTypeModule
         self.accessLevel = accessLevel
         self.location = location
+        self.roleMapping = roleMapping
     }
 }
 
 /// Build the `SynthesizedFactory` for one `@Factory` template — the single source of truth
-/// both type emission (template-driven) and construction (consumer-driven) derive from.
-func synthesizedFactory(from template: DiscoveredFactoryTemplate) -> SynthesizedFactory {
+/// both type emission (template-driven) and construction (consumer-driven) derive from. `roleMapping`
+/// is the joined `.mapsFactoryRoles` mapping when one is visible, else `nil` (positional `create`).
+func synthesizedFactory(
+    from template: DiscoveredFactoryTemplate,
+    roleMapping: FactoryRoleMapping? = nil
+) -> SynthesizedFactory {
     SynthesizedFactory(
         keyReference: template.keyReference,
         factoryTypeName: factoryTypeName(forKey: template.keyReference),
@@ -90,21 +115,27 @@ func synthesizedFactory(from template: DiscoveredFactoryTemplate) -> Synthesized
         dependencies: template.dependencies,
         producedTypeModule: template.originModule,
         accessLevel: template.accessLevel,
-        location: template.location
+        location: template.location,
+        roleMapping: roleMapping
     )
 }
 
 /// Render the factory-type declarations a module *owns* — one per `@Factory` template
 /// declared in `module`, at the template's own visibility. Template-driven (independent of
 /// consumers): the type belongs to the factory, so every consumer, in any package, references
-/// this one declaration. Deterministic order by key.
+/// this one declaration. Deterministic order by key. `annotations`/`useSites` supply the role mapping
+/// (from the composed adapter) that orders each `create`; empty when the adapter isn't composed.
 package func renderOwnedFactoryTypes(
     templates: [DiscoveredFactoryTemplate],
-    module: String
+    module: String,
+    annotations: [DiscoveredAdapterAnnotation] = [],
+    useSites: [ContributionAliasUseSite] = []
 ) -> [String] {
-    templates
+    let mappings = factoryRoleMappings(templates: templates, annotations: annotations, useSites: useSites)
+    return
+        templates
         .filter { $0.originModule == module }
-        .map(synthesizedFactory(from:))
+        .map { synthesizedFactory(from: $0, roleMapping: mappings[$0.keyReference]) }
         .sorted { $0.keyReference < $1.keyReference }
         .map(renderFactoryDeclaration)
 }
@@ -174,8 +205,9 @@ package func synthesizeFactories(
         consumedKeys.insert(key)
     }
 
+    let mappings = factoryRoleMappings(templates: templates, annotations: annotations, useSites: useSites)
     return consumedKeys.sorted().compactMap { key in
-        templatesByKey[key].map(synthesizedFactory(from:))
+        templatesByKey[key].map { synthesizedFactory(from: $0, roleMapping: mappings[key]) }
     }
 }
 
@@ -283,13 +315,19 @@ func factoryBinding(_ factory: SynthesizedFactory, module: String) -> Discovered
 ///         }
 ///     }
 package func renderFactoryDeclaration(_ factory: SynthesizedFactory) -> String {
+    // With a role mapping, `create` is generic over the adapter's canonical roles in their fixed order
+    // (the order the consumer's macro calls with), each a metatype; the middleware's own parameters are
+    // substituted → role names in the return type. Without one, `create` keeps the positional
+    // declaration-order form. An assisted role the middleware doesn't use is a phantom generic parameter.
     let assisted = factory.assistedParameterNames
-    let genericClause = assisted.isEmpty ? "" : "<\(assisted.joined(separator: ", "))>"
-    let createParameters = assisted.map { "_: \($0).Type" }.joined(separator: ", ")
+    let createGenerics = factory.roleMapping?.canonicalRoles ?? assisted
+    let genericClause = createGenerics.isEmpty ? "" : "<\(createGenerics.joined(separator: ", "))>"
+    let createParameters = createGenerics.map { "_: \($0).Type" }.joined(separator: ", ")
+    let returnArguments = assisted.map { factory.roleMapping?.parameterRoles[$0] ?? $0 }
     let returnType =
-        assisted.isEmpty
+        returnArguments.isEmpty
         ? factory.producedTypeName
-        : "\(factory.producedTypeName)<\(assisted.joined(separator: ", "))>"
+        : "\(factory.producedTypeName)<\(returnArguments.joined(separator: ", "))>"
     let whereClause = renderAssistedConstraints(factory)
     let constructionArguments = factory.dependencies.map { dependency in
         let value = dependency.name ?? dependency.type
@@ -342,17 +380,23 @@ extension AccessLevel {
     }
 }
 
-/// The `where` clause restating the template's generic requirements on `create` —
-/// the per-parameter constraints in declared order (`Ctx: RequestContext`) followed
-/// by the template's own `where`-clause requirements (associated-type / same-type /
-/// `~Copyable`). Both must be restated or a constrained middleware won't construct.
-/// Empty when the template has neither.
+/// The `where` clause restating the template's generic requirements on `create` — the per-parameter
+/// constraints in declared order (`Ctx: RequestContext`) followed by the template's own `where`-clause
+/// requirements (associated-type / same-type / `~Copyable`). Both must be restated or a constrained
+/// middleware won't construct. With a role mapping, each constraint is stated on the parameter's **role**
+/// and every parameter reference in the constraint text / `where` clause is substituted → its role name;
+/// an unmapped (phantom) role carries no constraint. Empty when the template has neither.
 private func renderAssistedConstraints(_ factory: SynthesizedFactory) -> String {
-    var requirements = factory.assistedParameterNames.compactMap { name in
-        factory.assistedParameterConstraints[name].map { "\(name): \($0)" }
+    let roles = factory.roleMapping?.parameterRoles
+    func substituted(_ text: String) -> String {
+        roles.map { substitutingIdentifierTokens(text, $0) } ?? text
+    }
+    var requirements = factory.assistedParameterNames.compactMap { name -> String? in
+        guard let constraint = factory.assistedParameterConstraints[name] else { return nil }
+        return "\(roles?[name] ?? name): \(substituted(constraint))"
     }
     if let whereClause = factory.whereClause, !whereClause.isEmpty {
-        requirements.append(whereClause)
+        requirements.append(substituted(whereClause))
     }
     return requirements.isEmpty ? "" : " where \(requirements.joined(separator: ", "))"
 }

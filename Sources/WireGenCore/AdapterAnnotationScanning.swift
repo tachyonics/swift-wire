@@ -24,6 +24,9 @@ package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// `@X(key)` makes the annotated binding depend on the factory synthesised from the
     /// `@Factory(key)` template (an input edge to a synthesised value).
     case injectsFactoryOnArgument
+    /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the role mapping for its assisted
+    /// parameters; `roles` is the adapter's ordered vocabulary of canonical slot names (opaque to Wire).
+    case mapsFactoryRoles(roles: [String])
     /// `@X(...)` rewrites a consumer's injection resolution. Reserved — no pass yet.
     case rewritesInjection
 }
@@ -108,6 +111,15 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
             let prefix = prefixArgument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
         {
             return .contributesProxy(key: toArgument.expression.trimmedDescription, proxyTypePrefix: prefix)
+        }
+        if member.declName.baseName.text == "mapsFactoryRoles",
+            let rolesArgument = call.arguments.first(where: { $0.label?.text == "roles" }),
+            let array = rolesArgument.expression.as(ArrayExprSyntax.self)
+        {
+            let roles = array.elements.compactMap {
+                $0.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
+            }
+            return .mapsFactoryRoles(roles: roles)
         }
     }
     if let member = expression.as(MemberAccessExprSyntax.self) {
