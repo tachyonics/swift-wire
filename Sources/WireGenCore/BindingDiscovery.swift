@@ -655,6 +655,7 @@ extension BindingDiscovery {
         typeKind: String,
         nameToken: TokenSyntax,
         generics: GenericParameterClauseSyntax?,
+        whereClause: GenericWhereClauseSyntax?,
         attributes: AttributeListSyntax,
         modifiers: DeclModifierListSyntax,
         members: MemberBlockItemListSyntax
@@ -714,6 +715,7 @@ extension BindingDiscovery {
                     typeKind: typeKind,
                     genericParameterNames: genericParameterNames,
                     genericParameterConstraints: genericParameterConstraints,
+                    genericWhereClause: whereClause?.requirements.trimmedDescription,
                     explicitIdentity: explicitIdentity,
                     dependencies: injectResult.dependencies,
                     location: location(of: nameToken),
@@ -752,6 +754,7 @@ extension BindingDiscovery {
             typeKind: typeKind,
             nameToken: nameToken,
             generics: generics,
+            whereClause: whereClause,
             attributes: attributes,
             modifiers: modifiers,
             members: members

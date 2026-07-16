@@ -16,7 +16,10 @@ package enum DiscoveredAdapterCapability: Sendable, Equatable {
     case contributes(key: String)
     /// `@X` contributes a generated proxy (`<proxyTypePrefix><Binding>`) into the multibinding
     /// key, not the binding itself — the plugin synthesises the proxy binding (depending on the
-    /// binding + its demanded factories) and contributes that.
+    /// binding + its demanded factories) and contributes that. Under Phase A the plugin also emits the
+    /// proxy's **structural half** (the `struct` declaration — fields + init + `Sendable`, body hole),
+    /// superseding the adapter macro's type emission; the domain witness body is filled by an adapter
+    /// codegen tool via an `extension` in the same module. See `renderContributorProxyDeclaration`.
     case contributesProxy(key: String, proxyTypePrefix: String)
     /// `@X(T.self)` makes the annotated binding depend on `T` (an input edge to an
     /// existing binding).

@@ -251,7 +251,7 @@ question. A spike proves it before the emission changes land.
 emission, validation diagnostics. wire-mvc: a middleware that pins its own reader (subset) and one that
 reorders its parameters both serve; the 3.1 default case is unchanged.
 
-### 3.3 — The injected axis (swift-wire + WireMVC, de-risked by a spike)
+### 3.3 — The injected axis (swift-wire + WireMVC) — **PARKED, pending the codegen foundation**
 
 **Scope.** Partition a template's generic parameters into **injected** (appear as the type of an
 `@Inject` member) vs **assisted** (the rest); emit the factory **struct generic over the injected
@@ -260,24 +260,23 @@ demand-driven specialisation threads the injected type through the dependency ed
 generic over the assisted roles only. This is the tier where a generic controller and the middleware
 share a backend through the graph.
 
-**The hard sub-problem — proxy-field type naming.** The `@Controller` macro must name the factory
-field's type on the proxy (post-3.1c), and for a generic factory that type is
-`_WireFactory_<key><InjectedType>` — a specialisation the macro can't spell (it's blind to the
-template's injected axis, and the concrete backend is graph-resolved). The likely resolution: the
-injected-axis genericity is only meaningful when the **controller is itself generic over the shared
-type** (`TodosController<R: TodoRepository>` — the lifted-generic pattern, and the primary reason a
-controller is generic at all), so the macro threads the controller's own generic parameter — which the
-proxy already restates — into the factory field type. Single-generic controller first; a multi-generic
-controller (ambiguous which parameter threads) is **gated with a diagnostic**, not resolved. The
-compiler backstops via the shared constraint.
+**Why parked.** The hard sub-problem is **proxy factory-field type naming**: with a generic factory the
+field is `_WireFactory_<key><InjectedType>`, which the **`@Controller` macro can't spell** — it's blind
+to the template's injected axis (*which* generic parameter is injected) and to the graph-resolved
+backend (*where* it threads). The macro workaround (thread the controller's own single generic
+parameter, diagnostic-gate multi-generic) is exactly the code the
+[codegen foundation](WireMVCCodegenFoundation.md) replaces: once the **plugin** generates the proxy, it
+has both — the injected axis (it discovers the template) and the backend (it threads it through the
+graph's lift parameter, the 3.1c transitive-lift machinery). So 3.3's field-naming problem *dissolves*
+under the foundation, single- and multi-generic alike. Building the macro workaround now would be
+throwaway, so 3.3 **rides Phase A** of the foundation as its validation case rather than shipping ahead
+of it.
 
-**Why last.** Rarer than 3.1/3.2, and it carries the one genuinely unresolved coordination detail —
-so it's risk-ordered last and **de-risked by a spike** before committing to the factory shape.
-
-**Gate.** A spike proving a generic controller + generic factory + shared `@Inject` backend compiles
-and serves end-to-end with the real proposal types (the shape spike-15 played for the fold). Then the
-real path: a wire-mvc example where a controller and its middleware share a repository injected by
-type-erased generic.
+**Gate (when it resumes, on the foundation).** A generic controller + generic factory + shared
+`@Inject` backend compiles and serves end-to-end with the real proposal types; a wire-mvc example where
+a controller and its middleware share a repository injected by type-erased generic. The Phase-A
+feasibility spike (a plugin-emitted proxy holding `_WireFactory_<key><T0>`, `create` threading the
+resolved backend) de-risks exactly this shape.
 
 ### 3.4 — Concrete `.self` pass-through (deferred)
 

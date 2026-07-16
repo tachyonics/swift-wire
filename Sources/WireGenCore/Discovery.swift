@@ -140,6 +140,12 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// constrained-parameter bridge that resolves a bare-parameter dependency to
     /// the matching `some P` binding. Empty when no parameter is constrained.
     package let genericParameterConstraints: [String: String]
+    /// The type's generic `where` clause requirements, verbatim and without the
+    /// `where` keyword (`T: Foo, T.Element == Bar`), or `nil` when it declares none.
+    /// Restated on a contributor proxy synthesised beside this type (the proxy is
+    /// generic exactly as its subject), so a `where`-constrained subject's proxy
+    /// still type-checks. Inert for ordinary binding construction.
+    package let genericWhereClause: String?
     /// When the type carries `@Singleton(as: P.self)`, the declared opaque
     /// graph identity `P` — so the binding is keyed as `some P` rather than its
     /// concrete type, while construction still uses the concrete type. `nil` for
@@ -206,6 +212,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         typeKind: String,
         genericParameterNames: [String],
         genericParameterConstraints: [String: String] = [:],
+        genericWhereClause: String? = nil,
         explicitIdentity: String? = nil,
         dependencies: [DependencyParameter],
         location: SourceLocation,
@@ -227,6 +234,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.typeKind = typeKind
         self.genericParameterNames = genericParameterNames
         self.genericParameterConstraints = genericParameterConstraints
+        self.genericWhereClause = genericWhereClause
         self.explicitIdentity = explicitIdentity
         self.dependencies = dependencies
         self.location = location
