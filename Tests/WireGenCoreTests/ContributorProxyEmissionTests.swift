@@ -59,10 +59,11 @@ struct ContributorProxyEmissionTests {
 
     @Test func emitsGenericStructWithSubjectFieldAndInit() {
         let declaration = renderContributorProxyDeclaration(proxyBinding())
+        // Always `internal` — a consumer-local coordination type, never public API (see the emitter).
         let expected = """
-            public struct _WireRouteContributor_TodosController<Repository: TodoRepository>: Sendable {
-                public let _wireSubject: TodosController<Repository>
-                public init(_ _wireSubject: TodosController<Repository>) {
+            struct _WireRouteContributor_TodosController<Repository: TodoRepository>: Sendable {
+                let _wireSubject: TodosController<Repository>
+                init(_ _wireSubject: TodosController<Repository>) {
                     self._wireSubject = _wireSubject
                 }
             }
@@ -75,10 +76,10 @@ struct ContributorProxyEmissionTests {
             proxyBinding(factoryKeys: ["Keys.backend"])
         )
         let expected = """
-            public struct _WireRouteContributor_TodosController<Repository: TodoRepository>: Sendable {
-                public let _wireSubject: TodosController<Repository>
-                public let _wireFactory_Keys_backend: _WireFactory_Keys_backend
-                public init(_ _wireSubject: TodosController<Repository>, _wireFactory_Keys_backend: _WireFactory_Keys_backend) {
+            struct _WireRouteContributor_TodosController<Repository: TodoRepository>: Sendable {
+                let _wireSubject: TodosController<Repository>
+                let _wireFactory_Keys_backend: _WireFactory_Keys_backend
+                init(_ _wireSubject: TodosController<Repository>, _wireFactory_Keys_backend: _WireFactory_Keys_backend) {
                     self._wireSubject = _wireSubject
                     self._wireFactory_Keys_backend = _wireFactory_Keys_backend
                 }
@@ -97,9 +98,9 @@ struct ContributorProxyEmissionTests {
             )
         )
         let expected = """
-            public struct _WireRouteContributor_HealthController: Sendable {
-                public let _wireSubject: HealthController
-                public init(_ _wireSubject: HealthController) {
+            struct _WireRouteContributor_HealthController: Sendable {
+                let _wireSubject: HealthController
+                init(_ _wireSubject: HealthController) {
                     self._wireSubject = _wireSubject
                 }
             }
@@ -149,18 +150,19 @@ struct ContributorProxyEmissionTests {
 
     // MARK: - Access level
 
-    @Test func packageSubjectEmitsPackageProxy() {
-        let declaration = renderContributorProxyDeclaration(proxyBinding(access: .package))
-        #expect(declaration.hasPrefix("package struct "))
-        #expect(declaration.contains("package let _wireSubject:"))
-        #expect(declaration.contains("package init("))
-    }
-
-    @Test func internalSubjectEmitsNoAccessKeyword() {
-        let declaration = renderContributorProxyDeclaration(proxyBinding(access: .internal))
-        #expect(declaration.hasPrefix("struct "))
-        #expect(declaration.contains("\n    let _wireSubject:"))
-        #expect(declaration.contains("\n    init("))
+    /// The proxy is emitted `internal` whatever the subject's access — it's a consumer-local
+    /// coordination type, and a `public` proxy would fail under `InternalImportsByDefault` when the
+    /// generated file imports a shared controllers library internally. So even a `public`/`package`
+    /// subject yields an `internal` (no-keyword) proxy.
+    @Test func proxyIsAlwaysInternalRegardlessOfSubjectAccess() {
+        for access in [AccessLevel.public, .package, .internal] {
+            let declaration = renderContributorProxyDeclaration(proxyBinding(access: access))
+            #expect(declaration.hasPrefix("struct "))
+            #expect(declaration.contains("\n    let _wireSubject:"))
+            #expect(declaration.contains("\n    init("))
+            #expect(!declaration.contains("public "))
+            #expect(!declaration.contains("package "))
+        }
     }
 
     // MARK: - Where clause
@@ -231,7 +233,7 @@ struct ContributorProxyEmissionTests {
         )
         #expect(
             declaration.hasPrefix(
-                "public struct _WireRouteContributor_TodosController<Element: Sendable>: Sendable where Element: Codable {"
+                "struct _WireRouteContributor_TodosController<Element: Sendable>: Sendable where Element: Codable {"
             )
         )
     }

@@ -39,11 +39,14 @@ package let contributorProxySubjectFieldName = "_wireSubject"
 ///             self._wireFactory_Keys_backend = _wireFactory_Keys_backend
 ///         }
 ///     }
+// The proxy is emitted `internal` (no access keyword), never the subject's access. It's a consumer-local
+// coordination type — emitted into the consumer module, constructed by that module's graph, consumed only
+// there as `any <ContributorProtocol>` — so it is never public API. Emitting it `public` (mirroring a
+// `public` subject) would force every type it references to be public *from the consumer*, which fails
+// under `InternalImportsByDefault`: the generated file imports a shared controllers library internally, so
+// a `public` proxy couldn't expose that library's (public) controller / factory types. `internal`
+// sidesteps that — an internal declaration may freely reference internally-imported types.
 package func renderContributorProxyDeclaration(_ proxy: DiscoveredScopeBoundType) -> String {
-    // Access mirrors the subject's (public/package/internal): the graph consumer — another module in the
-    // consumer-module model — constructs the proxy, so a `public` subject's proxy stays `public`, and
-    // its memberwise init would otherwise be `internal`, hence the explicit init below.
-    let access = proxy.accessLevel.factoryDeclarationPrefix
     let genericClause = renderProxyGenericClause(
         names: proxy.genericParameterNames,
         constraints: proxy.genericParameterConstraints
@@ -59,7 +62,7 @@ package func renderContributorProxyDeclaration(_ proxy: DiscoveredScopeBoundType
     var assignments: [String] = []
     for dependency in proxy.dependencies {
         let fieldName = dependency.name ?? contributorProxySubjectFieldName
-        fields.append("\(access)let \(fieldName): \(dependency.type)")
+        fields.append("let \(fieldName): \(dependency.type)")
         // Unlabelled (subject) → `_ name`; labelled (factory) → `name`.
         let parameter =
             dependency.name == nil
@@ -73,11 +76,11 @@ package func renderContributorProxyDeclaration(_ proxy: DiscoveredScopeBoundType
     // `Sendable` (structural — a proxy holds graph bindings, all `Sendable` in Wire's model). The
     // adapter protocol conformance (`RouteContributor`) is NOT stated here — it arrives with the witness
     // in the domain tool's extension, in this same module.
-    lines.append("\(access)struct \(proxy.typeName)\(genericClause): Sendable\(whereClause) {")
+    lines.append("struct \(proxy.typeName)\(genericClause): Sendable\(whereClause) {")
     for field in fields {
         lines.append("    \(field)")
     }
-    lines.append("    \(access)init(\(initParameters.joined(separator: ", "))) {")
+    lines.append("    init(\(initParameters.joined(separator: ", "))) {")
     for assignment in assignments {
         lines.append("        \(assignment)")
     }
