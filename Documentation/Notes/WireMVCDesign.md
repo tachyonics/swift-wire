@@ -23,6 +23,16 @@
 > [spike-11](../../../swift-wire-spikes/spike-11-wiremvc-servertransport/) remains the
 > proof of the decoded-witness *shape* (decode → call → encode); only its registration
 > target moved from `transport.register` to `builder.register`.
+>
+> **Update — codegen mechanism (M5.3, reconciled below).** Two things were refined after M5.0.
+> (1) Route-witness **generation moved from the `@Controller` macro to the build plugin** — where this
+> record says "the macro emits/generates," that codegen is now plugin-owned (`@Controller` is a marker;
+> WireGen emits the route-contributor proxy struct and WireMVC's `WireMVCRouteGen` emits the witness).
+> (2) The `@Controller` alias became **`.contributesProxy(to:)`** — the controller stays a plain binding
+> and the plugin contributes a generated proxy in its place, so the "no new contract" note under
+> *Controller & scope* no longer holds. Both are recorded in
+> [Archive/WireMVCCodegen.md](../Archive/WireMVCCodegen.md); the M5.0 **surface** decisions below are
+> otherwise unchanged.
 
 The headline, unchanged: WireMVC is a **spec-free, annotation-driven analogue of the OpenAPI
 generator's registration codegen**. `@Controller`/verb/param/response annotations fold into a

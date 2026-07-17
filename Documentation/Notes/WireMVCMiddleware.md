@@ -292,11 +292,11 @@ Request flow: `base box → ctrl-mw… → route-mw… → [ explode → project
 > (a hidden non-binding lifted onto the controller) *and* the first single-annotation `@Factory`-only
 > sketch (a positional `create` in template-declaration order). The settled model makes the template
 > **a binding that looks like a binding**, referenced by key, and separates the two genuinely
-> different generic axes (below). **Implemented so far** (Increment 2, steps 1–2): `@Factory` +
-> `FactoryKey`, the `.injectsFactoryOnArgument` capability, and a first *positional, non-generic*
-> factory synthesis. **Not yet built:** the `@MiddlewareFactory` role mapping, the injected/assisted
-> axis split, and the generic-aware factory — this section is the target those steps land against.
-> The build sequencing is in [MiddlewareFactoryPlan.md](MiddlewareFactoryPlan.md).
+> different generic axes (below). **Built — the tier is complete:** `@Factory` + `FactoryKey`, factory
+> synthesis, the `@MiddlewareFactory` role mapping, and the injected/assisted axis split (the
+> generic-aware factory), with every `@Middleware` folding a graph binding via the `.injectsFromGraph`
+> capability. The build sequencing is recorded in
+> [Archive/WireMVCCodegen.md](../Archive/WireMVCCodegen.md).
 
 For multi-stage chains, middleware are generally **generic over their input box** (a middleware
 pinned to one concrete input can only sit where that exact box appears). How the witness obtains
@@ -469,25 +469,25 @@ template's generic signature.
 Synthesis is **consumer-driven** (like a generic `@Provides` factory, the template defines but
 synthesises nothing on its own): collate every `@Middleware(key)` use-site, dedupe by key, synthesise
 one factory per consumed key, register it as a binding, and inject it into the consuming controllers
-via the capability `@Middleware` declares — **`.injectsFactoryOnArgument`** (the factory input edge;
-see [AdapterModel.md](AdapterModel.md), *The capability axis*). The consumer surface is unchanged
-across every tier above — a controller always writes just `@Middleware(SessionMiddleware.factory)`;
-the box-role subsetting and the injected axis are entirely absorbed producer-side.
+via the capability `@Middleware` declares — **`.injectsFromGraph`** (the input edge; see
+[AdapterModel.md](AdapterModel.md), *The capability axis*). The consumer surface is unchanged across
+every tier above — a controller always writes just `@Middleware(SessionMiddleware.factory)`; the
+box-role subsetting and the injected axis are entirely absorbed producer-side.
 
-`@Middleware` discriminates two cases by the argument's *syntax*:
+Every `@Middleware` folds a graph binding; the plugin dispatches on the argument's *kind*:
 
 - **`@Middleware(key)` — the factory case.** The key references a `@Factory` template; the plugin
-  synthesises the factory, injects it, the witness calls `.create(…)`.
-- **`@Middleware(ConcreteType.self)` — the concrete case.** `.self`, not a key: an ordinary binding
-  injected directly, wrapped in a trivial pass-through factory so the witness call site stays uniform.
-  `.self` is reserved for this; a generic middleware always moves to a keyed `@Factory` template
-  (retiring the earlier `@Middleware(Generic<WireContext, WireReader, WireSender>.self)` spelling).
+  synthesises the factory, lifts it onto the proxy, and the witness calls `.create(…)`.
+- **`@Middleware(key)` — a keyed binding.** A `BindingKey`, not a factory template: the graph binding
+  stored under that key is injected onto the proxy and folded directly (`_wire<sanitisedKey>`).
+- **`@Middleware(ConcreteType.self)` — a binding by type.** `.self`, not a key: the `ConcreteType`
+  binding is injected by type onto the proxy and folded directly (`_wire<Type>`) — no inline
+  construction. A generic middleware always moves to a keyed `@Factory` template (retiring the earlier
+  `@Middleware(Generic<WireContext, WireReader, WireSender>.self)` spelling). See
+  [Archive/WireMVCCodegen.md](../Archive/WireMVCCodegen.md), *3.4*.
 
 ## Open sub-decisions
 
-- **Chained generic specialisation** — the injected-axis factory is a generic binding a generic
-  controller depends on (generic → generic → concrete backend). Rides the lifted-generic /
-  constrained-parameter bridge, but the *chained* case wants explicit validation before it's assumed.
 - `@Explode` vs `@Explode` + a capability-declaration attribute — one attribute or two (the
   write-side sugar for custom boxes; the common path uses neither).
 - The whole-slot type-spelling fragility above (canonical spelling vs a minimal marker).
@@ -496,6 +496,11 @@ the box-role subsetting and the injected axis are entirely absorbed producer-sid
 
 ## Settled during design (no longer open)
 
+- **Chained generic specialisation** — validated: the injected-axis factory is a generic binding a
+  generic controller depends on (generic → generic → concrete backend), threaded through the graph's
+  lift parameter by the existing transitive-lift machinery. Shipped as the injected axis (see
+  [Archive/WireMVCCodegen.md](../Archive/WireMVCCodegen.md), *A5*), proven end-to-end by a generic
+  controller and its middleware sharing one repository backend.
 - **`@MiddlewareFactory` default-mapping dial** — **positional** (`param[i] → canonicalRole[i]`), so a
   bare marker maps `<Ctx, Reader, Sender>` by order; subset/reorder uses the explicit role list.
   Name-based (map by parameter name, subset bare, verbose names) was rejected.
