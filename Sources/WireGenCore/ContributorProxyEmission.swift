@@ -88,6 +88,31 @@ package func renderContributorProxyDeclaration(_ proxy: DiscoveredScopeBoundType
     return lines.joined(separator: "\n")
 }
 
+/// Render the structural declaration for every synthesised contributor proxy, once each — the plugin's
+/// Phase-A emission into the consumer graph file. `proxyIdentities` are the qualified names
+/// `applyContributorProxies` created; a proxy binding is registered in every partition that consumes it,
+/// so it's deduped by qualified name here (the *type* is declared once at module scope, like a factory
+/// type). Deterministic order by type name. Reads the proxy bindings *after* factory synthesis, so each
+/// carries its complete field set (subject + lifted factories).
+package func renderContributorProxyTypes(
+    proxyIdentities: Set<String>,
+    in allBindings: [Partition: [DiscoveredBinding]]
+) -> [String] {
+    guard !proxyIdentities.isEmpty else { return [] }
+    var proxiesByName: [String: DiscoveredScopeBoundType] = [:]
+    for bindings in allBindings.values {
+        for binding in bindings {
+            guard case .scopeBound(let type) = binding,
+                proxyIdentities.contains(type.qualifiedTypeName)
+            else { continue }
+            proxiesByName[type.qualifiedTypeName] = type  // same type across partitions → one declaration
+        }
+    }
+    return proxiesByName.values
+        .sorted { $0.typeName < $1.typeName }
+        .map(renderContributorProxyDeclaration)
+}
+
 /// The proxy's generic-parameter clause restated from the subject's parameters and per-parameter
 /// constraints — `<Repository: TodoRepository>`, or `<A, B: P>` when only some are constrained, or `""`
 /// for a non-generic subject. The subject's `where` clause (associated-type / same-type / `~Copyable`
