@@ -21,12 +21,11 @@ package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// superseding the adapter macro's type emission; the domain witness body is filled by an adapter
     /// codegen tool via an `extension` in the same module. See `renderContributorProxyDeclaration`.
     case contributesProxy(key: String, proxyTypePrefix: String)
-    /// `@X(T.self)` makes the annotated binding depend on `T` (an input edge to an
-    /// existing binding).
-    case injectsDependencyOnArgument
-    /// `@X(key)` makes the annotated binding depend on the factory synthesised from the
-    /// `@Factory(key)` template (an input edge to a synthesised value).
-    case injectsFactoryOnArgument
+    /// `@X(argument)` makes the annotated binding depend on a graph value named by `argument`, lifted
+    /// onto its contributor proxy — dispatched on the argument's kind: a `FactoryKey` (matches a
+    /// `@Factory(key)` template) injects that factory; a `BindingKey<T>` injects that keyed binding;
+    /// `T.self` injects the binding of type `T`.
+    case injectsFromGraph
     /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the role mapping for its assisted
     /// parameters; `roles` is the adapter's ordered vocabulary of canonical slot names (opaque to Wire).
     case mapsFactoryRoles(roles: [String])
@@ -127,8 +126,7 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
     }
     if let member = expression.as(MemberAccessExprSyntax.self) {
         switch member.declName.baseName.text {
-        case "injectsDependencyOnArgument": return .injectsDependencyOnArgument
-        case "injectsFactoryOnArgument": return .injectsFactoryOnArgument
+        case "injectsFromGraph": return .injectsFromGraph
         case "rewritesInjection": return .rewritesInjection
         default: return nil
         }

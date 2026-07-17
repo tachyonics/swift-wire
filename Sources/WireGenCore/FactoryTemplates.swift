@@ -4,8 +4,8 @@
 // whose generic parameters are assisted (supplied per use-site as metatypes)
 // and whose `@Inject` members are injected dependencies. It is not a binding of
 // its own; the plugin synthesises one concrete factory per `FactoryKey` its
-// consumers demand (`@Middleware(key)` → the `.injectsFactoryOnArgument`
-// capability). Discovery captures the template here — verbatim, syntactically —
+// consumers demand (`@Middleware(key)` → the factory-key case of the
+// `.injectsFromGraph` capability). Discovery captures the template here — verbatim, syntactically —
 // exactly as `DiscoveredScopeBoundType` captures a `@Singleton`. Synthesis and
 // injection are later passes.
 

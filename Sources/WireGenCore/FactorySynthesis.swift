@@ -1,18 +1,17 @@
-// Factory synthesis — the consumer-driven half of the factory model, riding the
-// `.injectsFactoryOnArgument` capability.
+// Factory synthesis — the factory-key half of the `.injectsFromGraph` capability's dispatch (the by-type
+// and keyed-binding halves are in `SynthesizedDependencies`).
 //
 // A `@Factory(key)` template defines a factory; it synthesises nothing on its own.
-// The consumers are `@X(key)` use-sites of an annotation declaring
-// `.injectsFactoryOnArgument` (WireMVC's `@Middleware`). This pass collates those
-// use-sites, dedupes by key, and for each consumed key that matches a template:
+// The consumers are `@X(key)` use-sites of an `.injectsFromGraph` annotation (WireMVC's `@Middleware`)
+// whose argument is a `FactoryKey`. This pass collates those use-sites, dedupes by key, and for each
+// consumed key that matches a template:
 //
-//   1. synthesises ONE concrete factory struct (`_WireFactory_<key>`) holding the
-//      template's `@Inject` deps and exposing a generic `create` whose assisted
-//      parameters are the template's generic parameters (as metatypes);
+//   1. synthesises ONE factory struct (`_WireFactory_<key>`) — generic over the injected axis, holding
+//      the template's `@Inject` deps, exposing a `create` generic over the assisted (box-role) parameters;
 //   2. registers it as an ordinary binding, so its deps resolve like any binding's
 //      and it is constructed once per graph that uses it (deduped across consumers);
 //   3. appends an input edge onto each consuming binding — a dependency on the
-//      synthesised factory type, delivered through the adapter macro's wrapping init.
+//      synthesised factory type, lifted onto its contributor proxy.
 //
 // Everything here is domain-free: Wire injects a synthesised binding onto a
 // decorated binding and never learns "middleware".
@@ -202,7 +201,7 @@ package func synthesizeFactories(
     useSites: [ContributionAliasUseSite]
 ) -> [SynthesizedFactory] {
     let factoryAnnotations = Set(
-        annotations.filter { $0.capability == .injectsFactoryOnArgument }.map(\.annotationName)
+        annotations.filter { $0.capability == .injectsFromGraph }.map(\.annotationName)
     )
     guard !factoryAnnotations.isEmpty else { return [] }
 
@@ -253,7 +252,7 @@ package func applyFactorySynthesis(
 
     let factoriesByKey = Dictionary(uniqueKeysWithValues: factories.map { ($0.keyReference, $0) })
     let factoryAnnotations = Set(
-        annotations.filter { $0.capability == .injectsFactoryOnArgument }.map(\.annotationName)
+        annotations.filter { $0.capability == .injectsFromGraph }.map(\.annotationName)
     )
 
     // Each consuming binding identity → the demanded keys that have a factory, deduped by key: a key

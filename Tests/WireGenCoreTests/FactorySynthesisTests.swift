@@ -3,7 +3,7 @@ import Testing
 @testable import WireGenCore
 
 /// Increment 2, step 2: factory synthesis — the consumer-driven half. An
-/// annotation declaring `.injectsFactoryOnArgument` (`@Middleware`) drives, per
+/// annotation declaring `.injectsFromGraph` (`@Middleware`) drives, per
 /// consumed `FactoryKey`, the synthesis of one concrete factory from the matching
 /// `@Factory(key)` template, its registration as a binding, and the injection of a
 /// factory input edge onto each consumer.
@@ -42,7 +42,7 @@ struct FactorySynthesisTests {
     private func middlewareAnnotation() -> DiscoveredAdapterAnnotation {
         DiscoveredAdapterAnnotation(
             annotationName: "Middleware",
-            capability: .injectsFactoryOnArgument,
+            capability: .injectsFromGraph,
             location: mockLocation("Adapter.swift"),
             originModule: testModule
         )
@@ -288,7 +288,7 @@ struct FactorySynthesisTests {
         let source = """
             enum WireMVCAdapter {
                 static let middleware = WireAdapterAnnotationV1(
-                    annotation: "Middleware", capability: .injectsFactoryOnArgument)
+                    annotation: "Middleware", capability: .injectsFromGraph)
             }
 
             @Factory(MyMiddleware.session)
@@ -331,7 +331,7 @@ struct FactorySynthesisTests {
         let source = """
             enum WireMVCAdapter {
                 static let middleware = WireAdapterAnnotationV1(
-                    annotation: "Middleware", capability: .injectsFactoryOnArgument)
+                    annotation: "Middleware", capability: .injectsFromGraph)
             }
 
             @Factory(MyMiddleware.session)
@@ -449,7 +449,7 @@ struct FactoryInjectedAxisTests {
             let controllerAlias = WireAdapterAnnotationV1(
                 annotation: "Controller",
                 capability: .contributesProxy(to: Keys.routes, proxyTypePrefix: "_WireRouteContributor_"))
-            let middlewareAlias = WireAdapterAnnotationV1(annotation: "Middleware", capability: .injectsFactoryOnArgument)
+            let middlewareAlias = WireAdapterAnnotationV1(annotation: "Middleware", capability: .injectsFromGraph)
 
             @Factory(Keys.audit)
             struct AuditGate<Ctx, Repository: TodoRepository>: Sendable { @Inject let repository: Repository }

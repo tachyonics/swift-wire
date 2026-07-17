@@ -36,17 +36,17 @@ public enum WireAdapterCapability {
     /// footgun-free type — nothing about it depends on being constructed "the right way".
     case contributesProxy(to: Any, proxyTypePrefix: String)
 
-    /// `@X(T.self)` on a binding makes the binding depend on `T` (an *input* edge),
-    /// delivered at construction through a wrapping init the adapter's macro generates.
-    /// `T` resolves to an *existing* binding.
-    case injectsDependencyOnArgument
-
-    /// `@X(key)` on a binding makes the binding depend on the factory for `key` (an
-    /// *input* edge to a *synthesised* value): the build plugin synthesises one concrete
-    /// factory per `FactoryKey` from the matching `@Factory(key)` template and injects it,
-    /// delivered through the adapter's macro-generated wrapping init. The `.self` form of
-    /// the argument is the concrete case — a pass-through factory over an existing binding.
-    case injectsFactoryOnArgument
+    /// `@X(argument)` on a binding makes the binding depend on a graph value named by `argument` (an
+    /// *input* edge), lifted onto the binding's contributor proxy. The **argument's kind** chooses what
+    /// is injected:
+    /// - a `FactoryKey` → the factory synthesised from the matching `@Factory(key)` template (its box-role
+    ///   `create` + `@Inject` dependencies + the injected axis);
+    /// - a `BindingKey<T>` → that keyed binding, by key;
+    /// - `T.self` → the binding of type `T`, by type.
+    ///
+    /// So one capability spans the factory, keyed-binding, and by-type cases — the plugin dispatches on
+    /// whether the argument is a factory key, a binding key, or a metatype.
+    case injectsFromGraph
 
     /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the **role mapping** for the
     /// factory's assisted (non-`@Inject`-typed) generic parameters. `roles` is the adapter's ordered

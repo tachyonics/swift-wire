@@ -27,7 +27,7 @@ struct ContributorProxySynthesisTests {
     private func middlewareAnnotation() -> DiscoveredAdapterAnnotation {
         DiscoveredAdapterAnnotation(
             annotationName: "Middleware",
-            capability: .injectsFactoryOnArgument,
+            capability: .injectsFromGraph,
             location: mockLocation("Adapter.swift"),
             originModule: testModule
         )
