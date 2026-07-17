@@ -8,6 +8,27 @@
 > record for the routing surface it extends: [WireMVCMiddleware.md](WireMVCMiddleware.md),
 > [WireMVCDesign.md](WireMVCDesign.md).
 
+> **Scoping (M5 sequencing — decided).** This note covers **two separable efforts**, not one
+> monolith:
+> - **1c — explicit concrete `@RawRoute` roles** (`@RawRoute(.requestContext, .responseSender)`): a
+>   **contained, near-term** feature in the `@MiddlewareFactory` positional-role mould. Forced by the
+>   first *transformed-slot* streaming example (a sender-transforming middleware handing a handler a
+>   concrete `JsonMultiPartSender`, or a concrete enriched context) — because the generic-constraint
+>   substitute forces a complete refinement protocol and there is **no `as?` rescue for a `consuming`
+>   `~Copyable` value**, so the concrete spelling is effectively demanded, not merely nicer. Ships
+>   **with that example** (iteration M5.4R), independently of the rest, and restores a compile-time
+>   coupling (naming the concrete slot forces the producing middleware present).
+> - **1a/1b — the transformer registry + `@Configuration` + B-typed named projection**: the full
+>   pluggable-decomposition subsystem. **Deferred** — the auth cluster does *not* force it, because
+>   M5.4 routes middleware-produced / request-scoped values to handlers via **A-inject**
+>   (request-scope injection), not handler-parameter projection off the box. Lands when
+>   `@Configuration` forces it, or on a deliberate decision to buy the `@Principal`-style
+>   typed-handler surface. See [../M5_PLAN.md](../M5_PLAN.md) (M5.4 decision) and
+>   [RouteErrorHandling.md](RouteErrorHandling.md).
+>
+> The mechanism sketch below is the *unifying* design (all of these are one transformer protocol);
+> the scoping above is which slice ships when.
+
 ## The idea in one line
 
 A handler parameter binding — `@Path`, `@Query`, `@Header`, `@JSONBody`, and a future

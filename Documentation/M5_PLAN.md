@@ -162,7 +162,7 @@ app-scoped proxy contributor whose generated witness embeds per-request scope en
 per-controller by reachability**. A raw handler (M5.2) skips (a) and (d) and drives the
 proposal reader/sender verbatim.
 
-## Iteration M5.0 — pin the target protocol + annotation surface (design gate)
+## Iteration M5.0 — pin the target protocol + annotation surface (design gate) — ✅ COMPLETE
 
 The one iteration that's design-only. Two decisions, both settled here so M5.1 codes
 against a fixed shape.
@@ -256,7 +256,10 @@ witness through `some ServerTransport` (the retained adapter); and
 M5.1 codegen has a validated proposal-native target to emit against, and the `ServerTransport`
 adapter has a validated bridge.
 
-## Iteration M5.1 — app-scope controllers, JSON in/out, no middleware
+## Iteration M5.1 — app-scope controllers, JSON in/out, no middleware — ✅ COMPLETE
+
+> **Status: shipped** — the typed core serves in `wire-mvc` + `wire-mvc-examples` (proposal-server,
+> Hummingbird, and Vapor runtimes).
 
 The core codegen. App-scoped only, no middleware, typed handlers.
 
@@ -291,7 +294,11 @@ and Vapor runtimes on the adapter), which stands in for the earlier "successor-b
 the bridge onto the proposal server surface is no longer a future de-risking exercise but the
 shipped core.
 
-## Iteration M5.2 — the raw escape-hatch handler
+## Iteration M5.2 — the raw escape-hatch handler — ✅ COMPLETE
+
+> **Status: shipped** — `@RawRoute` with *generic* role identification serves plain streaming
+> (the `events` SSE handler). The *concrete* transformed-slot roles are pulled out to **M5.4R**
+> below (a conditional follow-on), so this iteration's committed scope is done.
 
 The catch-all, before middleware — so streaming examples have a home and middleware
 (M5.3) can be designed to wrap both typed and raw handlers uniformly.
@@ -326,7 +333,12 @@ macro spelling and the adapter's streaming path land. **Not this gate:** `websoc
 (escape-to-framework — see scope boundary) and `http2` (a transport concern, not a WireMVC
 route form).
 
-## Iteration M5.3 — middleware, folded into codegen
+## Iteration M5.3 — middleware, folded into codegen — ✅ COMPLETE
+
+> **Status: shipped** — controller/route middleware and all three forms (concrete, generic
+> dep-free, and the generic-with-deps `@Factory`/`@MiddlewareFactory` tier) serve in `wire-mvc`;
+> the codegen-foundation move that this rests on is archived in
+> [Archive/WireMVCCodegen.md](Archive/WireMVCCodegen.md).
 
 Controller- and route-scoped middleware as nested wrappers; the standard
 `Middleware<Input, NextInput>` type; type-threading.
@@ -409,14 +421,51 @@ isn't expressible for `Middleware` and isn't needed here; see
 opaque/erased fold remains relevant only to M5.5's *global* context-free aggregation.)
 
 **Validation gate:** `open-telemetry` ports (pure-interception tracing,
-`Input == NextInput`) **and** one `auth-*` example ports (type-transforming: the
-authenticated principal is a typed value the handler requires, and removing the auth
-middleware fails to compile).
+`Input == NextInput`). The *type-transforming* property is proven at the **type level** by
+[spike-15](../../swift-wire-spikes/spike-15-wiremvc-opaque-middleware-fold/) /
+[spike-21](../../swift-wire-spikes/spike-21-wiremvc-transforming-rawroute/) (a middleware
+transforming the box — `Box<Ctx>` → `Box<AuthCtx>` — read by a *raw* terminal off the final
+box), **not** by a typed handler projecting a middleware-produced value off its parameters:
+the shipped terminal discards the `RequestContext` (`contextName: "_"`), so **handler-parameter
+projection ("B-typed") is not a shipped mechanism** — see the M5.4 decision below. The `auth-*`
+cluster's real gate is **M5.4**, where the principal is a request-scoped *injected* value
+(A-inject) and "remove the producer ⇒ won't compile" holds at the scope-entry/graph seam.
 
-## Iteration M5.4 — request-scoped controllers
+## Remaining work (in completion order)
+
+M5.0–M5.3 are shipped (above). The iterations below are the remaining work, top-to-bottom in
+completion order: **M5.4** is next; **M5.4E** interleaves with it (not a later step); **M5.4R** is
+a conditional raw-track follow-on that lands when a transformed-slot example forces it; then
+**M5.5** and **M5.6**. The `E`/`R` suffixes mark items that hang off the M5.4 phase rather than
+being sequential milestones with their own gate-between.
+
+## Iteration M5.4 — request-scoped controllers — ▶ NEXT
 
 Interleaved with M5.3 in practice — auth *identity* is the canonical request-scoped
 value a type-transforming middleware produces and a request-scoped controller consumes.
+
+**How a middleware-produced / request-scoped value reaches a handler — decided: A-inject
+(request-scope injection), not B-typed (handler-parameter projection).** Three positions were
+weighed against the auth cluster:
+- **A-inject** — a `@Scoped(seed:)` controller `@Inject`s the value (principal, session) as an
+  ordinary request-scoped binding built from the seed; the handler reads `self.principal`.
+  **Committed** — it covers the whole `auth-*`/`sessions`/`todos-auth-fluent` set.
+- **B-raw** — a `@RawRoute` handler takes a transformed box slot (context/reader/sender) by its
+  *generic* type. Works today for plain slots; the *concrete* spelling is a deferred M5.2 follow-on.
+- **B-typed** — a typed handler declares `@Principal user: User` and the terminal decomposes the
+  enriched box. **Retired from M5's committed scope** — the shipped terminal discards the
+  `RequestContext`, and building it is the full decomposition-transformer subsystem
+  ([Notes/DecompositionTransformers.md](Notes/DecompositionTransformers.md)), which nothing in the
+  auth cluster forces.
+
+The **"remove the producer ⇒ won't compile"** guarantee is **not lost** under A-inject, it
+**relocates**: the handler requires the request-scoped binding, so removing its producer — or,
+when the scope is seeded from an enriched context, the middleware that produces that context —
+fails at the scope-entry / graph-validation seam, build-time as before. **Auth-failure division
+of labor** (settled with the route-error-handling iteration): gates/middleware own *pre-handler
+policy* failures (401/403) by *writing* the response and short-circuiting to `.responded` before
+the terminal constructs the request scope; handler-thrown *domain* errors (404/409/422) are mapped
+by the terminal error map. One producer per status, no overlap.
 
 **Scope:**
 - A `@Scoped(seed: RequestSeed.self)` controller becomes an **app-scoped proxy
@@ -464,9 +513,71 @@ controllers (M2's *Deferred to M5* reasoning: embedding scope entry needs routin
 *generates*). It builds directly on M5.1's generated witness and M5.3's typed
 middleware.
 
-**Validation gate:** `sessions` or `todos-auth-fluent` ports — a request-scoped
-controller injects a request-scoped principal/session, constructed fresh per request,
-with a `@Singleton` controller alongside in the same app.
+**Validation gate:** `sessions` or `todos-auth-fluent` ports on **A-inject** — a request-scoped
+controller injects a request-scoped principal/session, constructed fresh per request, with a
+`@Singleton` controller alongside in the same app; auth failures return 401/403 from a gate, and a
+domain failure (a missing record) returns 404 via the terminal error map (route-error-handling
+iteration, interleaved).
+
+## Iteration M5.4E — route error handling (interleaved with M5.4)
+
+New in this plan; resolves the "Response surface beyond `@JSONResponse`" open decision below.
+Interleaved with M5.4 because the auth/CRUD examples that gate M5.4 throw domain errors that must
+map to real statuses — the shipped terminal catches only `WireMVCBindingError`, so every other
+throw is a 500 today (`getUser`'s `try store.find(id)` already returns 500, not 404, for a missing
+id). Full design record: [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
+
+**Scope:**
+- **Terminal-scoped, not global.** Error→response mapping lives at the **terminal**, because that
+  is the only place still holding the sender when the handler throws: an outer middleware has
+  already consumed the box (and its sender) into `next`, so it can *observe* a throw but cannot
+  write a response to it. This is a *consequence* of the Model-B box shape — the same root as the
+  short-circuit model, not a separate choice.
+- **`@ErrorMap` at controller and route scope**, composed controller-outer → route-inner
+  (most-specific wins), consulted inside the terminal's existing `catch` — extending the shipped
+  `WireMVCBindingError` → status path, not a new runtime layer.
+- **The global sliver is thin:** an unmapped throw propagates out of the chain to the
+  router/server default (500). A default error map is the outermost tier, *not* a global
+  middleware (which structurally can't respond to a throw).
+- **Scope boundary — raw handlers own their errors.** Once a raw handler starts streaming the
+  response is committed (the box's no-post-processing property), so a mid-stream throw can't be
+  remapped. Error maps are a typed-terminal concern.
+
+**Why now:** forced by M5.4's own gate (a `todos-auth` port returning 500 for a missing todo isn't
+a faithful port), and its design settles the auth-failure division of labor M5.4 depends on. It
+extends shipped M5.1 terminal codegen, so it does **not** wait on M5.5.
+
+**Validation gate:** a handler throwing a domain error (`NotFound` → 404, a validation error → 422)
+returns the mapped status; a controller-scope `@ErrorMap` covers every route and a route-scope one
+overrides it for a single route; an unmapped throw still reaches the router's 500.
+
+## Iteration M5.4R — concrete `@RawRoute` roles (raw-track follow-on, when forced)
+
+A contained follow-on to M5.2, positioned here because it lands *after* M5.4 — when the first
+transformed-slot streaming example is ported — not on the M5.4→M5.5 spine. Pulled out of M5.2 (now
+complete) so a shipped iteration doesn't carry unbuilt work.
+
+**Scope:**
+- The shipped raw handler identifies its context/reader/sender by *generic* constraint substring
+  (`rawGenericRoles`), so a **concrete** transformed slot — `responseSender: consuming
+  JsonMultiPartSender` off a sender-transforming middleware — falls through to
+  `unsupportedRawParameter`. The generic form is a poor substitute: it forces the middleware author
+  to hoist the whole capability into a refinement protocol, and there is **no `as?` rescue for a
+  `consuming` `~Copyable` value**, so anything the protocol didn't surface is unreachable.
+- The fix is **explicit positional roles** — `@RawRoute(.requestContext, .responseSender)` — a
+  contained feature in the `@MiddlewareFactory` mould, separable from the full
+  decomposition-transformer subsystem, that also restores a compile-time coupling (naming the
+  concrete sender forces the producing middleware present). Full record:
+  [Notes/DecompositionTransformers.md](Notes/DecompositionTransformers.md) (item 1c).
+
+**Why now (conditional):** a transformed-slot example (`response-body-processing` multipart,
+`proxy-server`) effectively *demands* the concrete spelling, so this lands **with** that example. It
+is independent of M5.5 (the composition macro doesn't depend on it), so it can slot in whenever the
+transformed-streaming examples are prioritised.
+
+**Validation gate:** a `response-body-processing`/multipart example ports with a handler taking a
+concrete transformed sender (`consuming JsonMultiPartSender`) via `@RawRoute(.responseSender)`, and
+removing the sender-transforming middleware fails to compile at the handler.
 
 ## Iteration M5.5 — Tier-2 `@WireHummingbird` composition-root macro
 
@@ -587,8 +698,11 @@ transport-only contributor mounts through its own adapter.
 - **Global middleware** (M5.5) — committed to **(i) framework concern now, (iii)
   context-free responder/transport decorator when forced, never (ii) collated
   `RouterMiddleware`s**.
-- **Response surface beyond `@JSONResponse`** — status/headers control, error→response
-  mapping. Start narrow (status + JSON); grow only when an example forces it.
+- **Response surface beyond `@JSONResponse`** — status/headers control, error→response mapping.
+  **error→response mapping decided: terminal-scoped `@ErrorMap` at controller/route scope**
+  (iteration M5.4E, interleaved with M5.4), with a thin default/router-500 global sliver, *not*
+  global middleware — see [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
+  Status/headers control stays narrow (status + JSON); grow only when an example forces it.
 
 ## When M5 is "done"
 
@@ -597,8 +711,13 @@ transport-only contributor mounts through its own adapter.
   cross-runtime by construction — natively on the proposal server and, through the opt-in
   `WireMVCServerTransport` adapter, on Hummingbird/Vapor; `@Middleware` folded into the
   generated routing (type-transforming middleware surfacing as compile errors); the raw
-  escape-hatch handler; request-scoped controllers; and the Tier-2 `@WireHummingbird`
-  composition-root macro.
+  escape-hatch handler; request-scoped controllers; the Tier-2 `@WireHummingbird`
+  composition-root macro; and terminal-scoped `@ErrorMap` route error handling. Request-scoped
+  controllers consume middleware-produced values via **A-inject** (request-scope injection);
+  handler-parameter projection off an enriched box (**B-typed**) and the general
+  decomposition-transformer surface (`@Configuration`, pluggable bindings) are **deferred** — see
+  [Notes/DecompositionTransformers.md](Notes/DecompositionTransformers.md); the contained
+  **concrete `@RawRoute` role** slice lands with the first transformed-slot streaming example.
 - Wire Core's adapter contract gains a capability axis — `WireAdapterAnnotationV1`'s
   unified `capability:` adds two **input-edge** cases alongside the shipped
   `.contributes(to:)` **output-edge** case: `.injectsDependencyOnArgument` (inject an
