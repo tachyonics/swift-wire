@@ -42,13 +42,18 @@ package struct SynthesizedFactory: Sendable {
     /// The synthesised concrete type name (`_WireFactory_MyMiddleware_session`).
     package let factoryTypeName: String
     /// The middleware type the factory produces — the template's qualified name
-    /// (`SessionMiddleware`), specialised at the assisted parameters in `create`.
+    /// (`SessionMiddleware`).
     package let producedTypeName: String
-    /// The assisted parameters — the template's generic parameter names, taken as
-    /// metatype arguments to `create`.
-    package let assistedParameterNames: [String]
-    /// Per-assisted-parameter protocol constraints, restated on `create`'s `where`.
-    package let assistedParameterConstraints: [String: String]
+    /// The produced type's generic parameters, in declaration order. Split into two axes: the *injected*
+    /// parameters become the factory struct's own generics (resolved from the graph), the rest are
+    /// *assisted* (box-role) parameters on `create`.
+    package let parameterNames: [String]
+    /// Per-parameter protocol constraint (the inheritance clause) for any parameter that declares one.
+    package let parameterConstraints: [String: String]
+    /// The parameters resolved from the graph — a parameter is injected iff it appears (bare or as a
+    /// generic argument) in an `@Inject` member's type. These are the factory struct's own generics,
+    /// threaded from the graph's lift parameter; the rest are assisted (a box role) and live on `create`.
+    package let injectedParameterNames: [String]
     /// The template's `where`-clause requirements (associated-type / same-type /
     /// `~Copyable`), verbatim and without the `where` keyword, or `nil` — restated
     /// on `create` after the per-parameter constraints.
@@ -66,12 +71,27 @@ package struct SynthesizedFactory: Sendable {
     /// `create` in positional-declaration-order form (3.1 / no mapping visible).
     package let roleMapping: FactoryRoleMapping?
 
+    /// The assisted (box-role) parameters — every produced-type parameter that isn't injected, in
+    /// declaration order. These are `create`'s generics.
+    package var assistedParameterNames: [String] {
+        parameterNames.filter { !injectedParameterNames.contains($0) }
+    }
+    /// The assisted parameters' constraints (restated on `create`).
+    package var assistedParameterConstraints: [String: String] {
+        parameterConstraints.filter { !injectedParameterNames.contains($0.key) }
+    }
+    /// The injected parameters' constraints (stated on the factory struct's own generics).
+    package var injectedParameterConstraints: [String: String] {
+        parameterConstraints.filter { injectedParameterNames.contains($0.key) }
+    }
+
     package init(
         keyReference: String,
         factoryTypeName: String,
         producedTypeName: String,
-        assistedParameterNames: [String],
-        assistedParameterConstraints: [String: String],
+        parameterNames: [String],
+        parameterConstraints: [String: String],
+        injectedParameterNames: [String] = [],
         whereClause: String? = nil,
         dependencies: [DependencyParameter],
         producedTypeModule: String,
@@ -81,8 +101,9 @@ package struct SynthesizedFactory: Sendable {
         self.keyReference = keyReference
         self.factoryTypeName = factoryTypeName
         self.producedTypeName = producedTypeName
-        self.assistedParameterNames = assistedParameterNames
-        self.assistedParameterConstraints = assistedParameterConstraints
+        self.parameterNames = parameterNames
+        self.parameterConstraints = parameterConstraints
+        self.injectedParameterNames = injectedParameterNames
         self.whereClause = whereClause
         self.dependencies = dependencies
         self.producedTypeModule = producedTypeModule
@@ -98,12 +119,14 @@ func synthesizedFactory(
     from template: DiscoveredFactoryTemplate,
     roleMapping: FactoryRoleMapping? = nil
 ) -> SynthesizedFactory {
-    SynthesizedFactory(
+    let assisted = Set(assistedParameters(of: template))
+    return SynthesizedFactory(
         keyReference: template.keyReference,
         factoryTypeName: factoryTypeName(forKey: template.keyReference),
         producedTypeName: template.qualifiedTypeName,
-        assistedParameterNames: template.genericParameterNames,
-        assistedParameterConstraints: template.genericParameterConstraints,
+        parameterNames: template.genericParameterNames,
+        parameterConstraints: template.genericParameterConstraints,
+        injectedParameterNames: template.genericParameterNames.filter { !assisted.contains($0) },
         whereClause: template.genericWhereClause,
         dependencies: template.dependencies,
         producedTypeModule: template.originModule,
@@ -142,6 +165,31 @@ func factoryTypeName(forKey keyReference: String) -> String {
 /// matching parameter, so the label is a contract shared by both sides.
 func factoryDependencyName(forKey keyReference: String) -> String {
     "_wireFactory_" + sanitizedKeyFragment(keyReference)
+}
+
+/// The type the factory dependency is spelled with when lifted onto a consuming binding (the proxy). A
+/// factory with no injected axis is the bare `_WireFactory_<key>`. One generic over an injected axis is
+/// spelled with the *consumer's* generic parameters that share the injected parameters' constraints —
+/// `_WireFactory_<key><Repository>` on a proxy generic over `Repository: TodoRepository`. Parameterising
+/// the field this way makes it thread the graph's lift parameter transitively, exactly as the subject
+/// dependency (`Controller<Repository>`) does, so the middleware and the controller share one backend.
+func factoryDependencyType(
+    forKey keyReference: String,
+    factory: SynthesizedFactory?,
+    liftedOnto binding: DiscoveredBinding
+) -> String {
+    let bare = factoryTypeName(forKey: keyReference)
+    guard let factory, !factory.injectedParameterNames.isEmpty,
+        case .scopeBound(let consumer) = binding
+    else { return bare }
+    let arguments = factory.injectedParameterNames.map { injected -> String in
+        let constraint = factory.injectedParameterConstraints[injected].map(canonicalTypeName)
+        let match = consumer.genericParameterNames.first { parameter in
+            consumer.genericParameterConstraints[parameter].map(canonicalTypeName) == constraint
+        }
+        return match ?? factory.injectedParameterConstraints[injected].map { "some \($0)" } ?? injected
+    }
+    return "\(bare)<\(arguments.joined(separator: ", "))>"
 }
 
 /// Collate the `@X(key)`-driven factory demands and synthesise one factory per
@@ -229,7 +277,8 @@ package func applyFactorySynthesis(
             let deps = demands.map { demand in
                 DependencyParameter(
                     name: factoryDependencyName(forKey: demand.key),
-                    type: factoryTypeName(forKey: demand.key),
+                    type: factoryDependencyType(
+                        forKey: demand.key, factory: factoriesByKey[demand.key], liftedOnto: binding),
                     kind: .injectInitParameter,
                     location: demand.location
                 )
@@ -253,13 +302,18 @@ package func applyFactorySynthesis(
     return (result, factories)
 }
 
-/// The binding that constructs a synthesised factory — a concrete struct whose
-/// dependencies are the template's, resolved and constructed like any `@Singleton`.
+/// The binding that constructs a synthesised factory — a struct whose dependencies are the template's,
+/// resolved and constructed like any `@Singleton`. Generic over the injected axis (`_WireFactory_<key>
+/// <Repository>`): each injected `@Inject` dependency is a bare-parameter dependency on a determining
+/// constraint, so the binding is a *lift node* — the transitive-lift machinery threads the graph-resolved
+/// backend through it exactly as it does the controller. A factory with no injected axis stays a plain
+/// non-generic binding (the 3.1/3.2 case).
 func factoryBinding(_ factory: SynthesizedFactory, module: String) -> DiscoveredScopeBoundType {
     DiscoveredScopeBoundType(
         typeName: factory.factoryTypeName,
         typeKind: "struct",
-        genericParameterNames: [],
+        genericParameterNames: factory.injectedParameterNames,
+        genericParameterConstraints: factory.injectedParameterConstraints,
         dependencies: factory.dependencies,
         location: factory.location,
         originModule: module
@@ -280,15 +334,27 @@ func factoryBinding(_ factory: SynthesizedFactory, module: String) -> Discovered
 ///         }
 ///     }
 package func renderFactoryDeclaration(_ factory: SynthesizedFactory) -> String {
+    // The factory struct is generic over the *injected* axis (parameters resolved from the graph — the
+    // 3.3 injected backend); those become the struct's own generics, threaded from the graph's lift
+    // parameter, and store the `@Inject` dependencies typed by them.
+    let injected = factory.injectedParameterNames
+    let structGenerics = injected.map { name in
+        factory.injectedParameterConstraints[name].map { "\(name): \($0)" } ?? name
+    }
+    let structGenericClause = structGenerics.isEmpty ? "" : "<\(structGenerics.joined(separator: ", "))>"
+
     // With a role mapping, `create` is generic over the adapter's canonical roles in their fixed order
-    // (the order the consumer's macro calls with), each a metatype; the middleware's own parameters are
-    // substituted → role names in the return type. Without one, `create` keeps the positional
+    // (the order the consumer's macro calls with), each a metatype; the middleware's assisted parameters
+    // are substituted → role names in the return type. Without one, `create` keeps the positional
     // declaration-order form. An assisted role the middleware doesn't use is a phantom generic parameter.
-    let assisted = factory.assistedParameterNames
-    let createGenerics = factory.roleMapping?.canonicalRoles ?? assisted
+    let createGenerics = factory.roleMapping?.canonicalRoles ?? factory.assistedParameterNames
     let genericClause = createGenerics.isEmpty ? "" : "<\(createGenerics.joined(separator: ", "))>"
     let createParameters = createGenerics.map { "_: \($0).Type" }.joined(separator: ", ")
-    let returnArguments = assisted.map { factory.roleMapping?.parameterRoles[$0] ?? $0 }
+    // The produced type's arguments in declaration order: an injected parameter is the factory struct's
+    // own generic (spelled as itself); an assisted parameter is spelled as its role (or itself, unmapped).
+    let returnArguments = factory.parameterNames.map { name in
+        injected.contains(name) ? name : (factory.roleMapping?.parameterRoles[name] ?? name)
+    }
     let returnType =
         returnArguments.isEmpty
         ? factory.producedTypeName
@@ -311,7 +377,7 @@ package func renderFactoryDeclaration(_ factory: SynthesizedFactory) -> String {
         .joined(separator: ", ")
 
     var lines: [String] = []
-    lines.append("struct \(factory.factoryTypeName): Sendable {")
+    lines.append("struct \(factory.factoryTypeName)\(structGenericClause): Sendable {")
     for dependency in factory.dependencies {
         lines.append("    let \(dependency.name ?? dependency.type): \(dependency.type)")
     }

@@ -200,8 +200,8 @@ struct FactorySynthesisTests {
             keyReference: "MyMiddleware.session",
             factoryTypeName: "_WireFactory_MyMiddleware_session",
             producedTypeName: "SessionMiddleware",
-            assistedParameterNames: ["Ctx", "Reader", "Sender"],
-            assistedParameterConstraints: ["Ctx": "RequestContext"],
+            parameterNames: ["Ctx", "Reader", "Sender"],
+            parameterConstraints: ["Ctx": "RequestContext"],
             dependencies: [
                 DependencyParameter(
                     name: "store",
@@ -235,8 +235,8 @@ struct FactorySynthesisTests {
             keyReference: "Keys.mw",
             factoryTypeName: "_WireFactory_Keys_mw",
             producedTypeName: "Mw",
-            assistedParameterNames: ["Ctx", "Reader"],
-            assistedParameterConstraints: ["Ctx": "RequestContext & ~Copyable"],
+            parameterNames: ["Ctx", "Reader"],
+            parameterConstraints: ["Ctx": "RequestContext & ~Copyable"],
             whereClause: "Reader.ReadElement == UInt8, Reader: ~Copyable",
             dependencies: [
                 DependencyParameter(
@@ -264,8 +264,8 @@ struct FactorySynthesisTests {
                 keyReference: key,
                 factoryTypeName: factoryTypeName(forKey: key),
                 producedTypeName: type,
-                assistedParameterNames: ["Ctx"],
-                assistedParameterConstraints: [:],
+                parameterNames: ["Ctx"],
+                parameterConstraints: [:],
                 dependencies: [],
                 producedTypeModule: producedModule,
                 location: mockLocation("\(type).swift")
@@ -364,5 +364,103 @@ struct FactorySynthesisTests {
         )
         let edges = controller.dependencies.filter { $0.type == "_WireFactory_MyMiddleware_session" }
         #expect(edges.count == 1)
+    }
+}
+
+/// M5.3, 3.3 — the injected axis. A `@Factory` middleware that `@Inject`s a generic dependency (the
+/// backend the controller shares) makes that generic parameter *injected*: the synthesised factory
+/// becomes generic over it and threads the graph-resolved backend through the transitive lift, exactly
+/// as the controller does. The rest of the parameters stay *assisted* (box roles on `create`).
+@Suite("Factory injected axis (3.3)")
+struct FactoryInjectedAxisTests {
+    private func auditFactory() -> SynthesizedFactory {
+        SynthesizedFactory(
+            keyReference: "Keys.audit",
+            factoryTypeName: "_WireFactory_Keys_audit",
+            producedTypeName: "AuditGate",
+            parameterNames: ["Ctx", "Repository"],
+            parameterConstraints: ["Repository": "TodoRepository"],
+            injectedParameterNames: ["Repository"],
+            dependencies: [
+                DependencyParameter(
+                    name: "repository", type: "Repository", kind: .injectProperty,
+                    location: mockLocation("M.swift"))
+            ],
+            producedTypeModule: testModule,
+            location: mockLocation("M.swift")
+        )
+    }
+
+    @Test func rendersFactoryGenericOverInjectedAxisCreateOverAssisted() {
+        let expected = """
+            struct _WireFactory_Keys_audit<Repository: TodoRepository>: Sendable {
+                let repository: Repository
+                init(repository: Repository) {
+                    self.repository = repository
+                }
+                func create<Ctx>(_: Ctx.Type) -> AuditGate<Ctx, Repository> {
+                    AuditGate(repository: repository)
+                }
+            }
+            """
+        #expect(renderFactoryDeclaration(auditFactory()) == expected)
+    }
+
+    @Test func factoryBindingIsAGenericLiftNodeOverTheInjectedAxis() {
+        let binding = factoryBinding(auditFactory(), module: testModule)
+        #expect(binding.genericParameterNames == ["Repository"])
+        #expect(binding.genericParameterConstraints == ["Repository": "TodoRepository"])
+        // Repository appears in the `repository: Repository` dependency and is constrained to a
+        // determining protocol, so every parameter is determined → a lift node that threads T0.
+        #expect(DiscoveredBinding.scopeBound(binding).isLiftNode)
+    }
+
+    @Test func nonInjectedFactoryStaysNonGeneric() {
+        // A 3.2 factory (concrete deps only) has no injected axis → a plain non-generic binding.
+        let session = SynthesizedFactory(
+            keyReference: "Keys.session", factoryTypeName: "_WireFactory_Keys_session",
+            producedTypeName: "SessionMiddleware", parameterNames: ["Ctx", "Reader", "Sender"],
+            parameterConstraints: [:],
+            dependencies: [
+                DependencyParameter(name: "store", type: "Store", kind: .injectProperty, location: mockLocation("M.swift"))
+            ],
+            producedTypeModule: testModule, location: mockLocation("M.swift"))
+        #expect(factoryBinding(session, module: testModule).genericParameterNames.isEmpty)
+        #expect(renderFactoryDeclaration(session).hasPrefix("struct _WireFactory_Keys_session: Sendable {"))
+    }
+
+    @Test func proxyFactoryFieldIsParameterisedByTheSharedBackend() {
+        // A controller and its `@Middleware(key)` factory both generic over `Repository: TodoRepository`:
+        // the proxy holds the factory field as `_WireFactory_<key><Repository>`, threading its own
+        // parameter — so the middleware and the controller share the graph-resolved backend.
+        let source = """
+            let controllerAlias = WireAdapterAnnotationV1(
+                annotation: "Controller",
+                capability: .contributesProxy(to: Keys.routes, proxyTypePrefix: "_WireRouteContributor_"))
+            let middlewareAlias = WireAdapterAnnotationV1(annotation: "Middleware", capability: .injectsFactoryOnArgument)
+
+            @Factory(Keys.audit)
+            struct AuditGate<Ctx, Repository: TodoRepository>: Sendable { @Inject let repository: Repository }
+
+            @Singleton
+            @Controller
+            @Middleware(Keys.audit)
+            struct TodosController<Repository: TodoRepository>: Sendable { @Inject var repository: Repository }
+            """
+        let discovery = discover(in: source, sourcePath: "App.swift", module: testModule)
+        let proxied = applyContributorProxies(
+            to: discovery.allBindings, annotations: discovery.adapterAnnotations, useSites: discovery.aliasUseSites)
+        let synthesis = applyFactorySynthesis(
+            to: proxied.bindings, templates: discovery.factoryTemplates,
+            annotations: discovery.adapterAnnotations, useSites: proxied.useSites, consumerModule: testModule)
+        let proxy = try! #require(
+            (synthesis.bindings[.default] ?? []).compactMap { binding -> DiscoveredScopeBoundType? in
+                guard case .scopeBound(let type) = binding,
+                    type.typeName == "_WireRouteContributor_TodosController"
+                else { return nil }
+                return type
+            }.first)
+        let factoryField = proxy.dependencies.first { $0.name == "_wireFactory_Keys_audit" }
+        #expect(factoryField?.type == "_WireFactory_Keys_audit<Repository>")
     }
 }
