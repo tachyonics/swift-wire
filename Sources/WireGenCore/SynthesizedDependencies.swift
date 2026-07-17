@@ -68,11 +68,20 @@ func injectAdapterDependencies(
         annotations.filter { $0.capability == .injectsFromGraph }.map(\.annotationName)
     )
     guard !graphAnnotations.isEmpty else { return bindings }
-    let bindingKeysByReference = Dictionary(bindingKeys.map { ($0.keyReference, $0) }, uniquingKeysWith: { first, _ in first })
+    let bindingKeysByReference = Dictionary(
+        bindingKeys.map { ($0.keyReference, $0) },
+        uniquingKeysWith: { first, _ in first }
+    )
 
     var depsByIdentity: [String: [DependencyParameter]] = [:]
     for site in useSites where graphAnnotations.contains(site.annotationName) {
-        guard let argument = site.argument, let dep = adapterBindingDependency(argument, at: site.location, bindingKeysByReference: bindingKeysByReference) else { continue }
+        guard let argument = site.argument,
+            let dep = adapterBindingDependency(
+                argument,
+                at: site.location,
+                bindingKeysByReference: bindingKeysByReference
+            )
+        else { continue }
         depsByIdentity[site.targetIdentity, default: []].append(dep)
     }
     guard !depsByIdentity.isEmpty else { return bindings }
@@ -96,13 +105,20 @@ private func adapterBindingDependency(
     if argument.hasSuffix(".self") {
         let type = adapterDependencyType(from: argument)
         return DependencyParameter(
-            name: syntheticDependencyName(forType: type), type: type,
-            kind: .injectInitParameter, location: location)
+            name: syntheticDependencyName(forType: type),
+            type: type,
+            kind: .injectInitParameter,
+            location: location
+        )
     }
     if let bindingKey = bindingKeysByReference[argument], let type = bindingKey.typeArgument {
         return DependencyParameter(
-            name: syntheticDependencyName(forKey: argument), type: type,
-            kind: .injectInitParameter, location: location, keyIdentifier: argument)
+            name: syntheticDependencyName(forKey: argument),
+            type: type,
+            kind: .injectInitParameter,
+            location: location,
+            keyIdentifier: argument
+        )
     }
     return nil
 }

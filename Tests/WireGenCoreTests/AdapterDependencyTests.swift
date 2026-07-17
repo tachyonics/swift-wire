@@ -78,28 +78,48 @@ struct AdapterDependencyTests {
     private func controllerBinding() -> DiscoveredBinding {
         .scopeBound(
             DiscoveredScopeBoundType(
-                typeName: "Controller", typeKind: "struct", genericParameterNames: [],
-                dependencies: [], location: mockLocation("C.swift"), originModule: testModule))
+                typeName: "Controller",
+                typeKind: "struct",
+                genericParameterNames: [],
+                dependencies: [],
+                location: mockLocation("C.swift"),
+                originModule: testModule
+            )
+        )
     }
     private func middlewareAnnotation() -> DiscoveredAdapterAnnotation {
         DiscoveredAdapterAnnotation(
-            annotationName: "Middleware", capability: .injectsFromGraph,
-            location: mockLocation("A.swift"), originModule: testModule)
+            annotationName: "Middleware",
+            capability: .injectsFromGraph,
+            location: mockLocation("A.swift"),
+            originModule: testModule
+        )
     }
     private func useSite(argument: String) -> ContributionAliasUseSite {
         ContributionAliasUseSite(
-            annotationName: "Middleware", targetIdentity: "Controller", argument: argument,
-            location: mockLocation("C.swift"), originModule: testModule)
+            annotationName: "Middleware",
+            targetIdentity: "Controller",
+            argument: argument,
+            location: mockLocation("C.swift"),
+            originModule: testModule
+        )
     }
 
     /// `@Middleware(K)` where `K` is a `BindingKey<AuthGate>` → a dependency on `AuthGate` keyed by `K`.
     @Test func injectsKeyedDependencyForBindingKeyArgument() throws {
         let bindingKey = DiscoveredBindingKey(
-            keyReference: "Gates.primary", typeArgument: "AuthGate",
-            location: mockLocation("K.swift"), accessLevel: .internal, originModule: testModule)
+            keyReference: "Gates.primary",
+            typeArgument: "AuthGate",
+            location: mockLocation("K.swift"),
+            accessLevel: .internal,
+            originModule: testModule
+        )
         let injected = injectAdapterDependencies(
-            into: [controllerBinding()], annotations: [middlewareAnnotation()],
-            useSites: [useSite(argument: "Gates.primary")], bindingKeys: [bindingKey])
+            into: [controllerBinding()],
+            annotations: [middlewareAnnotation()],
+            useSites: [useSite(argument: "Gates.primary")],
+            bindingKeys: [bindingKey]
+        )
         let dep = try #require(injected.first?.dependencies.first)
         #expect(dep.type == "AuthGate")
         #expect(dep.keyIdentifier == "Gates.primary")
@@ -110,8 +130,11 @@ struct AdapterDependencyTests {
     /// the dependency pass injects nothing for it.
     @Test func leavesFactoryKeyArgumentToFactorySynthesis() {
         let injected = injectAdapterDependencies(
-            into: [controllerBinding()], annotations: [middlewareAnnotation()],
-            useSites: [useSite(argument: "Keys.session")], bindingKeys: [])
+            into: [controllerBinding()],
+            annotations: [middlewareAnnotation()],
+            useSites: [useSite(argument: "Keys.session")],
+            bindingKeys: []
+        )
         #expect(injected.first?.dependencies.isEmpty == true)
     }
 
