@@ -52,6 +52,7 @@ struct WireGen {
             adapterAnnotations: aggregate.adapterAnnotations,
             aliasUseSites: aggregate.aliasUseSites,
             factoryTemplates: aggregate.factoryTemplates,
+            bindingKeys: aggregate.bindingKeys,
             consumerModule: consumerModule
         )
 
@@ -644,6 +645,7 @@ private func applyPreGraphBindingPasses(
     adapterAnnotations: [DiscoveredAdapterAnnotation],
     aliasUseSites: [ContributionAliasUseSite],
     factoryTemplates: [DiscoveredFactoryTemplate],
+    bindingKeys: [DiscoveredBindingKey],
     consumerModule: String
 ) -> (factories: [SynthesizedFactory], proxyIdentities: Set<String>) {
     allBindings = applyAliasContributions(
@@ -663,7 +665,8 @@ private func applyPreGraphBindingPasses(
     allBindings = applyAdapterDependencies(
         to: allBindings,
         annotations: adapterAnnotations,
-        useSites: useSites
+        useSites: useSites,
+        bindingKeys: bindingKeys
     )
     let synthesis = applyFactorySynthesis(
         to: allBindings,

@@ -278,11 +278,26 @@ a controller and its middleware share a repository injected by type-erased gener
 feasibility spike (a plugin-emitted proxy holding `_WireFactory_<key><T0>`, `create` threading the
 resolved backend) de-risks exactly this shape.
 
-### 3.4 — Concrete `.self` pass-through (deferred)
+### 3.4 — Collapse every `@Middleware` to a graph injection (swift-wire DONE)
 
-`@Middleware(ConcreteType.self)` — inject an existing binding wrapped in a trivial pass-through
-factory so the witness call site stays uniform. Deferred until an example forces it; the design is in
-the record (*The consumer* section).
+Both `.self` forms constructed the middleware **inline** (`Concrete()` / `Generic<Builder…>()`), which
+silently assumes a no-arg init / no graph dependencies — unverifiable without auditing every referenced
+type. So every `@Middleware` becomes a **graph injection lifted onto the proxy**, and its deps are wired
+by the graph rather than assumed away.
+
+**swift-wire (done, 621 tests).** `.injectsFactoryOnArgument` and `.injectsDependencyOnArgument` collapse
+into one `.injectsFromGraph` capability, **dispatched on the argument's kind**: a `FactoryKey` (matches a
+`@Factory` template) → factory-lift (`create<box roles>` + injected axis); a `BindingKey<T>` → a keyed
+dependency on `T`; `T.self` → a by-type dependency. Factory-synthesis takes the factory-key use-sites;
+`SynthesizedDependencies` takes the `.self` / binding-key ones (now keyed-aware). Field-name handshake:
+`_wireFactory_<key>` / `_wire<Type>` / `_wire<sanitisedKey>`. Gains concrete **keyed** bindings for free.
+
+**WireMVC (next).** `@Middleware` → `.injectsFromGraph`. The witness is **mixed (Option A)**:
+`middlewareConstructions` classifies each use-site against the `@Factory` template keys the tool collects —
+factory key → `self._wireFactory_<key>.create(…)`; `.self` → `self._wire<Type>`; binding key →
+`self._wire<key>`. The inline construction and `MiddlewarePlaceholders.swift` (the `Wire*` placeholder
+types) retire; box-role-generic middleware become `@Factory` templates, concrete middleware become graph
+bindings. Examples: `LogRequests` → `@Factory` (no injected axis), any concrete middleware → a binding.
 
 ## Cross-cutting concerns
 

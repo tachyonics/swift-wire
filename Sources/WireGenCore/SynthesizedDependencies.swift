@@ -41,40 +41,48 @@ extension DiscoveredScopeBoundType {
     }
 }
 
-/// Inject a synthetic dependency for each use-site whose attribute matches a declared
-/// adapter-dependency (`WireAdapterDependencyV1`). `@X(T.self)` on a binding appends a
-/// dependency on `T` — delivered at construction through a wrapping init the adapter's
-/// macro generates. Mirror of `applyAliasContributions`; runs before graphs build.
+/// Inject a synthetic dependency for each `.injectsFromGraph` use-site whose argument names an existing
+/// binding — the *non-factory* half of the capability's dispatch. `@X(T.self)` appends an unkeyed
+/// dependency on `T`; `@X(K)` where `K` is a `BindingKey<T>` appends a dependency on `T` keyed `K`. A
+/// factory-key argument is skipped here (the factory-synthesis pass lifts it); an argument that is
+/// neither `.self`, a known binding key, nor a factory key is left alone. Mirror of `applyAliasContributions`;
+/// runs before graphs build.
 package func applyAdapterDependencies(
     to allBindings: [Partition: [DiscoveredBinding]],
     annotations: [DiscoveredAdapterAnnotation],
-    useSites: [ContributionAliasUseSite]
+    useSites: [ContributionAliasUseSite],
+    bindingKeys: [DiscoveredBindingKey]
 ) -> [Partition: [DiscoveredBinding]] {
-    allBindings.mapValues { injectAdapterDependencies(into: $0, annotations: annotations, useSites: useSites) }
+    allBindings.mapValues {
+        injectAdapterDependencies(into: $0, annotations: annotations, useSites: useSites, bindingKeys: bindingKeys)
+    }
 }
 
 func injectAdapterDependencies(
     into bindings: [DiscoveredBinding],
     annotations: [DiscoveredAdapterAnnotation],
-    useSites: [ContributionAliasUseSite]
+    useSites: [ContributionAliasUseSite],
+    bindingKeys: [DiscoveredBindingKey]
 ) -> [DiscoveredBinding] {
-    let dependencyAnnotations = Set(
-        annotations.filter { $0.capability == .injectsDependencyOnArgument }.map(\.annotationName)
+    let graphAnnotations = Set(
+        annotations.filter { $0.capability == .injectsFromGraph }.map(\.annotationName)
     )
-    guard !dependencyAnnotations.isEmpty else { return bindings }
+    guard !graphAnnotations.isEmpty else { return bindings }
+    let bindingKeysByReference = Dictionary(
+        bindingKeys.map { ($0.keyReference, $0) },
+        uniquingKeysWith: { first, _ in first }
+    )
 
     var depsByIdentity: [String: [DependencyParameter]] = [:]
-    for site in useSites where dependencyAnnotations.contains(site.annotationName) {
-        guard let argument = site.argument else { continue }
-        let referencedType = adapterDependencyType(from: argument)
-        depsByIdentity[site.targetIdentity, default: []].append(
-            DependencyParameter(
-                name: syntheticDependencyName(forType: referencedType),
-                type: referencedType,
-                kind: .injectInitParameter,
-                location: site.location
+    for site in useSites where graphAnnotations.contains(site.annotationName) {
+        guard let argument = site.argument,
+            let dep = adapterBindingDependency(
+                argument,
+                at: site.location,
+                bindingKeysByReference: bindingKeysByReference
             )
-        )
+        else { continue }
+        depsByIdentity[site.targetIdentity, default: []].append(dep)
     }
     guard !depsByIdentity.isEmpty else { return bindings }
 
@@ -86,17 +94,53 @@ func injectAdapterDependencies(
     }
 }
 
-/// The referenced type in an adapter-dependency attribute argument: strip a trailing
-/// `.self` (`"SomeFactory.self"` → `"SomeFactory"`).
+/// The binding dependency an `.injectsFromGraph` argument selects, or `nil` when the argument is a
+/// factory key (lifted by factory synthesis) or an unknown reference. `T.self` → an unkeyed dependency
+/// on `T`; a `BindingKey<T>` reference → a dependency on `T` keyed by the reference.
+private func adapterBindingDependency(
+    _ argument: String,
+    at location: SourceLocation,
+    bindingKeysByReference: [String: DiscoveredBindingKey]
+) -> DependencyParameter? {
+    if argument.hasSuffix(".self") {
+        let type = adapterDependencyType(from: argument)
+        return DependencyParameter(
+            name: syntheticDependencyName(forType: type),
+            type: type,
+            kind: .injectInitParameter,
+            location: location
+        )
+    }
+    if let bindingKey = bindingKeysByReference[argument], let type = bindingKey.typeArgument {
+        return DependencyParameter(
+            name: syntheticDependencyName(forKey: argument),
+            type: type,
+            kind: .injectInitParameter,
+            location: location,
+            keyIdentifier: argument
+        )
+    }
+    return nil
+}
+
+/// The referenced type in an adapter-dependency `.self` argument: strip a trailing
+/// `.self` (`"SomeType.self"` → `"SomeType"`).
 func adapterDependencyType(from argument: String) -> String {
     argument.hasSuffix(".self") ? String(argument.dropLast(".self".count)) : argument
 }
 
-/// The init-parameter label for a synthesized adapter dependency — deterministic so the
-/// adapter's macro-generated wrapping init can name the matching parameter. `_wire`-
-/// prefixed lowerCamelCase of the type, so it can't collide with a user `@Inject`.
+/// The init-parameter label for a by-type adapter dependency — deterministic so the proxy field and the
+/// adapter's witness agree. `_wire`-prefixed upper-cameled simple type name, so it can't collide with a
+/// user `@Inject`.
 func syntheticDependencyName(forType type: String) -> String {
     let withoutGenerics = type.prefix { $0 != "<" }  // "Mod.Foo<A>" -> "Mod.Foo"
     let simple = withoutGenerics.split(separator: ".").last.map(String.init) ?? String(withoutGenerics)
-    return "_wire" + simple.prefix(1).uppercased() + simple.dropFirst()  // e.g. _wireSomeFactory
+    return "_wire" + simple.prefix(1).uppercased() + simple.dropFirst()  // e.g. _wireSomeType
+}
+
+/// The init-parameter label for a keyed adapter dependency — `_wire` + the sanitised key
+/// (`Database.primary` → `_wireDatabase_primary`), distinct across keys so two keyed bindings of the same
+/// type don't collide.
+func syntheticDependencyName(forKey keyReference: String) -> String {
+    "_wire" + sanitizedKeyFragment(keyReference)
 }

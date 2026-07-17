@@ -88,7 +88,7 @@ private func reattributingInputEdges(
 ) -> [ContributionAliasUseSite] {
     let inputEdgeAnnotations = Set(
         annotations
-            .filter { $0.capability == .injectsFactoryOnArgument || $0.capability == .injectsDependencyOnArgument }
+            .filter { $0.capability == .injectsFromGraph }
             .map(\.annotationName)
     )
     return useSites.map { site in
