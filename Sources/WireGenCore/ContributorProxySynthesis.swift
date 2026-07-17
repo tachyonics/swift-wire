@@ -23,9 +23,13 @@ package func applyContributorProxies(
     to allBindings: [Partition: [DiscoveredBinding]],
     annotations: [DiscoveredAdapterAnnotation],
     useSites: [ContributionAliasUseSite]
-) -> (bindings: [Partition: [DiscoveredBinding]], useSites: [ContributionAliasUseSite]) {
+) -> (
+    bindings: [Partition: [DiscoveredBinding]],
+    useSites: [ContributionAliasUseSite],
+    proxyIdentities: Set<String>
+) {
     let directiveBySubject = contributorProxyDirectives(annotations: annotations, useSites: useSites)
-    guard !directiveBySubject.isEmpty else { return (allBindings, useSites) }
+    guard !directiveBySubject.isEmpty else { return (allBindings, useSites, []) }
 
     // Synthesise a proxy beside each proxied subject, recording subject identity → proxy identity.
     var proxyBySubject: [String: String] = [:]
@@ -45,7 +49,10 @@ package func applyContributorProxies(
     }
 
     let reattributed = reattributingInputEdges(useSites, toProxies: proxyBySubject, annotations: annotations)
-    return (result, reattributed)
+    // The qualified names of the proxies synthesised here — the plugin renders each one's *structural*
+    // declaration (`renderContributorProxyDeclaration`) into the consumer graph file, since Phase A moves
+    // proxy-type emission out of the adapter macro and into the plugin.
+    return (result, reattributed, Set(proxyBySubject.values))
 }
 
 /// Map each proxied subject's identity to the proxy directive (multibinding key + type-name prefix) it

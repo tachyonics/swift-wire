@@ -54,7 +54,7 @@ struct WireGen {
         // Pre-graph binding rewrites — contribution aliases (`@X` → `@Contributes`),
         // adapter dependencies (`@X(T.self)`), and factory synthesis (`@X(key)`) — mutate
         // the bindings before graphs build; synthesis also yields the factories to emit.
-        let synthesizedFactories = applyPreGraphBindingPasses(
+        let preGraph = applyPreGraphBindingPasses(
             to: &aggregate.allBindings,
             adapterAnnotations: aggregate.adapterAnnotations,
             aliasUseSites: aggregate.aliasUseSites,
@@ -103,14 +103,13 @@ struct WireGen {
             aggregate.imports
             + foreignImports(in: allBindingsFlat, consumerModule: consumerModule)
             + conformanceOriginImports(aggregate.graphConformances, consumerModule: consumerModule)
-            + factoryProducedTypeImports(synthesizedFactories, consumerModule: consumerModule)
+            + factoryProducedTypeImports(preGraph.factories, consumerModule: consumerModule)
 
         // Factory TYPES are owned by the `@Factory` template's module, so this graph consumer
         // declares only its own-module factories; dependency-module factories are declared by
         // those modules' own plugin runs and referenced here via import. Construction/injection
         // (in `allBindings`) stays consumer-driven and spans every consumed factory.
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
-        let ownedFactoryTypes = consumerOwnedFactoryTypes(aggregate)
         let generated = renderWireGraph(
             imports: imports,
             topologicalOrder: defaultOrder,
@@ -118,7 +117,7 @@ struct WireGen {
             seedScopeOrders: seedScopeOrders,
             graphConformances: aggregate.graphConformances,
             multibindingKeys: aggregate.multibindingKeys,
-            syntheticTypeDeclarations: ownedFactoryTypes
+            syntheticTypeDeclarations: consumerSyntheticTypes(aggregate, proxyIdentities: preGraph.proxyIdentities)
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -635,6 +634,20 @@ private func consumerOwnedFactoryTypes(_ aggregate: DiscoveryAggregate) -> [Stri
     )
 }
 
+/// The module-scope type declarations the graph consumer emits into its generated file: the owned
+/// factory types, then the contributor-proxy *structural* declarations (Phase A). The plugin emits each
+/// `.contributesProxy` proxy struct — subject + factory fields + init, body hole — into the consumer
+/// module, superseding the adapter macro's peer-type emission; the witness (and the adapter-protocol
+/// conformance) arrive from the adapter's domain tool as an extension in this same module. Read after
+/// factory synthesis so each proxy carries its complete field set.
+private func consumerSyntheticTypes(
+    _ aggregate: DiscoveryAggregate,
+    proxyIdentities: Set<String>
+) -> [String] {
+    consumerOwnedFactoryTypes(aggregate)
+        + renderContributorProxyTypes(proxyIdentities: proxyIdentities, in: aggregate.allBindings)
+}
+
 private func runLibraryMode(arguments: [String]) throws {
     guard arguments.count >= 3 else { WireGen.printUsageAndExit() }
     let factoryOutputPath = arguments[2]
@@ -697,16 +710,18 @@ private func runLibraryMode(arguments: [String]) throws {
 
 /// Run the pre-graph binding rewrites in order — contribution aliases, adapter
 /// dependencies, then factory synthesis — mutating `allBindings` in place and
-/// returning the synthesised factories the emitter declares. Each pass consumes
-/// the previous pass's output, so ordering is load-bearing: an aliased
-/// contribution or injected dependency is visible to synthesis.
+/// returning the synthesised factories the emitter declares plus the qualified
+/// names of the synthesised contributor proxies (whose *structural* declarations
+/// the emitter renders). Each pass consumes the previous pass's output, so
+/// ordering is load-bearing: an aliased contribution or injected dependency is
+/// visible to synthesis.
 private func applyPreGraphBindingPasses(
     to allBindings: inout [Partition: [DiscoveredBinding]],
     adapterAnnotations: [DiscoveredAdapterAnnotation],
     aliasUseSites: [ContributionAliasUseSite],
     factoryTemplates: [DiscoveredFactoryTemplate],
     consumerModule: String
-) -> [SynthesizedFactory] {
+) -> (factories: [SynthesizedFactory], proxyIdentities: Set<String>) {
     allBindings = applyAliasContributions(
         to: allBindings,
         aliases: adapterAnnotations,
@@ -734,5 +749,5 @@ private func applyPreGraphBindingPasses(
         consumerModule: consumerModule
     )
     allBindings = synthesis.bindings
-    return synthesis.factories
+    return (synthesis.factories, proxied.proxyIdentities)
 }
