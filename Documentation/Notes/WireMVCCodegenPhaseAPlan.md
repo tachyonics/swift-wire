@@ -134,10 +134,20 @@ types any more, since `@Controller` is a marker. Synchronized cutover: swift-wir
 plugin-drop land together. Gate: the shared `Controllers` library serves through the consumer-generated
 witness + consumer-emitted factories, all three runtimes (CI).
 
-**A5 — un-park 3.3 (injected axis).** Now trivial: the plugin owns the proxy, so the factory becomes
-generic over the injected axis and threads via `T0` (spike-22's shape) — no macro coordination, single-
-*and* multi-generic. Gate: a controller + middleware sharing a repository (injected by type-erased
-generic) serves end-to-end.
+**A5 — un-park 3.3 (injected axis). swift-wire side DONE.** A `@Factory` middleware that `@Inject`s a
+generic dependency makes that parameter *injected* (`assistedParameters(of:)`'s complement — already
+computed, no new annotation; the injected axis follows from `@Inject`, not a role). The synthesised factory
+becomes generic over it: `SynthesizedFactory` splits `parameterNames` into injected (the factory struct's
+own generics) and assisted (box roles on `create`); `renderFactoryDeclaration` emits
+`struct _WireFactory_<key><Repository: TodoRepository> { let repository: Repository; func create<Ctx>(…)
+-> Produced<Ctx, Repository> }`; `factoryBinding` is generic over the injected axis with the injected
+`@Inject` deps as bare-parameter dependencies, so it's a **lift node** the *existing* transitive-lift
+machinery threads `T0` through; and the proxy's factory field is spelled `_WireFactory_<key><Repository>`
+(matched to the consumer's generic param by constraint), so it threads via the proxy's own parameter.
+Verified by a manual WireGen run producing spike-22's exact shape (`_WireFactory_<key><T0>`,
+`Controller<T0>`, proxy `<T0>`, sharing one backend) + 4 unit tests; 619 tests pass. No macro coordination.
+**Gate (remaining):** `Controllers`' `AuditGate` gains a `Repository: TodoRepository` injected axis
+(`@Inject let repository: Repository`, sharing the controller's backend); the runtimes serve end-to-end (CI).
 
 ## Cross-cutting
 

@@ -234,8 +234,8 @@ struct FactoryRoleMappingTests {
             keyReference: "Keys.factory",
             factoryTypeName: "_WireFactory_Keys_factory",
             producedTypeName: producedType,
-            assistedParameterNames: params,
-            assistedParameterConstraints: constraints,
+            parameterNames: params,
+            parameterConstraints: constraints,
             whereClause: whereClause,
             dependencies: [
                 DependencyParameter(
