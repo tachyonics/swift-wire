@@ -105,18 +105,34 @@ A0 seam. The route-shape diagnostics (unannotated parameter, path mismatch, raw-
 concrete-parameter finding in the foundation note) move here, anchored at source locations. Unit-tested
 against every route shape, **asserting output parity with the current macro** to catch drift.
 
-**A3 — cutover: `@Controller` → marker.** Drop the macro's Extension/Peer witness codegen; `@Controller`
-stays on `.contributesProxy` (unchanged name) but the plugin now goes live emitting the structural half
-(A1's `renderContributorProxyDeclaration`) into the consumer graph file, and the domain tool (A2) emits the
-witness extension — the macro emits neither. Because the plugin-emitted struct and the macro-emitted struct
-are the same type name, this flip is **synchronized** (swift-wire go-live + adapter macro-drop land
-together). New constraint: a route the consumer-module witness can't reach is a **public-route diagnostic**.
-Gate: `WireMVCExample` + all three example runtimes serve **identically**.
+**A3 — cutover: `@Controller` → marker. DONE.** `@Controller` is a marker (expands to nothing); it stays
+on `.contributesProxy` (unchanged name). The plugin now goes live: WireGen emits the structural half (A1's
+`renderContributorProxyDeclaration`) into the consumer graph file and is published as an executable product;
+the adapter-owned `WireMVCBuildPlugin` runs WireGen + `WireMVCRouteGen` (A2), which emits the witness
+extension — the macro emits neither. A consumer applies `WireMVCBuildPlugin` instead of `WireBuildPlugin`.
+The flip was **synchronized** across three repos (swift-wire #191 go-live → wire-mvc marker+plugin → the
+three example runtimes adopt `WireMVCBuildPlugin`).
 
-**A4 — remove library mode.** Factory types move back to the graph consumer; `WireContributorPlugin`, the
-`--library` WireGen path, and the `_WireExports.swift`-driven contributor detection retire; one plugin.
-Gate: the shared `Controllers` library serves through the consumer-generated witness + consumer-emitted
-factories, all three runtimes.
+**One defect the examples caught** (the single-module `WireMVCExample` didn't): a `public` shared-library
+controller yielded a `public` proxy, but the consumer's generated file imports `Controllers` *internally*
+(`InternalImportsByDefault`), so a `public` proxy can't expose the library's types. Fix (swift-wire, follow-up
+to #191): the proxy is emitted **`internal`** — it's a consumer-local coordination type, never public API.
+The shared-library routes are already `public` (their API anyway), so the public-route constraint held with
+no diagnostic needed yet. Gate met: `WireMVCExample` + all three runtime examples serve — CI green across
+swift-wire, wire-mvc, and wire-mvc-examples.
+
+**A4 — remove library mode. swift-wire side DONE.** The graph consumer now emits every *consumed* factory
+type (`renderConsumedFactoryTypes` over the synthesised set — own- and dependency-module templates alike),
+`internal` for the same `InternalImportsByDefault` reason as the proxy (a `public` factory can't be built
+from an internally-imported produced type). `WireContributorPlugin`, the `--library` WireGen path,
+`runLibraryMode`, and `renderOwnedFactoryTypes`/`renderFactoryModule` are removed; `WireBuildPlugin` is the
+only plugin. `_WireExports.swift` stays as the cross-module-composition marker (the consumer re-parses
+Wire-aware deps) — its full retirement is M6, not this. 615 tests pass; a `public @Factory` template now
+emits an internal `_WireFactory_<key>` (verified). **Adapter side:** the shared `Controllers` library drops
+`WireContributorPlugin` (it referenced the now-removed product) — nothing in it references the factory
+types any more, since `@Controller` is a marker. Synchronized cutover: swift-wire A4 + `Controllers`
+plugin-drop land together. Gate: the shared `Controllers` library serves through the consumer-generated
+witness + consumer-emitted factories, all three runtimes (CI).
 
 **A5 — un-park 3.3 (injected axis).** Now trivial: the plugin owns the proxy, so the factory becomes
 generic over the injected axis and threads via `T0` (spike-22's shape) — no macro coordination, single-

@@ -256,42 +256,30 @@ struct FactorySynthesisTests {
         )
     }
 
-    @Test func rendersOnlyOwnModuleFactoryTypesAtTemplateVisibility() {
-        // Factory types are owned by the template's module and carry the template's access; a
-        // template in another module is emitted by THAT module's run, not here.
-        let owned = DiscoveredFactoryTemplate(
-            keyReference: "Keys.session",
-            typeName: "SessionMiddleware",
-            qualifiedTypeName: "SessionMiddleware",
-            typeKind: "struct",
-            genericParameterNames: ["Ctx"],
-            dependencies: [
-                DependencyParameter(
-                    name: "store",
-                    type: "Store",
-                    kind: .injectProperty,
-                    location: mockLocation("M.swift")
-                )
-            ],
-            accessLevel: .public,
-            location: mockLocation("M.swift"),
-            originModule: "MyLib"
-        )
-        let foreign = DiscoveredFactoryTemplate(
-            keyReference: "Keys.other",
-            typeName: "OtherMiddleware",
-            qualifiedTypeName: "OtherMiddleware",
-            typeKind: "struct",
-            genericParameterNames: ["Ctx"],
-            dependencies: [],
-            location: mockLocation("O.swift"),
-            originModule: "OtherLib"
-        )
-        let rendered = renderOwnedFactoryTypes(templates: [owned, foreign], module: "MyLib")
-        #expect(rendered.count == 1)
-        #expect(rendered.first?.contains("public struct _WireFactory_Keys_session: Sendable {") == true)
-        #expect(rendered.first?.contains("public let store: Store") == true)
-        #expect(rendered.first?.contains("public func create") == true)
+    @Test func rendersEveryConsumedFactoryInternalRegardlessOfOriginModule() {
+        // The consumer emits every *consumed* factory type — own- and dependency-module templates alike
+        // — at `internal` visibility (consumer-local), in deterministic order by key.
+        func factory(key: String, type: String, producedModule: String) -> SynthesizedFactory {
+            SynthesizedFactory(
+                keyReference: key,
+                factoryTypeName: factoryTypeName(forKey: key),
+                producedTypeName: type,
+                assistedParameterNames: ["Ctx"],
+                assistedParameterConstraints: [:],
+                dependencies: [],
+                producedTypeModule: producedModule,
+                location: mockLocation("\(type).swift")
+            )
+        }
+        let owned = factory(key: "Keys.session", type: "SessionMiddleware", producedModule: "MyLib")
+        let foreign = factory(key: "Keys.other", type: "OtherMiddleware", producedModule: "OtherLib")
+
+        let rendered = renderConsumedFactoryTypes([owned, foreign])
+        #expect(rendered.count == 2)
+        // Both emitted, sorted by key (`Keys.other` < `Keys.session`), both internal (no access keyword).
+        #expect(rendered[0].hasPrefix("struct _WireFactory_Keys_other: Sendable {"))
+        #expect(rendered[1].hasPrefix("struct _WireFactory_Keys_session: Sendable {"))
+        #expect(!rendered.joined().contains("public "))
     }
 
     // MARK: - End-to-end through discovery

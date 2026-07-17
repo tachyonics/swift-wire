@@ -1,10 +1,8 @@
-// Contributor-proxy emission — the *structural half* of a plugin-generated contributor proxy (Phase A).
+// Contributor-proxy emission — the *structural half* of a plugin-generated contributor proxy.
 //
 // `ContributorProxySynthesis` builds the proxy *binding* (how the graph constructs the proxy: a
 // scope-bound `<prefix><Subject>` depending on the subject + its demanded factories). This file emits
-// the proxy *type* — the `struct` declaration itself — which today the adapter's macro emits in the
-// subject's module (forcing library mode). Moving type emission here lets the proxy be declared in the
-// consumer module beside the graph, retiring library mode.
+// the proxy *type* — the `struct` declaration itself — into the consumer module, beside the graph.
 //
 // What's emitted is deliberately only the STRUCTURAL half: the stored fields (the subject +
 // each lifted factory), the initialiser the graph's construction call targets, and `Sendable`. There

@@ -16,7 +16,6 @@ let package = Package(
     products: [
         .library(name: "Wire", targets: ["Wire"]),
         .plugin(name: "WireBuildPlugin", targets: ["WireBuildPlugin"]),
-        .plugin(name: "WireContributorPlugin", targets: ["WireContributorPlugin"]),
         // The codegen executable, exposed so an adapter package's build plugin can invoke it via
         // `context.tool(named: "WireGen")` — an adapter that owns route (or other domain) codegen runs
         // WireGen for the graph + structural half, then its own domain tool. See the WireMVC codegen
@@ -56,11 +55,6 @@ let package = Package(
         ),
         .plugin(
             name: "WireBuildPlugin",
-            capability: .buildTool(),
-            dependencies: ["WireGen"]
-        ),
-        .plugin(
-            name: "WireContributorPlugin",
             capability: .buildTool(),
             dependencies: ["WireGen"]
         ),
