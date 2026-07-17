@@ -383,8 +383,11 @@ struct FactoryInjectedAxisTests {
             injectedParameterNames: ["Repository"],
             dependencies: [
                 DependencyParameter(
-                    name: "repository", type: "Repository", kind: .injectProperty,
-                    location: mockLocation("M.swift"))
+                    name: "repository",
+                    type: "Repository",
+                    kind: .injectProperty,
+                    location: mockLocation("M.swift")
+                )
             ],
             producedTypeModule: testModule,
             location: mockLocation("M.swift")
@@ -418,13 +421,22 @@ struct FactoryInjectedAxisTests {
     @Test func nonInjectedFactoryStaysNonGeneric() {
         // A 3.2 factory (concrete deps only) has no injected axis → a plain non-generic binding.
         let session = SynthesizedFactory(
-            keyReference: "Keys.session", factoryTypeName: "_WireFactory_Keys_session",
-            producedTypeName: "SessionMiddleware", parameterNames: ["Ctx", "Reader", "Sender"],
+            keyReference: "Keys.session",
+            factoryTypeName: "_WireFactory_Keys_session",
+            producedTypeName: "SessionMiddleware",
+            parameterNames: ["Ctx", "Reader", "Sender"],
             parameterConstraints: [:],
             dependencies: [
-                DependencyParameter(name: "store", type: "Store", kind: .injectProperty, location: mockLocation("M.swift"))
+                DependencyParameter(
+                    name: "store",
+                    type: "Store",
+                    kind: .injectProperty,
+                    location: mockLocation("M.swift")
+                )
             ],
-            producedTypeModule: testModule, location: mockLocation("M.swift"))
+            producedTypeModule: testModule,
+            location: mockLocation("M.swift")
+        )
         #expect(factoryBinding(session, module: testModule).genericParameterNames.isEmpty)
         #expect(renderFactoryDeclaration(session).hasPrefix("struct _WireFactory_Keys_session: Sendable {"))
     }
@@ -449,17 +461,25 @@ struct FactoryInjectedAxisTests {
             """
         let discovery = discover(in: source, sourcePath: "App.swift", module: testModule)
         let proxied = applyContributorProxies(
-            to: discovery.allBindings, annotations: discovery.adapterAnnotations, useSites: discovery.aliasUseSites)
+            to: discovery.allBindings,
+            annotations: discovery.adapterAnnotations,
+            useSites: discovery.aliasUseSites
+        )
         let synthesis = applyFactorySynthesis(
-            to: proxied.bindings, templates: discovery.factoryTemplates,
-            annotations: discovery.adapterAnnotations, useSites: proxied.useSites, consumerModule: testModule)
+            to: proxied.bindings,
+            templates: discovery.factoryTemplates,
+            annotations: discovery.adapterAnnotations,
+            useSites: proxied.useSites,
+            consumerModule: testModule
+        )
         let proxy = try! #require(
             (synthesis.bindings[.default] ?? []).compactMap { binding -> DiscoveredScopeBoundType? in
                 guard case .scopeBound(let type) = binding,
                     type.typeName == "_WireRouteContributor_TodosController"
                 else { return nil }
                 return type
-            }.first)
+            }.first
+        )
         let factoryField = proxy.dependencies.first { $0.name == "_wireFactory_Keys_audit" }
         #expect(factoryField?.type == "_WireFactory_Keys_audit<Repository>")
     }

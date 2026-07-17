@@ -278,7 +278,10 @@ package func applyFactorySynthesis(
                 DependencyParameter(
                     name: factoryDependencyName(forKey: demand.key),
                     type: factoryDependencyType(
-                        forKey: demand.key, factory: factoriesByKey[demand.key], liftedOnto: binding),
+                        forKey: demand.key,
+                        factory: factoriesByKey[demand.key],
+                        liftedOnto: binding
+                    ),
                     kind: .injectInitParameter,
                     location: demand.location
                 )
