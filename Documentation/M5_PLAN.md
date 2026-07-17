@@ -441,6 +441,11 @@ being sequential milestones with their own gate-between.
 
 ## Iteration M5.4 — request-scoped controllers — ▶ NEXT
 
+> **Build plan: [M5_4_PLAN.md](M5_4_PLAN.md)** — the sub-step breakdown (M5.4.1–M5.4.6), the
+> shipped shapes it embeds into, and the central mechanism decision (the injected scope-entry
+> thunk that replaces the design-text's weak back-reference, since the shipped `_WireGraph` is a
+> value type). This section carries the *why*; that file carries the *how*.
+
 Interleaved with M5.3 in practice — auth *identity* is the canonical request-scoped
 value a type-transforming middleware produces and a request-scoped controller consumes.
 
