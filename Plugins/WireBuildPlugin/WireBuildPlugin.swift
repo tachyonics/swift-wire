@@ -6,10 +6,10 @@ import PackagePlugin
 /// its Wire-aware dependencies') and emits `_WireGraph.swift` into the plugin work directory, picked
 /// up and compiled into the target.
 ///
-/// Whether a module is a graph consumer or a **contributor** (a module that declares bindings/
-/// factories for a consumer to compose but builds no graph of its own) is an *architectural* choice —
-/// which module bootstraps — not a property of target kind. So the two are separate, explicit plugins:
-/// a composition root applies this; a contributor applies `WireContributorPlugin`.
+/// A Wire-aware **contributor** (a module that declares bindings / `@Factory` templates for a consumer
+/// to compose but builds no graph of its own) applies **no** plugin — the consumer re-parses its sources
+/// (it opts in with a `_WireExports.swift` marker) and emits everything, including the factory types it
+/// consumes. Only the composition root applies this plugin.
 ///
 /// Consumers opt in per-target:
 ///

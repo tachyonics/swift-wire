@@ -36,13 +36,6 @@ struct WireGen {
     static func main() throws {
         let arguments = CommandLine.arguments
         guard arguments.count >= 3 else { printUsageAndExit() }
-        // Library mode: a non-graph-consuming module emits only what it *owns* — its `@Factory`
-        // factory types (so its own bindings that reference them resolve). No graph, no bootstrap.
-        // Graph consumers (the default) build the full graph.
-        if arguments[1] == "--library" {
-            try runLibraryMode(arguments: arguments)
-            return
-        }
         let graphOutputPath = arguments[1]
         let keyChecksOutputPath = arguments[2]
         let groups = parseModuleGroups(Array(arguments.dropFirst(3)))
@@ -117,7 +110,11 @@ struct WireGen {
             seedScopeOrders: seedScopeOrders,
             graphConformances: aggregate.graphConformances,
             multibindingKeys: aggregate.multibindingKeys,
-            syntheticTypeDeclarations: consumerSyntheticTypes(aggregate, proxyIdentities: preGraph.proxyIdentities)
+            syntheticTypeDeclarations: consumerSyntheticTypes(
+                factories: preGraph.factories,
+                proxyIdentities: preGraph.proxyIdentities,
+                in: aggregate.allBindings
+            )
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -582,10 +579,6 @@ extension WireGen {
     }
 }
 
-/// Library mode — emit a contributor module's owned factory types, no graph.
-/// `WireGen --library <factory-output> --module <self> <sources…>`. Only the module's own sources
-/// are read: factory types are template-driven (own-module) and need no dependency graph. The
-/// module's `import`s are propagated so foreign dependency types the factories reference resolve.
 /// Emit warnings to stderr in the `file:line:col: warning:` form. They need to be surfaced to the user,
 /// even when they don't fail the build. WireGen prints them before any validation-error block so a
 /// failing build's error message remains the last thing on stderr.
@@ -623,89 +616,20 @@ private struct DiscoveryAggregate {
     var graphConformances: [DiscoveredGraphConformance] = []
 }
 
-/// The factory types a graph consumer owns and declares in its generated file — with the role mapping
-/// (from its composed adapter annotations) that orders each `create`.
-private func consumerOwnedFactoryTypes(_ aggregate: DiscoveryAggregate) -> [String] {
-    renderOwnedFactoryTypes(
-        templates: aggregate.factoryTemplates,
-        module: aggregate.module,
-        annotations: aggregate.adapterAnnotations,
-        useSites: aggregate.aliasUseSites
-    )
-}
-
-/// The module-scope type declarations the graph consumer emits into its generated file: the owned
-/// factory types, then the contributor-proxy *structural* declarations (Phase A). The plugin emits each
-/// `.contributesProxy` proxy struct — subject + factory fields + init, body hole — into the consumer
-/// module, superseding the adapter macro's peer-type emission; the witness (and the adapter-protocol
-/// conformance) arrive from the adapter's domain tool as an extension in this same module. Read after
-/// factory synthesis so each proxy carries its complete field set.
+/// The module-scope type declarations the graph consumer emits into its generated file: the consumed
+/// factory types, then the contributor-proxy *structural* declarations. Both are consumer-local — the
+/// consumer emits each consumed factory (`_WireFactory_<key>`, whether the `@Factory` template is own- or
+/// dependency-module) and each `.contributesProxy` proxy struct (subject + factory fields + init, body
+/// hole). The witness (and the adapter-protocol conformance) arrive from the adapter's domain tool as an
+/// extension in this same module. `factories` is the synthesised set (post factory synthesis), so each
+/// proxy's field set is complete and only consumed factories are declared.
 private func consumerSyntheticTypes(
-    _ aggregate: DiscoveryAggregate,
-    proxyIdentities: Set<String>
+    factories: [SynthesizedFactory],
+    proxyIdentities: Set<String>,
+    in allBindings: [Partition: [DiscoveredBinding]]
 ) -> [String] {
-    consumerOwnedFactoryTypes(aggregate)
-        + renderContributorProxyTypes(proxyIdentities: proxyIdentities, in: aggregate.allBindings)
-}
-
-private func runLibraryMode(arguments: [String]) throws {
-    guard arguments.count >= 3 else { WireGen.printUsageAndExit() }
-    let factoryOutputPath = arguments[2]
-    let groups = WireGen.parseModuleGroups(Array(arguments.dropFirst(3)))
-    guard let ownGroup = groups.first else { WireGen.printUsageAndExit() }
-
-    var templates: [DiscoveredFactoryTemplate] = []
-    var useSites: [ContributionAliasUseSite] = []
-    var imports: [String] = []
-    var annotations: [DiscoveredAdapterAnnotation] = []
-    for path in ownGroup.sources {
-        let result = discover(in: WireGen.readSource(at: path), sourcePath: path, module: ownGroup.module)
-        templates.append(contentsOf: result.factoryTemplates)
-        useSites.append(contentsOf: result.aliasUseSites)
-        annotations.append(contentsOf: result.adapterAnnotations)
-        if !result.factoryTemplates.isEmpty {
-            imports.append(contentsOf: result.imports)
-        }
-    }
-    // Compose the Wire-aware dependency groups for their adapter annotations only — a middleware's
-    // `.mapsFactoryRoles` vocabulary is declared in the adapter package, and ordering the `create`
-    // needs it. This module still emits only its *own* factory types (`renderOwnedFactoryTypes` filters
-    // by `originModule`); it never builds a graph.
-    for group in groups.dropFirst() {
-        for path in group.sources {
-            annotations.append(
-                contentsOf:
-                    discover(in: WireGen.readSource(at: path), sourcePath: path, module: group.module)
-                    .adapterAnnotations
-            )
-        }
-    }
-
-    // A contributor's own internal `@Factory` with no in-module consumer is dead — warn here, since a
-    // graph consumer never sees it (it's internal to this module). Role-mapping errors fail the build.
-    let roleDiagnostics = factoryRoleMappingDiagnostics(
-        templates: templates,
-        annotations: annotations,
-        useSites: useSites,
-        owningModule: ownGroup.module
-    )
-    printDiagnostics(
-        deadFactoryDiagnostics(templates: templates, useSites: useSites, owningModule: ownGroup.module)
-            + roleDiagnostics
-    )
-    if roleDiagnostics.contains(where: { $0.severity == .error }) { exit(EXIT_FAILURE) }
-
-    let factoryFile = renderFactoryModule(
-        imports: imports,
-        typeDeclarations: renderOwnedFactoryTypes(
-            templates: templates,
-            module: ownGroup.module,
-            annotations: annotations,
-            useSites: useSites
-        )
-    )
-    try factoryFile.write(toFile: factoryOutputPath, atomically: true, encoding: .utf8)
-    print("wrote \(factoryOutputPath)")
+    renderConsumedFactoryTypes(factories)
+        + renderContributorProxyTypes(proxyIdentities: proxyIdentities, in: allBindings)
 }
 
 /// Run the pre-graph binding rewrites in order — contribution aliases, adapter
