@@ -61,7 +61,6 @@ struct WireGen {
             factoryTemplates: aggregate.factoryTemplates,
             consumerModule: consumerModule
         )
-        let synthesizedFactories = preGraph.factories
 
         // One graph per scope — default, per-`@Container`, and per-seed.
         let graphs = buildAllGraphs(in: aggregate)
@@ -104,22 +103,13 @@ struct WireGen {
             aggregate.imports
             + foreignImports(in: allBindingsFlat, consumerModule: consumerModule)
             + conformanceOriginImports(aggregate.graphConformances, consumerModule: consumerModule)
-            + factoryProducedTypeImports(synthesizedFactories, consumerModule: consumerModule)
+            + factoryProducedTypeImports(preGraph.factories, consumerModule: consumerModule)
 
         // Factory TYPES are owned by the `@Factory` template's module, so this graph consumer
         // declares only its own-module factories; dependency-module factories are declared by
         // those modules' own plugin runs and referenced here via import. Construction/injection
         // (in `allBindings`) stays consumer-driven and spans every consumed factory.
         let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
-        let ownedFactoryTypes = consumerOwnedFactoryTypes(aggregate)
-        // Contributor-proxy *structural* declarations (Phase A): the plugin emits the proxy struct — its
-        // subject + factory fields + init, body hole — into the consumer graph file, superseding the
-        // adapter macro's peer-type emission. The witness (and the adapter-protocol conformance) arrive
-        // in the domain tool's extension, in this same module.
-        let contributorProxyTypes = renderContributorProxyTypes(
-            proxyIdentities: preGraph.proxyIdentities,
-            in: aggregate.allBindings
-        )
         let generated = renderWireGraph(
             imports: imports,
             topologicalOrder: defaultOrder,
@@ -127,7 +117,7 @@ struct WireGen {
             seedScopeOrders: seedScopeOrders,
             graphConformances: aggregate.graphConformances,
             multibindingKeys: aggregate.multibindingKeys,
-            syntheticTypeDeclarations: ownedFactoryTypes + contributorProxyTypes
+            syntheticTypeDeclarations: consumerSyntheticTypes(aggregate, proxyIdentities: preGraph.proxyIdentities)
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -642,6 +632,20 @@ private func consumerOwnedFactoryTypes(_ aggregate: DiscoveryAggregate) -> [Stri
         annotations: aggregate.adapterAnnotations,
         useSites: aggregate.aliasUseSites
     )
+}
+
+/// The module-scope type declarations the graph consumer emits into its generated file: the owned
+/// factory types, then the contributor-proxy *structural* declarations (Phase A). The plugin emits each
+/// `.contributesProxy` proxy struct — subject + factory fields + init, body hole — into the consumer
+/// module, superseding the adapter macro's peer-type emission; the witness (and the adapter-protocol
+/// conformance) arrive from the adapter's domain tool as an extension in this same module. Read after
+/// factory synthesis so each proxy carries its complete field set.
+private func consumerSyntheticTypes(
+    _ aggregate: DiscoveryAggregate,
+    proxyIdentities: Set<String>
+) -> [String] {
+    consumerOwnedFactoryTypes(aggregate)
+        + renderContributorProxyTypes(proxyIdentities: proxyIdentities, in: aggregate.allBindings)
 }
 
 private func runLibraryMode(arguments: [String]) throws {
