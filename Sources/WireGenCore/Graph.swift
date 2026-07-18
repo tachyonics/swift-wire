@@ -626,6 +626,10 @@ private func resolveDependencies(
         // Init-time deps: form graph edges (drive topo sort and
         // cycle detection). Missing ones produce errors.
         for dependency in binding.dependencies {
+            // A scope-entry thunk is synthesised inline (a closure), not produced by a binding — so it
+            // forms no edge and is never "missing". Its ordering is carried by the proxy's `.scopeCapture`
+            // deps instead. See `DependencyKind.scopeEntryThunk`.
+            if dependency.kind == .scopeEntryThunk { continue }
             switch matchProducer(
                 for: bridgedDependencyIdentity(dependency, in: binding),
                 in: resolvedBindings

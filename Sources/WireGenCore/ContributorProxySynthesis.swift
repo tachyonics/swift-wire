@@ -142,8 +142,11 @@ func contributorProxyBinding(
     if subjectIsNarrower, let seed = subject.scopeKey?.seed {
         primaryDependency = DependencyParameter(
             name: contributorProxyScopeEntryFieldName,  // labelled — stored/inited as `_wireEnterScope`
-            type: "@Sendable (\(seed)) async throws -> \(subjectDependencyType)",
-            kind: .injectInitParameter,
+            type: contributorScopeEntryThunkType(seed: seed, subject: subjectDependencyType),
+            // Emission-only: emitted as the proxy's `_wireEnterScope` field/arg, but not graph-resolved
+            // (synthesised inline as the capturing thunk). Ordering comes from `.scopeCapture` deps the
+            // linking pass adds.
+            kind: .scopeEntryThunk,
             location: subject.location
         )
     } else {

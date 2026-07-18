@@ -240,8 +240,43 @@ struct WireGen {
         var resolvedBindingsByContainer: [String?: [DiscoveredBinding]] = [:]
         for containerKey in partitions.keys.sorted(by: containerKeyOrder) {
             let scopes = partitions[containerKey] ?? [:]
-            let singletons = scopes[nil] ?? []
+            var singletons = scopes[nil] ?? []
             let parentGraphType = containerKey.map { "_\($0)WireGraph" } ?? "_WireGraph"
+            let borrows = syntheticSingletonBorrowBindings(
+                from: singletons,
+                inWireGraphOfType: parentGraphType
+            )
+            let seedKeys =
+                scopes.keys
+                .compactMap { $0 }
+                .sorted(by: { $0.seed < $1.seed })
+            // Orchestrate the seed scopes first — a bridging contributor proxy needs its scope's borrow
+            // set to gain the `.scopeCapture` ordering deps that place it after those singletons, and
+            // that linking must happen before the app graph's topological sort below.
+            var containerOrchestrations: [SeedScopeOrchestration] = []
+            for seedKey in seedKeys {
+                let scopeBindings = scopes[seedKey] ?? []
+                let orchestration = orchestrateSeedScope(
+                    seedKey: seedKey,
+                    containerName: containerKey,
+                    scopeBindings: scopeBindings,
+                    borrowBindings: borrows,
+                    parentGraphType: parentGraphType,
+                    typealiases: aggregate.typealiases,
+                    multibindingKeys: aggregate.multibindingKeys,
+                    resultBuilders: aggregate.resultBuilders,
+                    module: aggregate.module
+                )
+                let enrichedResult = enrichMissingBindingsWithCrossScopeHints(
+                    orchestration.result,
+                    consumerPartition: Partition(container: containerKey, scope: seedKey),
+                    allBindings: aggregate.allBindings
+                )
+                containerOrchestrations.append(orchestration.withResult(enrichedResult))
+            }
+
+            singletons = linkingScopeEntryCaptures(into: singletons, orchestrations: containerOrchestrations)
+
             // Multibindings fan in per partition: each graph aggregates
             // its own contributors atomically (synthesizeAggregates only
             // builds keys used in this partition's bindings).
@@ -262,34 +297,9 @@ struct WireGen {
                 defaultGraph = graph
             }
             resolvedBindingsByContainer[containerKey, default: []] += graph.outcome.topologicalOrder ?? []
-            let borrows = syntheticSingletonBorrowBindings(
-                from: singletons,
-                inWireGraphOfType: parentGraphType
-            )
-            let seedKeys =
-                scopes.keys
-                .compactMap { $0 }
-                .sorted(by: { $0.seed < $1.seed })
-            for seedKey in seedKeys {
-                let scopeBindings = scopes[seedKey] ?? []
-                let orchestration = orchestrateSeedScope(
-                    seedKey: seedKey,
-                    containerName: containerKey,
-                    scopeBindings: scopeBindings,
-                    borrowBindings: borrows,
-                    parentGraphType: parentGraphType,
-                    typealiases: aggregate.typealiases,
-                    multibindingKeys: aggregate.multibindingKeys,
-                    resultBuilders: aggregate.resultBuilders,
-                    module: aggregate.module
-                )
-                let enrichedResult = enrichMissingBindingsWithCrossScopeHints(
-                    orchestration.result,
-                    consumerPartition: Partition(container: containerKey, scope: seedKey),
-                    allBindings: aggregate.allBindings
-                )
-                seedScopeOrchestrations.append(orchestration.withResult(enrichedResult))
-                resolvedBindingsByContainer[containerKey, default: []] += enrichedResult.outcome.topologicalOrder ?? []
+            for orchestration in containerOrchestrations {
+                seedScopeOrchestrations.append(orchestration)
+                resolvedBindingsByContainer[containerKey, default: []] += orchestration.result.outcome.topologicalOrder ?? []
             }
         }
         return GraphBuilds(

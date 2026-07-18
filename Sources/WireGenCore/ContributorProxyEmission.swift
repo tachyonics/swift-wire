@@ -31,6 +31,27 @@ package let contributorProxySubjectFieldName = "_wireSubject"
 /// synthesised in M5.4.2; M5.4.1 emits the field.
 package let contributorProxyScopeEntryFieldName = "_wireEnterScope"
 
+/// The type of a bridging proxy's scope-entry thunk: `@Sendable (Seed) async throws -> Subject`. One
+/// builder shared by the synthesis (which types the `_wireEnterScope` dependency) and the emission
+/// (which types the emitted closure and finds its target scope), so the seed/subject contract lives in
+/// one place.
+package func contributorScopeEntryThunkType(seed: String, subject: String) -> String {
+    "@Sendable (\(seed)) async throws -> \(subject)"
+}
+
+/// Recover `(seed, subject)` from a thunk type built by `contributorScopeEntryThunkType` — the inverse
+/// the emission uses to locate the target seed scope and name the subject it returns. `nil` for a string
+/// not in that shape.
+package func parsedContributorScopeEntryThunkType(_ type: String) -> (seed: String, subject: String)? {
+    let opening = "@Sendable ("
+    let middle = ") async throws -> "
+    guard type.hasPrefix(opening), let middleRange = type.firstRange(of: middle) else { return nil }
+    let seed = String(type[type.index(type.startIndex, offsetBy: opening.count)..<middleRange.lowerBound])
+    let subject = String(type[middleRange.upperBound...])
+    guard !seed.isEmpty, !subject.isEmpty else { return nil }
+    return (seed, subject)
+}
+
 /// Render the structural declaration for one contributor-proxy binding — the `struct` with its stored
 /// fields + initialiser + `Sendable`, generic exactly as the subject, with a body hole (no conformance,
 /// no witness). `proxy` is the fully-formed proxy binding *after* factory synthesis has appended the
@@ -67,6 +88,10 @@ package func renderContributorProxyDeclaration(_ proxy: DiscoveredScopeBoundType
     var initParameters: [String] = []
     var assignments: [String] = []
     for dependency in proxy.dependencies {
+        // Capture dependencies exist only to order the proxy after the singletons its scope-entry thunk
+        // captures — they are not stored fields or init parameters (the thunk references the captured
+        // locals directly). See `DependencyKind.scopeCapture`.
+        if dependency.kind == .scopeCapture { continue }
         let fieldName = dependency.name ?? contributorProxySubjectFieldName
         fields.append("let \(fieldName): \(dependency.type)")
         // Unlabelled (subject) → `_ name`; labelled (factory) → `name`.
