@@ -28,13 +28,16 @@ public enum WireAdapterCapability {
     case contributes(to: Any)
 
     /// `@X` on a binding contributes a **generated proxy** — not the binding itself — into a
-    /// multibinding key. The adapter's macro generates a peer type `<proxyTypePrefix><Binding>`
-    /// that holds the binding (constructed its ordinary way) plus any factories the binding's
-    /// input-edge use-sites demand, and carries the adapter's witness; the build plugin
-    /// synthesises the proxy binding (depending on the binding + those factories), and the proxy,
-    /// not the binding, flows into the multibinding. Keeps the annotated binding an ordinary
-    /// footgun-free type — nothing about it depends on being constructed "the right way".
-    case contributesProxy(to: Any, proxyTypePrefix: String)
+    /// multibinding key. The build plugin synthesises the proxy binding and, at `proxyScope`, either
+    /// **holds** the subject (when the subject shares that scope) or **bridges** into it (when the
+    /// subject is narrower — e.g. a `@Scoped(seed:)` subject under a `.singleton` proxy: the proxy
+    /// holds a scope-entry, constructing the subject on demand from a seed). Either way the proxy
+    /// carries any factories the binding's input-edge use-sites demand, conforms to the adapter's
+    /// contributor protocol, and the proxy — not the binding — flows into the multibinding. Keeps the
+    /// annotated binding an ordinary footgun-free type. `proxyScope` is the scope of the aggregate the
+    /// proxy collates into (where it must live to be collected once), and swift-wire compares it
+    /// against the subject's scope to pick hold vs bridge.
+    case contributesProxy(to: Any, proxyTypePrefix: String, proxyScope: WireProxyScope)
 
     /// `@X(argument)` on a binding makes the binding depend on a graph value named by `argument` (an
     /// *input* edge), lifted onto the binding's contributor proxy. The **argument's kind** chooses what
@@ -61,4 +64,16 @@ public enum WireAdapterCapability {
     /// `@X(...)` on a consumer's injection point rewrites how that dependency resolves
     /// (e.g. `@Configuration("port")`). Reserved — no pass yet.
     case rewritesInjection
+}
+
+/// The scope at which a `.contributesProxy` proxy is emitted — the scope of the multibinding
+/// aggregate it collates into, which is where the proxy must live to be collected and applied.
+/// swift-wire compares it against the *subject's* scope: same scope → the proxy **holds** the
+/// subject; the subject narrower → the proxy **bridges** into the subject's scope (a
+/// `@Scoped(seed:)` subject under a `.singleton` proxy is a sanctioned scope bridge, not a
+/// cross-scope violation). `.singleton` is the value for every collating adapter today (collation
+/// happens at app scope); a seeded proxy scope is reserved for a future per-request-collation case.
+public enum WireProxyScope: Sendable {
+    /// The proxy is app-scoped — built once and collated into the app graph.
+    case singleton
 }

@@ -41,7 +41,8 @@ package func applyContributorProxies(
                 let identity = binding.aliasTargetIdentity,
                 let directive = directiveBySubject[identity]
             else { continue }
-            let proxy = contributorProxyBinding(for: subject, key: directive.key, prefix: directive.prefix)
+            let proxy = contributorProxyBinding(
+                for: subject, key: directive.key, prefix: directive.prefix, proxyScope: directive.proxyScope)
             proxyBySubject[identity] = proxy.qualifiedTypeName
             proxies.append(.scopeBound(proxy))
         }
@@ -61,14 +62,14 @@ package func applyContributorProxies(
 private func contributorProxyDirectives(
     annotations: [DiscoveredAdapterAnnotation],
     useSites: [ContributionAliasUseSite]
-) -> [String: (key: String, prefix: String)] {
-    var proxyAnnotations: [String: (key: String, prefix: String)] = [:]
+) -> [String: (key: String, prefix: String, proxyScope: DiscoveredProxyScope)] {
+    var proxyAnnotations: [String: (key: String, prefix: String, proxyScope: DiscoveredProxyScope)] = [:]
     for annotation in annotations {
-        if case .contributesProxy(let key, let prefix) = annotation.capability {
-            proxyAnnotations[annotation.annotationName] = (key, prefix)
+        if case .contributesProxy(let key, let prefix, let proxyScope) = annotation.capability {
+            proxyAnnotations[annotation.annotationName] = (key, prefix, proxyScope)
         }
     }
-    var directiveBySubject: [String: (key: String, prefix: String)] = [:]
+    var directiveBySubject: [String: (key: String, prefix: String, proxyScope: DiscoveredProxyScope)] = [:]
     for site in useSites {
         if let directive = proxyAnnotations[site.annotationName] {
             directiveBySubject[site.targetIdentity] = directive  // first-seen wins
@@ -107,20 +108,49 @@ private func reattributingInputEdges(
 }
 
 /// The proxy binding for one `.contributesProxy` subject — a scope-bound `<prefix><Subject>` generic
-/// exactly as the subject is, depending on the subject (spelled with the subject's own generic
-/// parameters, `Subject<Params>`, so a generic subject threads transitively) and contributing to the
-/// directive's key. The subject is the proxy's first, **unlabelled** dependency, so Wire names no
-/// member of the adapter's proxy type; the macro emits the type + its initialiser, and the demanded
-/// factory dependencies are appended later by the factory-synthesis pass.
+/// exactly as the subject is, contributing to the directive's key. The proxy lives at `proxyScope`
+/// (always `.singleton` today — collated into the app graph), and swift-wire compares that against the
+/// subject's own scope to pick the proxy's primary dependency:
+///   • **hold** (subject at the proxy's scope — a `@Singleton` subject under a `.singleton` proxy): the
+///     subject is the proxy's first, **unlabelled** dependency (`_wireSubject`), so Wire names no member;
+///   • **bridge** (subject narrower — a `@Scoped(seed:)` subject under a `.singleton` proxy): storing the
+///     seeded subject on an app-scoped proxy would be the cross-scope violation the bridge resolves, so
+///     instead of the subject the proxy takes a **labelled** scope-entry thunk `(Seed) async throws ->
+///     Subject` (`_wireEnterScope`) that constructs the subject fresh per request. Its producer is
+///     synthesised in M5.4.2; here we emit the field/dependency.
+/// Either way the demanded factory dependencies are appended later by the factory-synthesis pass.
 func contributorProxyBinding(
     for subject: DiscoveredScopeBoundType,
     key: String,
-    prefix: String
+    prefix: String,
+    proxyScope: DiscoveredProxyScope
 ) -> DiscoveredScopeBoundType {
     let subjectDependencyType =
         subject.genericParameterNames.isEmpty
         ? subject.typeName
         : "\(subject.typeName)<\(subject.genericParameterNames.joined(separator: ", "))>"
+
+    // A `.singleton` proxy over a seeded (`@Scoped`) subject bridges; over a `@Singleton` subject it
+    // holds. `subject.scopeKey == nil` means `@Singleton`. (Only `.singleton` proxyScope exists today;
+    // the comparison is written against it so a future seeded proxy scope slots in.)
+    let subjectIsNarrower = proxyScope == .singleton && subject.scopeKey != nil
+    let primaryDependency: DependencyParameter
+    if subjectIsNarrower, let seed = subject.scopeKey?.seed {
+        primaryDependency = DependencyParameter(
+            name: contributorProxyScopeEntryFieldName,  // labelled — stored/inited as `_wireEnterScope`
+            type: "@Sendable (\(seed)) async throws -> \(subjectDependencyType)",
+            kind: .injectInitParameter,
+            location: subject.location
+        )
+    } else {
+        primaryDependency = DependencyParameter(
+            name: nil,  // positional — the proxy's initialiser takes the subject unlabelled
+            type: subjectDependencyType,
+            kind: .injectInitParameter,
+            location: subject.location
+        )
+    }
+
     return DiscoveredScopeBoundType(
         typeName: prefix + subject.typeName,
         qualifiedTypeName: prefix + subject.qualifiedTypeName,
@@ -130,14 +160,7 @@ func contributorProxyBinding(
         // Restated on the emitted proxy struct (generic exactly as the subject) so a
         // `where`-constrained subject's proxy still type-checks. See `renderContributorProxyDeclaration`.
         genericWhereClause: subject.genericWhereClause,
-        dependencies: [
-            DependencyParameter(
-                name: nil,  // positional — the proxy's initialiser takes the subject unlabelled
-                type: subjectDependencyType,
-                kind: .injectInitParameter,
-                location: subject.location
-            )
-        ],
+        dependencies: [primaryDependency],
         location: subject.location,
         accessLevel: subject.accessLevel,
         contributions: [Contribution(keyReference: key, location: subject.location)],

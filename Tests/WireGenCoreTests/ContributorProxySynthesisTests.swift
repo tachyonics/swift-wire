@@ -17,7 +17,8 @@ struct ContributorProxySynthesisTests {
             annotationName: "Controller",
             capability: .contributesProxy(
                 key: "WireMVCKeys.routeContributors",
-                proxyTypePrefix: "_WireRouteContributor_"
+                proxyTypePrefix: "_WireRouteContributor_",
+                proxyScope: .singleton
             ),
             location: mockLocation("Adapter.swift"),
             originModule: testModule
@@ -53,6 +54,36 @@ struct ContributorProxySynthesisTests {
                     )
                 ],
                 location: mockLocation("C.swift"),
+                accessLevel: .public,
+                originModule: testModule
+            )
+        )
+    }
+
+    /// A `@Scoped(seed:)` controller — the bridge case. Same shape as `controller`, but seeded
+    /// (`scopeKey` non-nil), so a `.singleton` proxy over it must bridge rather than hold.
+    private func scopedController(
+        _ name: String = "SessionController",
+        seed: String = "RequestSeed",
+        params: [String] = ["Repository"],
+        constraints: [String: String] = ["Repository": "TodoRepository"]
+    ) -> DiscoveredBinding {
+        .scopeBound(
+            DiscoveredScopeBoundType(
+                typeName: name,
+                typeKind: "struct",
+                genericParameterNames: params,
+                genericParameterConstraints: constraints,
+                dependencies: [
+                    DependencyParameter(
+                        name: "repository",
+                        type: "Repository",
+                        kind: .injectInitParameter,
+                        location: mockLocation("C.swift")
+                    )
+                ],
+                location: mockLocation("C.swift"),
+                scopeKey: ScopeKey(seed: seed),
                 accessLevel: .public,
                 originModule: testModule
             )
@@ -103,6 +134,33 @@ struct ContributorProxySynthesisTests {
         // The controller stays plain — no contribution.
         let plainController = binding(named: "TodosController", in: bindings)
         #expect(plainController?.contributions.isEmpty == true)
+    }
+
+    @Test func bridgesSeededControllerViaScopeEntryThunk() {
+        // A `.singleton` proxy over a `@Scoped(seed:)` subject bridges: instead of holding the seeded
+        // subject (which would be a cross-scope violation), the app-scoped proxy takes a labelled
+        // scope-entry thunk `(Seed) async throws -> Subject`.
+        let result = applyContributorProxies(
+            to: [.default: [scopedController()]],
+            annotations: [controllerAnnotation()],
+            useSites: [useSite("Controller", on: "SessionController")]
+        )
+        let proxy = binding(named: "_WireRouteContributor_SessionController", in: result.bindings[.default] ?? [])
+        #expect(proxy != nil)
+        // The proxy is app-scoped (singleton), not seeded — it collates into the app graph.
+        #expect(proxy?.scopeKey == nil)
+        // Generic exactly as the subject, so the injected backend threads into the thunk's return type.
+        #expect(proxy?.genericParameterNames == ["Repository"])
+        // Primary dependency is the labelled scope-entry thunk, not the positional subject.
+        let primary = proxy?.dependencies.first
+        #expect(primary?.name == "_wireEnterScope")
+        #expect(primary?.type == "@Sendable (RequestSeed) async throws -> SessionController<Repository>")
+        #expect(proxy?.contributions.first?.keyReference == key)
+
+        // The controller stays a plain seeded binding — no contribution of its own.
+        let plainController = binding(named: "SessionController", in: result.bindings[.default] ?? [])
+        #expect(plainController?.contributions.isEmpty == true)
+        #expect(plainController?.scopeKey?.seed == "RequestSeed")
     }
 
     @Test func synthesisesNonGenericProxy() {

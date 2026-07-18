@@ -23,6 +23,14 @@
 /// Domain-neutral and `_wire`-prefixed, like `_wireFactory_<key>`, so it can't collide with user code.
 package let contributorProxySubjectFieldName = "_wireSubject"
 
+/// The stored-property name a **bridging** proxy holds its scope-entry thunk under, in place of
+/// `_wireSubject` — for a proxy whose subject is narrower-scoped than the proxy (a `@Scoped(seed:)`
+/// subject under a `.singleton` proxy). The thunk `(Seed) async throws -> Subject` constructs the
+/// subject fresh in the subject's scope; the domain witness body invokes it per request. Labelled,
+/// so the emitted proxy stores/inits it by this name (unlike the positional subject). Its producer is
+/// synthesised in M5.4.2; M5.4.1 emits the field.
+package let contributorProxyScopeEntryFieldName = "_wireEnterScope"
+
 /// Render the structural declaration for one contributor-proxy binding — the `struct` with its stored
 /// fields + initialiser + `Sendable`, generic exactly as the subject, with a body hole (no conformance,
 /// no witness). `proxy` is the fully-formed proxy binding *after* factory synthesis has appended the
