@@ -42,7 +42,11 @@ package func applyContributorProxies(
                 let directive = directiveBySubject[identity]
             else { continue }
             let proxy = contributorProxyBinding(
-                for: subject, key: directive.key, prefix: directive.prefix, proxyScope: directive.proxyScope)
+                for: subject,
+                key: directive.key,
+                prefix: directive.prefix,
+                proxyScope: directive.proxyScope
+            )
             proxyBySubject[identity] = proxy.qualifiedTypeName
             proxies.append(.scopeBound(proxy))
         }

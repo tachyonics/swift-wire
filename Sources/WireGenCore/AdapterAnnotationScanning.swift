@@ -122,7 +122,10 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
             // `proxyScope:` has a single value (`.singleton`) today, so it is read as that regardless of
             // whether the source states it. When `WireProxyScope` grows cases, parse the argument here.
             return .contributesProxy(
-                key: toArgument.expression.trimmedDescription, proxyTypePrefix: prefix, proxyScope: .singleton)
+                key: toArgument.expression.trimmedDescription,
+                proxyTypePrefix: prefix,
+                proxyScope: .singleton
+            )
         }
         if member.declName.baseName.text == "mapsFactoryRoles",
             let rolesArgument = call.arguments.first(where: { $0.label?.text == "roles" }),
