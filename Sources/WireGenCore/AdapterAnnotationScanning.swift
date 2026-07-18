@@ -10,6 +10,13 @@ import SwiftSyntax
 // so an adapter package's definitions reach WireGen without a manifest file. See
 // `MultiModuleComposition.md`.
 
+/// The source-read form of `WireProxyScope` — the scope a `.contributesProxy` proxy is emitted at.
+/// swift-wire compares it against the subject's scope to pick hold vs bridge (see
+/// `contributorProxyBinding`). `.singleton` is the only value today.
+package enum DiscoveredProxyScope: Sendable, Equatable {
+    case singleton
+}
+
 /// What a discovered adapter annotation does — the source-read form of `WireAdapterCapability`.
 package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// `@X` aliases `@Contributes(to: key)` — the multibinding-key reference (an output edge).
@@ -20,7 +27,7 @@ package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// proxy's **structural half** (the `struct` declaration — fields + init + `Sendable`, body hole),
     /// superseding the adapter macro's type emission; the domain witness body is filled by an adapter
     /// codegen tool via an `extension` in the same module. See `renderContributorProxyDeclaration`.
-    case contributesProxy(key: String, proxyTypePrefix: String)
+    case contributesProxy(key: String, proxyTypePrefix: String, proxyScope: DiscoveredProxyScope)
     /// `@X(argument)` makes the annotated binding depend on a graph value named by `argument`, lifted
     /// onto its contributor proxy — dispatched on the argument's kind: a `FactoryKey` (matches a
     /// `@Factory(key)` template) injects that factory; a `BindingKey<T>` injects that keyed binding;
@@ -112,7 +119,13 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
             let prefixArgument = call.arguments.first(where: { $0.label?.text == "proxyTypePrefix" }),
             let prefix = prefixArgument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
         {
-            return .contributesProxy(key: toArgument.expression.trimmedDescription, proxyTypePrefix: prefix)
+            // `proxyScope:` has a single value (`.singleton`) today, so it is read as that regardless of
+            // whether the source states it. When `WireProxyScope` grows cases, parse the argument here.
+            return .contributesProxy(
+                key: toArgument.expression.trimmedDescription,
+                proxyTypePrefix: prefix,
+                proxyScope: .singleton
+            )
         }
         if member.declName.baseName.text == "mapsFactoryRoles",
             let rolesArgument = call.arguments.first(where: { $0.label?.text == "roles" }),
