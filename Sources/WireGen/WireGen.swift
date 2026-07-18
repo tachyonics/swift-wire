@@ -299,7 +299,8 @@ struct WireGen {
             resolvedBindingsByContainer[containerKey, default: []] += graph.outcome.topologicalOrder ?? []
             for orchestration in containerOrchestrations {
                 seedScopeOrchestrations.append(orchestration)
-                resolvedBindingsByContainer[containerKey, default: []] += orchestration.result.outcome.topologicalOrder ?? []
+                resolvedBindingsByContainer[containerKey, default: []] +=
+                    orchestration.result.outcome.topologicalOrder ?? []
             }
         }
         return GraphBuilds(

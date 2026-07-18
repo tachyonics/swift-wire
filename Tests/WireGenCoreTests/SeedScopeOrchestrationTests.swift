@@ -67,8 +67,18 @@ struct SeedScopeOrchestrationTests {
             typeKind: "struct",
             genericParameterNames: [],
             dependencies: [
-                DependencyParameter(name: "seed", type: "RequestSeed", kind: .injectInitParameter, location: mockLocation("S.swift")),
-                DependencyParameter(name: "repository", type: "TodoRepository", kind: .injectInitParameter, location: mockLocation("S.swift")),
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
+                DependencyParameter(
+                    name: "repository",
+                    type: "TodoRepository",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
             ],
             location: mockLocation("S.swift"),
             scopeKey: ScopeKey(seed: "RequestSeed"),
@@ -96,7 +106,9 @@ struct SeedScopeOrchestrationTests {
         // The proxy gained a `.scopeCapture` dependency on `TodoRepository`.
         let linkedProxy = try #require(
             linked.compactMap { binding -> DiscoveredScopeBoundType? in
-                guard case .scopeBound(let type) = binding, type.typeName.hasPrefix("_WireRouteContributor_") else { return nil }
+                guard case .scopeBound(let type) = binding, type.typeName.hasPrefix("_WireRouteContributor_") else {
+                    return nil
+                }
                 return type
             }.first
         )

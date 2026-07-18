@@ -132,8 +132,18 @@ struct SeedScopeEmissionTests {
             typeKind: "struct",
             genericParameterNames: [],
             dependencies: [
-                DependencyParameter(name: "seed", type: "RequestSeed", kind: .injectInitParameter, location: mockLocation("S.swift")),
-                DependencyParameter(name: "repository", type: "TodoRepository", kind: .injectInitParameter, location: mockLocation("S.swift")),
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
+                DependencyParameter(
+                    name: "repository",
+                    type: "TodoRepository",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
             ],
             location: mockLocation("S.swift"),
             scopeKey: ScopeKey(seed: "RequestSeed"),
@@ -173,7 +183,9 @@ struct SeedScopeEmissionTests {
         // The thunk closure builds the controller from the seed, the borrow resolving to the captured
         // singleton local (`todoRepository`), not `_wireGraph.todoRepository`.
         #expect(output.contains("let \(thunkLocal): \(thunkType) = { requestSeed in"))
-        #expect(output.contains("let sessionController = SessionController(seed: requestSeed, repository: todoRepository)"))
+        #expect(
+            output.contains("let sessionController = SessionController(seed: requestSeed, repository: todoRepository)")
+        )
         #expect(output.contains("return sessionController"))
         // The proxy's `_wireEnterScope` argument wires to the thunk local.
         #expect(output.contains("_WireRouteContributor_SessionController(_wireEnterScope: \(thunkLocal))"))

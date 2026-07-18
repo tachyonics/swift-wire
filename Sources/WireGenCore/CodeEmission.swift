@@ -71,7 +71,10 @@ package func renderWireGraph(
     // contributor proxy in a given graph builds its subject from the seed scope over that same graph.
     let seedScopesByParent = Dictionary(grouping: seedScopeOrders, by: { $0.parentGraphType })
     func seedScopeMap(forParent parent: String) -> [String: SeedScopeEmission] {
-        Dictionary((seedScopesByParent[parent] ?? []).map { ($0.seedTypeExpression, $0) }, uniquingKeysWith: { first, _ in first })
+        Dictionary(
+            (seedScopesByParent[parent] ?? []).map { ($0.seedTypeExpression, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     // Default graph — always emitted, even when empty, so consumers
