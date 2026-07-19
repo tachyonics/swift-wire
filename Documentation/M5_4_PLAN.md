@@ -156,138 +156,53 @@ on demand when the subject is narrower than `proxyScope`."
 
 ## Sub-steps
 
-**Status:** M5.4.1–M5.4.4 shipped — the non-generic bridge serves cross-runtime (the `wire-mvc-examples`
-sessions example: a `@Scoped(seed: HTTPRequest.self) @Controller` injecting a request-scoped `Session`
-that borrows a `@Singleton SessionManager`). **M5.4G is done** — the spine now serves the *idiomatic*
-scoped-controller shape (a generic `@Scoped(seed:) @Controller` injecting the app's opaque-lifted backend),
-end-to-end in the proposal-native runtime. **M5.4E is next.** Per the overall sequence in [M5_PLAN.md](M5_PLAN.md):
-**M5.4G ✅ → M5.4E → M5.4R → refinements (M5.4.5 / M5.4.6) → M5.5 → M5.6.** M5.4E and M5.4R are *unblockers,
-not polish*: M5.4E lets the sessions example **throw a named error and map it** (deleting the gate +
-sentinel + double-read — authentication becomes throw-at-scope-construction → mapped status, gates reserved
-for authorization), and M5.4R unblocks a **concrete multi-part `ResponseSender`** handler. M5.4G stays first
-only because it is the one *hard* block (the common shape is impossible today); E cleans up a working
-pattern and R enables a new one.
+**Status:** the spine (**M5.4.1–M5.4.4**), **M5.4G** (generic/opaque-backed scoped controllers), and
+**M5.4E** (route error handling — [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md), §M5.4E in
+[M5_PLAN.md](M5_PLAN.md)) are all **shipped**: a `@Scoped(seed: HTTPRequest.self) @Controller` — including
+the idiomatic generic opaque-backed shape — serves cross-runtime, and a route/handler throw maps at the
+terminal. **Remaining: M5.4.5** (request-scope teardown — conditional) and **M5.4.6** (per-root
+reachability — refinement), both below. Overall sequence in [M5_PLAN.md](M5_PLAN.md): **M5.4 spine ✅ →
+M5.4G ✅ → M5.4E ✅ → M5.4R → M5.4.5 / M5.4.6 → M5.5 → M5.6.** The shipped sub-steps are collapsed to
+one-liners below; the *central mechanism decision* and *proxyScope hold/bridge* sections above are the
+durable rationale for why the shipped code is shaped as it is.
 
-### M5.4.1 — scoped-controller recognition + the scoped proxy shape  *(swift-wire — WireGen)*
+### M5.4.1 — scoped-controller recognition + the scoped proxy shape — ✅ DONE
 
-**Scope:** the proxy is emitted at the **declared `proxyScope`** (`.singleton` for `@Controller` — see
-*Distinguishing hold from bridge*), and swift-wire branches on subject-scope vs that proxyScope. For
-`@Scoped(seed: S.self) @Controller` the subject is narrower than the proxy → **bridge**: the controller
-becomes an **S-scoped binding** (lives in `_<S>WireScope`), and the app-scoped proxy holds the
-middleware fields as today **plus a new `_wireEnterScope` thunk field** and **no `_wireSubject`**
-(storing the seeded subject would be exactly the cross-scope violation the bridge exists to resolve).
-For `@Singleton @Controller` the subject matches the proxyScope → **hold**, byte-identical to today. The
-`@Controller` alias declares `.contributesProxy(to: WireMVCKeys.routeContributors, proxyTypePrefix:
-"_WireRouteContributor_", proxyScope: .singleton)`.
+`@Controller` declares `proxyScope: .singleton`; swift-wire branches **hold** (singleton subject →
+`_wireSubject`, byte-identical to before) vs **bridge** (seeded subject → an `_wireEnterScope` thunk field
+and *no* `_wireSubject`, the controller becoming an S-scoped binding). *(swift-wire main `0d08b95`.)*
 
-**Why now:** it pins the two structural shapes (a scoped binding + a thunk-carrying proxy) every later
-step emits against; it is the riskiest seam (the graph must now host a binding that is *not*
-app-constructed yet still owns an app-scoped contributor).
+### M5.4.2 — the synthesized scope-entry thunk — ✅ DONE
 
-**Validation gate:** a `@Scoped(seed:) @Controller` compiles; the emitted proxy carries the thunk
-field and no subject; an existing `@Singleton @Controller` proxy is byte-identical (no regression).
+The "replace-the-binding-with-a-provider" primitive: `_wireEnterScope: @Sendable (Seed) async throws -> C`
+emitted in `_wireBootstrap`, **capturing only the borrowed app-singleton locals** (never the graph),
+returning the rooted controller. Two new `DependencyKind`s (`.scopeEntryThunk` / `.scopeCapture`) integrate
+it into topo ordering without a "no producer" error. *(swift-wire.)*
 
-### M5.4.2 — the synthesized scope-entry thunk  *(swift-wire — WireGenCore)*
+### M5.4.3 — per-request scope entry in the witness — ✅ DONE
 
-**Scope:** the "replace-the-binding-with-a-provider" primitive. Emit a **singleton-parameterized**
-scope bootstrap (SeedScopeOrchestration already isolates the borrowed-singleton set —
-`Sources/WireGenCore/SeedScopeOrchestration.swift:151-163`), construct the `_wireEnterScope` thunk
-from the singleton locals during `_wireBootstrap`, and inject it into the scoped proxy's init. The
-thunk calls the scope bootstrap and **returns the rooted controller `C`** — not the `_<S>WireScope`
-struct — so the witness (M5.4.3) needs zero knowledge of the scope struct's internals. When teardown
-lands (M5.4.5) the return grows to carry a teardownable handle (e.g. `(C, some Teardownable)`); the
-spine returns bare `C`.
+A scoped witness emits `let wireMVCController = try await self._wireEnterScope(request)` at the terminal top
+and dispatches on that local (not `self._wireSubject`); the middleware fold composes around it, and the
+entry sits **inside the terminal `catch`** so a construction throw maps (the M5.4E seam). *(wire-mvc;
+swift-wire fixes `013e061`.)*
 
-**Why now:** it is the load-bearing new Core capability; everything runtime rests on the thunk
-producing a correctly-scoped controller that shares app singletons.
+### M5.4.4 — seed construction — ✅ DONE
 
-**Validation gate:** `Wire.bootstrap()` builds a graph containing a scoped controller; calling the
-thunk twice with two seeds yields two fresh controllers; both share the *same* app-singleton
-instances (the shipped `BootstrapTests.swift:383-399` "singletons are shared" property, now reached
-through the thunk rather than a hand-passed graph).
+First cut: the seed is the concrete `request: HTTPRequest` from the register closure (always available, no
+dependency on the generic `Builder.RequestContext`) — covering the whole auth cluster. *(wire-mvc.)*
 
-### M5.4.3 — per-request scope entry in the witness  *(wire-mvc — WireMVCRouteGen)*
+### M5.4G — generic scoped controllers (the injected/opaque axis through a bridge) — ✅ DONE
 
-**Scope:** for a scoped controller, the register closure body becomes: build the seed (M5.4.4) →
-`let controller = try await self._wireEnterScope(seed)` → dispatch to the handler on it.
-The middleware fold composes around it exactly as today (the fold is outermost; scope entry + handler
-are the terminal). **The scope entry sits inside the terminal's `catch`** so a construction throw
-maps to a status (M5.4E interleave), not a router 500.
-
-**Why now:** this is the spine's payoff — the first request-scoped controller serving.
-
-**Validation gate:** `sessions` or `todos-auth-fluent` ports on A-inject — a request-scoped
-controller injects a request-scoped principal/session, constructed fresh per request, with a
-`@Singleton` controller alongside in the same app; auth failures return 401/403 from a gate, a
-missing record returns 404 via the terminal error map.
-
-### M5.4.4 — seed construction  *(wire-mvc)*
-
-**Scope:** WireMVC publishes the request seed type and builds it from the register-closure primitives.
-**First cut: seed built from the concrete `request: HTTPRequest`** — always available, no dependency
-on the generic `Builder.RequestContext` — so verification lives in a request-scoped binding
-(`@Scoped(seed:) TokenVerifier → Principal`). This covers the whole auth cluster.
-
-**Why now:** M5.4.3 needs a concrete seed value; this is the smallest thing that supplies one.
-
-**Validation gate:** the seed carries the request; a request-scoped verification binding reads the
-token off it and produces the principal the controller injects.
-
-### M5.4G — generic scoped controllers (the injected/opaque axis through a bridge)  *(swift-wire — codegen)* — ✅ DONE
-
-**Resolved.** Both gaps fixed and the validation gate met: a generic `@Scoped(seed:) @Controller`
-(`MeController<Repository: TodoRepository>`) injecting the app's opaque-lifted `@Singleton(as: TodoRepository.self)`
-backend *and* the request-scoped `Session` compiles and **serves** in `wire-mvc-examples` — the opaque singleton
-stays shared (borrowed) while the controller is fresh per request. swift-wire 626 tests green; the non-generic
-seed-scope path is unchanged (the lift is inert when there are no opaque axes).
-- **Gap 1 (`ScopeEntryEmission.scopeEntryThunkLines`)** — a generic bridge proxy is a lift node, so its
-  `_wireEnterScope` thunk type is `liftSpecialised` (Rule-2b `some Constraint` substitution, format-preserving)
-  to match the graph's specialised construction call. Plus a sub-fix: the thunk is emitted with its parameter /
-  effects / `@Sendable` **inline**, letting Swift infer the return type from the body — so a subject generic over
-  the opaque backend resolves to the *concrete* backend the body constructs (`MeController<CouchDBTodoRepository>`)
-  rather than an unspellable `some P` closure-return type.
-- **Gap 2 (`CodeEmission.appendSeedScopeStruct`)** — the seed-scope struct + bootstrap are now opaque-lifted like
-  `_WireGraph<T0>`: each opaque axis a stored binding uses is lifted to a generic parameter, the struct field
-  spelled via `wireGraphFieldType` (`MeController<T0>`), the bootstrap threads `_WireGraph<T0>`, and the façade
-  keeps the opaque-erased shape (`-> _<S>WireScope<some P>`). Axes the scope doesn't use stay opaque in the
-  parent-graph argument. New helper `topLevelGenericArguments` parses the parent's opaque axis list.
-
-*Note:* the generic bridge is validated **end-to-end by the example** (real WireGen pipeline) rather than a
-hand-constructed golden — the specialisation/lift is graph-driven, so hand-writing the specialised binding would
-risk a false negative (per the macro-output-invisible lesson).
-
-The spine-completing step. A `@Scoped(seed:) @Controller` **generic over an injected, lifted-generic**
-(`@Singleton(as: P.self)`, opaque) backend — the idiomatic shape (exactly what `TodosController<Repository>`
-is, app-scoped). Both deferred use cases reduce to this: a scoped controller injecting the opaque
-`TodoRepository`, and a request-scoped value (`Session<Manager: SessionManager>`) injecting an opaque
-manager — opaque injection *requires* the consumer be generic (`some P` can't be a stored property), so the
-controller becomes generic to thread it.
-
-**Not an architectural wall — two bounded codegen gaps**, found by a spike (a generic `MeController<Repository>`
-over `@Singleton(as: TodoRepository.self)`). The injected axis **already threads to the construction**: the
-thunk body emits `MeController(repository: someTodoRepository)` — specialised, capturing the opaque borrow —
-and the proxy is `_WireRouteContributor_MeControllerOfSomeTodoRepository`. What breaks is only the **spelling**:
-1. **Bridge thunk emission (`scopeEntryThunkLines`)** spells the subject from the *unspecialised*
-   `_wireEnterScope` dependency type — emitting the return type `-> MeController<Repository>` (the bare param,
-   not in scope), the thunk local `sendable…MeControllerOfRepository`, and `return meControllerOfRepository`
-   — while the graph specialised to `some TodoRepository`, so the thunk's type / local / return don't match
-   the proxy's specialised construction call (which references `…MeControllerOfSomeTodoRepository`). **Fix:**
-   thread the proxy's specialisation into the thunk's return type, local name, and return local (rather than
-   parsing them from the generic dependency type).
-2. **Seed-scope emission of a generic scoped binding** (pre-existing, orthogonal to the bridge): the
-   `_<S>WireScope` struct field emitted `let meControllerOfSomeTodoRepository: MeController` — the field *type*
-   bare (missing `<…>`), and the bootstrap generic over `_WireGraph<some TodoRepository>`. Generic
-   `@Scoped(seed:)` bindings were never exercised in a seed scope, so `appendSeedScopeStruct` doesn't
-   specialise the field type. This blocks *any* generic scoped binding, bridge or not. **Fix:** specialise the
-   field type (and generic references) in the seed-scope struct/bootstrap emission.
-
-**Why now:** the only remaining item that *hard-blocks* a current use case — a request-scoped controller doing
-real work needs the app's portable (opaque-lifted) backend, and today it can't have it. The one workaround
-(bind the backend *concretely*) sacrifices the cross-runtime portability the opaque lift exists for.
-
-**Validation gate:** a generic `@Scoped(seed:) @Controller` over an `@Singleton(as: P.self)` backend compiles
-and serves in `wire-mvc-examples` (extend the sessions `MeController` to inject the repository) — the opaque
-singleton stays shared (borrowed) while the controller is fresh per request.
+The idiomatic shape now serves: a generic `@Scoped(seed:) @Controller` (`MeController<Repository: TodoRepository>`)
+injecting the app's opaque-lifted `@Singleton(as: TodoRepository.self)` backend *and* a request-scoped `Session`
+compiles and **serves** cross-runtime — the opaque singleton stays shared (borrowed), the controller fresh per
+request. Two bounded codegen gaps fixed (not an architectural wall): (1) `ScopeEntryEmission.scopeEntryThunkLines`
+— the bridge thunk is `liftSpecialised` with its param/effects/`@Sendable` emitted **inline** so Swift infers the
+*concrete* backend return type from the body (not an unspellable `some P`); (2) `CodeEmission.appendSeedScopeStruct`
+— the seed-scope struct + bootstrap are opaque-lifted like `_WireGraph<T0>` (a pre-existing hole for *any* generic
+scoped binding). Validated **end-to-end by the example** (graph-driven lift, so a hand-written golden would risk a
+false negative). *(swift-wire main `1814788`, 626 tests; files: `SeedScopeStructEmission.swift` (new),
+`ScopeEntryEmission.swift`, `CodeEmission.swift`.)*
 
 ### M5.4.5 — request-scope teardown  *(swift-wire — conditional)*
 
@@ -323,7 +238,7 @@ is the structural guarantee the design promises, added as a bounded follow-on.
 **Validation gate:** with two `@Scoped(seed: S)` controllers A and B sharing a scope, a request routed
 to A constructs no binding reachable only from B.
 
-## Key sub-decisions to pin before starting
+## Key sub-decisions (pinned — all resolved as shipped)
 
 - **Seed source (M5.4.4).** The generic `Builder.RequestContext` cannot *be* the seed (`@Scoped(seed:)`
   needs a concrete type). Commit to **seed-from-`HTTPRequest`** for the spine; the **enriched-context
@@ -341,9 +256,10 @@ to A constructs no binding reachable only from B.
   set; emit a singleton-parameterized bootstrap for the thunk to call.
 - **`~Escapable` `requestContext` cannot leave the closure** — the seed is *built inside* the register
   closure; if a future variant seeds from the context, the context is consumed there.
-- **M5.4E interleave (load-bearing).** A failed verify throws at scope entry; that entry must sit
-  inside the terminal's `catch` so it maps to 401/404, not a router 500 — the concrete seam where M5.4
-  and M5.4E touch (open question in [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md)).
+- **M5.4E interleave (load-bearing) — resolved.** A failed verify throws at scope entry; that entry
+  now sits inside the terminal's `catch` (M5.4.3 emits it there), so it maps rather than reaching a
+  router 500 — the concrete seam where M5.4 and M5.4E touch. See
+  [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
 - **Coexistence** — confirm a graph with both a `@Singleton` and a `@Scoped` controller collates and
   serves; the uniform `any RouteContributor` boxing should make this fall out, but it is the M5.4.3
   gate's second half.

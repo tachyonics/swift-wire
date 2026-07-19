@@ -433,11 +433,12 @@ cluster's real gate is **M5.4**, where the principal is a request-scoped *inject
 
 ## Remaining work (in completion order)
 
-M5.0–M5.3 are shipped (above). The iterations below are the remaining work, top-to-bottom in
-completion order: **M5.4** is next; **M5.4E** interleaves with it (not a later step); **M5.4R** is
-a conditional raw-track follow-on that lands when a transformed-slot example forces it; then
-**M5.5** and **M5.6**. The `E`/`R` suffixes mark items that hang off the M5.4 phase rather than
-being sequential milestones with their own gate-between.
+M5.0–M5.3 are shipped (above), and **M5.4E** (route error handling) is now **shipped** too (it
+interleaved with M5.4 rather than following it). The iterations below are the remaining work,
+top-to-bottom in completion order: **M5.4** is next; **M5.4R** is a conditional raw-track follow-on
+that lands when a transformed-slot example forces it; then **M5.5** and **M5.6**. The `E`/`R`
+suffixes mark items that hang off the M5.4 phase rather than being sequential milestones with their
+own gate-between.
 
 ## Iteration M5.4 — request-scoped controllers — ▶ NEXT
 
@@ -524,13 +525,21 @@ controller injects a request-scoped principal/session, constructed fresh per req
 domain failure (a missing record) returns 404 via the terminal error map (route-error-handling
 iteration, interleaved).
 
-## Iteration M5.4E — route error handling (interleaved with M5.4)
+## Iteration M5.4E — route error handling (interleaved with M5.4) — ✅ COMPLETE
+
+> **Status: shipped** — terminal-scoped `@ErrorResponse` serves in `wire-mvc` (a thrown
+> `UserStore.NotFound` maps to a 404 JSON body in `WireMVCExample`, on `NIOHTTPServer`; 26
+> `WireMVCCodegenTests` green). **Pure adapter codegen — no swift-wire change.** Two shipped forms
+> (`(E.self, .status)` shorthand + inline typed-parameter closure `{ (e: E) in … }`); a named-function
+> reference is **deferred** (a self-reference is a circular attached-macro reference — the compiler
+> type-checks the marker's argument), with a **graph-injected handler** reserved as the dependency-bearing
+> tier. Full record: [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
 
 New in this plan; resolves the "Response surface beyond `@JSONResponse`" open decision below.
 Interleaved with M5.4 because the auth/CRUD examples that gate M5.4 throw domain errors that must
-map to real statuses — the shipped terminal catches only `WireMVCBindingError`, so every other
-throw is a 500 today (`getUser`'s `try store.find(id)` already returns 500, not 404, for a missing
-id). Full design record: [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
+map to real statuses — the shipped terminal caught only `WireMVCBindingError`, so every other
+throw was a 500 (`getUser`'s `try store.find(id)` returned 500, not 404, for a missing id). Full
+design record: [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
 
 **Scope:**
 - **Terminal-scoped, not global.** Error→response mapping lives at the **terminal**, because that
@@ -538,12 +547,21 @@ id). Full design record: [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.
   already consumed the box (and its sender) into `next`, so it can *observe* a throw but cannot
   write a response to it. This is a *consequence* of the Model-B box shape — the same root as the
   short-circuit model, not a separate choice.
-- **`@ErrorMap` at controller and route scope**, composed controller-outer → route-inner
+- **`@ErrorResponse` at controller and route scope**, composed route-inner → controller-outer
   (most-specific wins), consulted inside the terminal's existing `catch` — extending the shipped
-  `WireMVCBindingError` → status path, not a new runtime layer.
-- **The global sliver is thin:** an unmapped throw propagates out of the chain to the
-  router/server default (500). A default error map is the outermost tier, *not* a global
-  middleware (which structurally can't respond to a throw).
+  `WireMVCBindingError` → status path, not a new runtime layer. Two shipped forms: `(E.self, .status)`
+  and an inline typed-parameter closure `{ (e: E) in … }`. **Pure adapter codegen — no `.injectsFromGraph`,
+  no new Core capability.** A named-function reference is deferred (a self-reference is a circular
+  attached-macro reference); a dependency-bearing **graph-injected handler** (an external binding's
+  metatype, lifted via `.injectsFromGraph`, parallel to `@Middleware`'s factory tier) is the reserved
+  home for that ergonomics + deps.
+- **The global sliver is thin:** an unmapped throw is **re-thrown** out of the chain to the
+  router/server default (500) — WireMVC never synthesises its own 500. A `Swift.Error` catch-all is the
+  outermost declared tier (consulted after the binding-error built-in), *not* a global middleware (which
+  structurally can't respond to a throw).
+- **Both throw sites map.** The scope-entry line (`try await self._wireEnterScope(request)`) moves
+  *inside* the terminal `do`, so a throwing request-scoped binding maps like a handler throw (open
+  question #3, resolved). See [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
 - **Scope boundary — raw handlers own their errors.** Once a raw handler starts streaming the
   response is committed (the box's no-post-processing property), so a mid-stream throw can't be
   remapped. Error maps are a typed-terminal concern.
@@ -552,9 +570,13 @@ id). Full design record: [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.
 a faithful port), and its design settles the auth-failure division of labor M5.4 depends on. It
 extends shipped M5.1 terminal codegen, so it does **not** wait on M5.5.
 
-**Validation gate:** a handler throwing a domain error (`NotFound` → 404, a validation error → 422)
-returns the mapped status; a controller-scope `@ErrorMap` covers every route and a route-scope one
-overrides it for a single route; an unmapped throw still reaches the router's 500.
+**Validation gate — MET.** A handler throwing a domain error (`NotFound` → 404, a validation error →
+422) returns the mapped status; a controller-scope `@ErrorResponse` covers every route and a route-scope
+one overrides it for a single route; a throwing request-scoped binding maps at scope entry; an unmapped
+throw is re-thrown and still reaches the router's 500. Discharged in-repo by `WireMVCExample`
+(`GET /users/999` → 404 JSON body, served on `NIOHTTPServer`) plus the `WireMVCCodegen` golden/diagnostic
+tests; the `wire-mvc-examples` sessions port (throwing `Session` self-production replacing the
+`RequireSession` gate) is the follow-on that exercises the scope-entry-throw path end-to-end.
 
 ## Iteration M5.4R — concrete `@RawRoute` roles (raw-track follow-on, when forced)
 
@@ -704,9 +726,12 @@ transport-only contributor mounts through its own adapter.
   context-free responder/transport decorator when forced, never (ii) collated
   `RouterMiddleware`s**.
 - **Response surface beyond `@JSONResponse`** — status/headers control, error→response mapping.
-  **error→response mapping decided: terminal-scoped `@ErrorMap` at controller/route scope**
-  (iteration M5.4E, interleaved with M5.4), with a thin default/router-500 global sliver, *not*
-  global middleware — see [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
+  **error→response mapping decided: terminal-scoped `@ErrorResponse` at controller/route scope**
+  (iteration M5.4E, interleaved with M5.4) — two shipped forms (`(E.self, .status)` and an inline
+  typed-parameter closure), a `Swift.Error` catch-all, an unmapped throw re-thrown to the router-500,
+  *not* global middleware. A named-function reference is deferred (circular attached-macro reference); a
+  graph-injected handler is the reserved dependency-bearing tier. Pure adapter codegen, no new Core
+  capability — see [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
   Status/headers control stays narrow (status + JSON); grow only when an example forces it.
 
 ## When M5 is "done"
@@ -717,7 +742,7 @@ transport-only contributor mounts through its own adapter.
   `WireMVCServerTransport` adapter, on Hummingbird/Vapor; `@Middleware` folded into the
   generated routing (type-transforming middleware surfacing as compile errors); the raw
   escape-hatch handler; request-scoped controllers; the Tier-2 `@WireHummingbird`
-  composition-root macro; and terminal-scoped `@ErrorMap` route error handling. Request-scoped
+  composition-root macro; and terminal-scoped `@ErrorResponse` route error handling. Request-scoped
   controllers consume middleware-produced values via **A-inject** (request-scope injection);
   handler-parameter projection off an enriched box (**B-typed**) and the general
   decomposition-transformer surface (`@Configuration`, pluggable bindings) are **deferred** — see
