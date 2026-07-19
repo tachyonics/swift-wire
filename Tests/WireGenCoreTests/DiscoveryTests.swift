@@ -2304,6 +2304,27 @@ struct DiscoveryTests {
         #expect(result[0].dependencies[1].keyIdentifier == nil)
     }
 
+    @Test func injectInitParameterWithBindKeyExtractsCanonicalText() {
+        // `@Bind(<key>)` — the property-wrapper param annotation — keys an init parameter. This is the
+        // spelling that actually compiles (`@Inject` is a peer macro that can't attach to a parameter), so
+        // it must be discovered identically: the keyed dep carries the canonical key text, unkeyed stays nil.
+        let source = """
+            @Singleton
+            struct UserRepo {
+                @Inject
+                init(@Bind(Database.primary) db: Database, logger: Logger) {
+                }
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "UserRepo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].dependencies.count == 2)
+        #expect(result[0].dependencies[0].name == "db")
+        #expect(result[0].dependencies[0].keyIdentifier == "Database.primary")
+        #expect(result[0].dependencies[1].name == "logger")
+        #expect(result[0].dependencies[1].keyIdentifier == nil)
+    }
+
     @Test func providesFunctionParameterWithKeyExtractsCanonicalText() {
         // The same per-parameter `@Inject(<key>)` keying applies to
         // `@Provides func` parameters — they're deps just like

@@ -134,8 +134,7 @@ private func applyInjectInit(
 ) {
     guard hasAttribute(initDecl.attributes, named: "Inject") else { return }
     result.dependencies = initDecl.signature.parameterClause.parameters.map { parameter in
-        let parameterKey = attribute(in: parameter.attributes, named: "Inject")
-            .flatMap { keyIdentifier(from: $0) }
+        let parameterKey = parameterKeyIdentifier(from: parameter)
         return DependencyParameter(
             name: parameterName(parameter),
             type: parameter.type.trimmedDescription,

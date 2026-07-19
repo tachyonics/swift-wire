@@ -54,6 +54,17 @@ func parameterName(_ parameter: FunctionParameterSyntax) -> String? {
     return parameter.firstName.text
 }
 
+/// The keyed binding a parameter names, or `nil` when it resolves by type. `@Inject` is a peer macro and
+/// cannot attach to a parameter, so a keyed `@Inject init` / `@Provides func` parameter carries the
+/// `@Bind(<key>)` property wrapper instead — read here. The legacy `@Inject(<key>)` spelling is still
+/// accepted (it never compiled on a parameter, but costs nothing to keep matching).
+func parameterKeyIdentifier(from parameter: FunctionParameterSyntax) -> String? {
+    if let bind = attribute(in: parameter.attributes, named: "Bind") {
+        return keyIdentifier(from: bind)
+    }
+    return attribute(in: parameter.attributes, named: "Inject").flatMap { keyIdentifier(from: $0) }
+}
+
 /// Extract the source-level read access from a declaration's
 /// modifier list. Returns `.internal` (Swift's default) when no
 /// bare access modifier is present.

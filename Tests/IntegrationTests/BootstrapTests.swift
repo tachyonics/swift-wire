@@ -116,6 +116,17 @@ struct BootstrapTests {
         #expect(graph.appNameKeyedAppNameAlternate.value == "alternate")
     }
 
+    @Test func keyedInitParameterInjectsTheMatchingKeyedProvider() async throws {
+        // KeyedInitConsumer has `@Inject init(@Bind(AppName.boundViaInit) name: AppName)`. `@Inject` is a
+        // peer macro and can't key a parameter, so `@Bind` (a property wrapper) carries the key. The
+        // matching `@Provides(AppName.boundViaInit)` binds a distinct `AppName("bound-via-init")` from the
+        // unkeyed module-scope `appName`. Confirms `@Bind` resolves the `(type, key)` identity end-to-end
+        // through a custom initialiser, and that the generated key-checks accept the pairing.
+        let graph = try await Wire.bootstrap()
+        #expect(graph.keyedInitConsumer.describe() == "init consumer with bound-via-init")
+        #expect(graph.appName.value == "IntegrationTests")
+    }
+
     // MARK: - Effect-aware emission
 
     @Test func asyncThrowsProviderFunctionResolvesThroughBootstrap() async throws {
