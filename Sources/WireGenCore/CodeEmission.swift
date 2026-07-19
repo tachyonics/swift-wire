@@ -492,10 +492,7 @@ private func appendStruct(
         // `_wireEnterScope` scope-entry thunk. Emit that closure here — in the bootstrap body, so it
         // captures the singleton locals the scope borrows — right before the proxy's own construction
         // line, whose `_wireEnterScope` argument resolves to the thunk's local.
-        if case .scopeBound(let scopeBound) = binding,
-            let scopeEntry = scopeBound.dependencies.first(where: { $0.name == contributorProxyScopeEntryFieldName }),
-            let thunkLines = scopeEntryThunkLines(for: scopeEntry, scopes: seedScopes)
-        {
+        if let thunkLines = scopeEntryThunkLines(forBridgeProxy: binding, scopes: seedScopes) {
             lines.append(contentsOf: thunkLines)
         }
         let local = propertyName(for: binding)
@@ -538,39 +535,6 @@ private func appendStruct(
     lines.append("    return \(structName)(\(returnArgs))")
 
     lines.append("}")
-}
-
-/// Emit the scope-entry thunk for a bridging contributor proxy — a `@Sendable (Seed) async throws ->
-/// Subject` closure that constructs the proxy's `@Scoped(seed:)` subject fresh from a seed and returns
-/// it. Emitted inside the bootstrap body so it captures the singleton locals the scope borrows (those
-/// resolve to the same identity names the enclosing bootstrap already bound). The proxy's
-/// `_wireEnterScope` argument then resolves to this thunk's local by identity naming, with no override.
-/// `scopes` maps seed-type expression → the seed scope's emission for this graph; returns `nil` for a
-/// non-bridge proxy (no scope-entry dependency, or no matching scope).
-private func scopeEntryThunkLines(
-    for dependency: DependencyParameter,
-    scopes: [String: SeedScopeEmission]
-) -> [String]? {
-    guard let (seed, subject) = parsedContributorScopeEntryThunkType(dependency.type),
-        let scope = scopes[seed]
-    else { return nil }
-    let thunkLocal = identifierName(forType: dependency.type, key: nil)
-    let seedLocal = identifierName(forType: seed, key: nil)
-    let subjectLocal = identifierName(forType: subject, key: nil)
-
-    var lines: [String] = ["    let \(thunkLocal): \(dependency.type) = { \(seedLocal) in"]
-    for binding in scope.topologicalOrder {
-        let name = propertyName(for: binding)
-        // A borrowed singleton resolves to the captured bootstrap local of the same identity name, so
-        // it is not re-constructed here; the seed's `let seed = seed` shadow is likewise redundant.
-        if scope.borrowedBindingPropertyNames.contains(name) { continue }
-        let construction = constructionExpression(for: binding)
-        if name == construction { continue }
-        lines.append("        let \(name) = \(construction)")
-    }
-    lines.append("        return \(subjectLocal)")
-    lines.append("    }")
-    return lines
 }
 
 /// The stored-property name on `_WireGraph` and the local name in
@@ -719,7 +683,7 @@ private func renderActorWeakSetterExtensions(
 /// `resolvingLocal` is forwarded to `renderArguments` so per-graph
 /// dependency substitutions (e.g., the seed-scope path inlining
 /// borrowed singletons at use sites) flow through.
-private func constructionExpression(
+func constructionExpression(
     for binding: DiscoveredBinding,
     resolvingLocal: ((String) -> String?)? = nil
 ) -> String {
