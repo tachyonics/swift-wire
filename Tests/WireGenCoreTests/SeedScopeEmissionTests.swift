@@ -123,6 +123,76 @@ struct SeedScopeEmissionTests {
         #expect(output == expected)
     }
 
+    @Test func bridgingProxyEmitsScopeEntryThunkCapturingSingletons() {
+        // A `.singleton` proxy over a `@Scoped(seed: RequestSeed)` controller (the bridge case): the
+        // main bootstrap emits a `_wireEnterScope` thunk that builds the controller fresh from a seed,
+        // capturing the borrowed app singleton (`todoRepository`) as a local, and wires it into the proxy.
+        let subject = DiscoveredScopeBoundType(
+            typeName: "SessionController",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
+                DependencyParameter(
+                    name: "repository",
+                    type: "TodoRepository",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
+            ],
+            location: mockLocation("S.swift"),
+            scopeKey: ScopeKey(seed: "RequestSeed"),
+            originModule: testModule
+        )
+        let proxy = contributorProxyBinding(
+            for: subject,
+            key: "WireMVCKeys.routeContributors",
+            prefix: "_WireRouteContributor_",
+            proxyScope: .singleton
+        )
+        let scope = SeedScopeEmission(
+            seedTypeExpression: "RequestSeed",
+            identifierSuffix: "RequestSeed",
+            parentGraphType: "_WireGraph",
+            topologicalOrder: [
+                syntheticProvider(boundType: "RequestSeed", accessPath: "requestSeed"),
+                syntheticProvider(boundType: "TodoRepository", accessPath: "_wireGraph.todoRepository"),
+                scopedSingleton(
+                    "SessionController",
+                    seed: "RequestSeed",
+                    dependencies: [(name: "seed", type: "RequestSeed"), (name: "repository", type: "TodoRepository")]
+                ),
+            ],
+            borrowedBindingPropertyNames: ["todoRepository"]
+        )
+        let output = renderWireGraph(
+            imports: [],
+            // `TodoRepository` before the proxy so its local is bound (and captured) by the time the
+            // thunk closure is emitted.
+            topologicalOrder: [singleton("TodoRepository"), .scopeBound(proxy)],
+            seedScopeOrders: [scope]
+        )
+
+        let thunkType = "@Sendable (RequestSeed) async throws -> SessionController"
+        let thunkLocal = identifierName(forType: thunkType, key: nil)
+        // The thunk closure builds the controller from the seed, the borrow resolving to the captured
+        // singleton local (`todoRepository`), not `_wireGraph.todoRepository`.
+        #expect(output.contains("let \(thunkLocal): \(thunkType) = { requestSeed in"))
+        #expect(
+            output.contains("let sessionController = SessionController(seed: requestSeed, repository: todoRepository)")
+        )
+        #expect(output.contains("return sessionController"))
+        // The proxy's `_wireEnterScope` argument wires to the thunk local.
+        #expect(output.contains("_WireRouteContributor_SessionController(_wireEnterScope: \(thunkLocal))"))
+        // The borrow is never re-constructed as a local inside the thunk.
+        #expect(!output.contains("let todoRepository = _wireGraph.todoRepository"))
+    }
+
     @Test func seedScopeBorrowingSingletonsExcludesThemFromStoredProperties() {
         // Singletons borrowed via the synthetic-borrow mechanism are
         // inlined at consumer call sites — emission substitutes the

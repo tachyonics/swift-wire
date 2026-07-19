@@ -67,6 +67,16 @@ package func renderWireGraph(
         lines.append(declaration)
     }
 
+    // Seed scopes grouped by the parent graph they borrow from, keyed by seed type — a bridging
+    // contributor proxy in a given graph builds its subject from the seed scope over that same graph.
+    let seedScopesByParent = Dictionary(grouping: seedScopeOrders, by: { $0.parentGraphType })
+    func seedScopeMap(forParent parent: String) -> [String: SeedScopeEmission] {
+        Dictionary(
+            (seedScopesByParent[parent] ?? []).map { ($0.seedTypeExpression, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
     // Default graph — always emitted, even when empty, so consumers
     // can call `Wire.bootstrap()` unconditionally.
     appendStruct(
@@ -74,6 +84,7 @@ package func renderWireGraph(
         bootstrapFunction: "_wireBootstrap",
         bootstrapMethod: "bootstrap",
         topologicalOrder: topologicalOrder,
+        seedScopes: seedScopeMap(forParent: "_WireGraph"),
         into: &lines,
         entries: &bootstrapEntries
     )
@@ -89,6 +100,7 @@ package func renderWireGraph(
             bootstrapFunction: "_wireBootstrap\(containerName)",
             bootstrapMethod: "bootstrap\(containerName)",
             topologicalOrder: order,
+            seedScopes: seedScopeMap(forParent: "_\(containerName)WireGraph"),
             into: &lines,
             entries: &bootstrapEntries
         )
@@ -368,6 +380,7 @@ private func appendStruct(
     bootstrapFunction: String,
     bootstrapMethod: String,
     topologicalOrder: [DiscoveredBinding],
+    seedScopes: [String: SeedScopeEmission] = [:],
     into lines: inout [String],
     entries: inout [BootstrapEntry]
 ) {
@@ -474,6 +487,13 @@ private func appendStruct(
         if case .aggregate(let aggregate) = binding, aggregate.flavour == .builder {
             lines.append(contentsOf: builderFoldLines(aggregate))
             continue
+        }
+        // A bridging contributor proxy (`.contributesProxy` over a `@Scoped(seed:)` subject) takes a
+        // `_wireEnterScope` scope-entry thunk. Emit that closure here — in the bootstrap body, so it
+        // captures the singleton locals the scope borrows — right before the proxy's own construction
+        // line, whose `_wireEnterScope` argument resolves to the thunk's local.
+        if let thunkLines = scopeEntryThunkLines(forBridgeProxy: binding, scopes: seedScopes) {
+            lines.append(contentsOf: thunkLines)
         }
         let local = propertyName(for: binding)
         let construction = constructionExpression(for: binding)
@@ -663,7 +683,7 @@ private func renderActorWeakSetterExtensions(
 /// `resolvingLocal` is forwarded to `renderArguments` so per-graph
 /// dependency substitutions (e.g., the seed-scope path inlining
 /// borrowed singletons at use sites) flow through.
-private func constructionExpression(
+func constructionExpression(
     for binding: DiscoveredBinding,
     resolvingLocal: ((String) -> String?)? = nil
 ) -> String {
@@ -797,6 +817,9 @@ private func renderArguments(
     resolvingLocal: ((String) -> String?)? = nil
 ) -> String {
     dependencies
+        // Capture dependencies order the consumer but pass no argument — the scope-entry thunk that
+        // uses them references the captured locals directly. See `DependencyKind.scopeCapture`.
+        .filter { $0.kind != .scopeCapture }
         .map { dependency in
             // Resolve against the bridged identity so a constrained-parameter
             // dependency (`table: Table`) references its `some P` producer's

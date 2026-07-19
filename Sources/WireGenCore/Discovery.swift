@@ -622,6 +622,17 @@ package enum DependencyKind: Sendable, Equatable {
     /// the design depth.
     case injectMethodParameter
     case providerFunctionParameter
+    /// The `_wireEnterScope` scope-entry thunk on a *bridging* contributor proxy — an **emission-only**
+    /// dependency. The graph does NOT resolve it (it has no producer: it is synthesised inline as a
+    /// closure capturing the scope's borrowed singletons), but it IS emitted as the proxy's
+    /// field/init-parameter, and its construction argument is the emitted thunk local. See
+    /// `ContributorProxyEmission` / `scopeEntryThunkLines`.
+    case scopeEntryThunk
+    /// An **ordering-only** capture dependency of a bridging contributor proxy on an app singleton its
+    /// scope-entry thunk captures — resolved by the graph (so the proxy sorts *after* the singleton),
+    /// but NOT emitted as a proxy field or construction argument (the thunk references the captured
+    /// local directly). Added by the scope-entry linking pass in WireGen.
+    case scopeCapture
 }
 
 // MARK: - Top-level entry points
@@ -883,6 +894,8 @@ private func dependencyLine(_ dep: DependencyParameter) -> String {
     case .injectInitParameter: kindLabel = "@Inject init parameter"
     case .injectMethodParameter: kindLabel = "@Inject method parameter"
     case .providerFunctionParameter: kindLabel = "@Provides function parameter"
+    case .scopeEntryThunk: kindLabel = "scope-entry thunk"
+    case .scopeCapture: kindLabel = "scope capture"
     }
     // Wildcard-label parameters render as `_` to match the source-level
     // form. The sentinel only appears in human-facing output here;

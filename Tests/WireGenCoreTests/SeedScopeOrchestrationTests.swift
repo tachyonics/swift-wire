@@ -46,6 +46,85 @@ struct SeedScopeOrchestrationTests {
         )
     }
 
+    // MARK: - Scope-entry linking (bridging contributor proxies)
+
+    @Test func bridgeProxyResolvesAndSortsAfterItsBorrowedSingleton() throws {
+        // A `@Scoped(seed: RequestSeed)` controller injecting an app singleton (`TodoRepository`), and
+        // its `.singleton` bridge proxy. Through the real graph: (1) the proxy's `_wireEnterScope` thunk
+        // dependency must NOT read as a missing binding (it has no producer — it's synthesised inline),
+        // and (2) the scope-entry linking must give the proxy a `.scopeCapture` edge so it sorts *after*
+        // `TodoRepository`, whose local the thunk captures.
+        let repository = DiscoveredScopeBoundType(
+            typeName: "TodoRepository",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [],
+            location: mockLocation("Repo.swift"),
+            originModule: testModule
+        )
+        let subject = DiscoveredScopeBoundType(
+            typeName: "SessionController",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
+                DependencyParameter(
+                    name: "repository",
+                    type: "TodoRepository",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
+            ],
+            location: mockLocation("S.swift"),
+            scopeKey: ScopeKey(seed: "RequestSeed"),
+            originModule: testModule
+        )
+        let proxy = contributorProxyBinding(
+            for: subject,
+            key: "WireMVCKeys.routeContributors",
+            prefix: "_WireRouteContributor_",
+            proxyScope: .singleton
+        )
+        let orchestration = orchestrateSeedScope(
+            seedKey: ScopeKey(seed: "RequestSeed"),
+            scopeBindings: [.scopeBound(subject)],
+            borrowBindings: syntheticSingletonBorrowBindings(from: [.scopeBound(repository)]),
+            typealiases: [],
+            module: testModule
+        )
+
+        let linked = linkingScopeEntryCaptures(
+            into: [.scopeBound(repository), .scopeBound(proxy)],
+            orchestrations: [orchestration]
+        )
+
+        // The proxy gained a `.scopeCapture` dependency on `TodoRepository`.
+        let linkedProxy = try #require(
+            linked.compactMap { binding -> DiscoveredScopeBoundType? in
+                guard case .scopeBound(let type) = binding, type.typeName.hasPrefix("_WireRouteContributor_") else {
+                    return nil
+                }
+                return type
+            }.first
+        )
+        let captures = linkedProxy.dependencies.filter { $0.kind == .scopeCapture }
+        #expect(captures.map(\.type) == ["TodoRepository"])
+
+        // The real graph resolves cleanly (the thunk dep is not "missing") and orders the proxy after
+        // the singleton it captures.
+        let graph = buildDependencyGraph(from: linked, typealiases: [])
+        let order = try #require(graph.outcome.topologicalOrder)
+        let names = order.map(\.boundType)
+        let repositoryIndex = try #require(names.firstIndex(of: "TodoRepository"))
+        let proxyIndex = try #require(names.firstIndex(where: { $0.hasPrefix("_WireRouteContributor_") }))
+        #expect(repositoryIndex < proxyIndex)
+    }
+
     // MARK: - Validation
 
     @Test func scopeBindingDependingOnSeedOnlyValidates() throws {
