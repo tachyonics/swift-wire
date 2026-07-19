@@ -32,7 +32,20 @@ package func linkingScopeEntryCaptures(
         for binding in reached {
             let name = identifierName(forType: binding.boundType, key: binding.keyIdentifier)
             guard !borrowNames.contains(name) else { continue }  // a borrow itself uses nothing here
-            for dependency in binding.dependencies { usedTypes.insert(dependency.type) }
+            for dependency in binding.dependencies {
+                usedTypes.insert(dependency.type)
+                // A *generic* scope binding (e.g. `Session<Manager: SessionManager>`) injects a borrow
+                // through its own type parameter (`manager: Manager`), so the dependency type is the bare
+                // parameter — but the borrow it resolves to is the constraint's opaque form
+                // (`some SessionManager`). Record that too, else a borrow reached only transitively through
+                // a generic scope binding is never recognised as used (and its capture edge is dropped, so
+                // the proxy sorts *before* it and captures an undeclared local).
+                if let constraint = binding.genericParameterConstraints[dependency.type],
+                    constraintIsDetermining(constraint)
+                {
+                    usedTypes.insert("some \(constraint)")
+                }
+            }
         }
         capturesBySeed[orchestration.seedTypeExpression] = reached.compactMap { binding in
             let name = identifierName(forType: binding.boundType, key: binding.keyIdentifier)
