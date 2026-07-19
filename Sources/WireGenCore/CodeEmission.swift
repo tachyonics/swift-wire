@@ -195,144 +195,6 @@ package struct SeedScopeEmission: Sendable {
     }
 }
 
-/// Emit one `_<Suffix>WireScope` struct + matching
-/// `_wireBootstrap<Suffix>Scope` free function pair. The bootstrap
-/// takes `(seed:, wireGraph:)` parameters. Borrowed singleton
-/// bindings in the topological order are not declared as locals —
-/// each borrow's `accessPath` (`<wireGraphLocal>.<prop>`) is inlined
-/// at every consumer's arg site via the `resolvingLocal` hook on
-/// `renderArguments`. The synthetic seed binding shadow-binds from
-/// the parameter (`let X = X`) and is skipped via the
-/// `local != construction` check. Net result: only scope-bound
-/// bindings emit `let` lines, borrowed singletons appear at use
-/// sites only, and unused borrows produce no output.
-private func appendSeedScopeStruct(
-    scope: SeedScopeEmission,
-    parentGraphTypeReference: String,
-    into lines: inout [String],
-    entries: inout [BootstrapEntry]
-) {
-    let structName = "_\(scope.identifierSuffix)WireScope"
-    let bootstrapFunction = "_wireBootstrap\(scope.identifierSuffix)Scope"
-    let storedBindings = scope.topologicalOrder.filter {
-        !scope.borrowedBindingPropertyNames.contains(propertyName(for: $0))
-    }
-    // Both bootstrap parameters use type-anchored labels rather than
-    // role-anchored ones. The seed parameter keeps `seed:` as its
-    // external label (the role here is fixed) but uses the seed
-    // type's property-name form as its internal name. The wire-graph
-    // parameter's external label is the parent-graph type's stripped
-    // lowerCamel form (`wireGraph:` for `_WireGraph`,
-    // `testContainerWireGraph:` for `_TestContainerWireGraph`) so
-    // varying parent-graph types don't share the same label. Its
-    // internal name is that external label prefixed with `_` so a
-    // user binding whose property name resolves to `wireGraph` or
-    // `testContainerWireGraph` can coexist without colliding on the
-    // local-variable token inside the bootstrap body.
-    let seedLocal = identifierName(forType: scope.seedTypeExpression, key: nil)
-    let wireGraphExternal = wireGraphParameterLabel(forType: scope.parentGraphType)
-    let wireGraphInternal = wireGraphParameterInternalName(forType: scope.parentGraphType)
-
-    // The seed scope's bootstrap entry point on the `Wire` façade — keeps the
-    // `(seed:, <parentGraph>:)` parameter shape, forwarding to the private
-    // free function.
-    entries.append(
-        BootstrapEntry(
-            signature:
-                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)) async throws -> \(structName)",
-            body: "try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal))"
-        )
-    )
-
-    // Borrowed-singleton bindings get inlined at their consumers' arg
-    // sites rather than declared as locals — every consumer in the
-    // topo order resolves a borrow dep directly to the wire-graph
-    // expression (`_WireGraph.logger`). The map's keys are borrow
-    // property names; values are the substitution expressions read
-    // straight off each borrow's `accessPath`. Unused borrows produce
-    // no output: their let-lines are skipped and no consumer refers
-    // to them, so they vanish from the emitted bootstrap.
-    var borrowAccessPaths: [String: String] = [:]
-    for binding in scope.topologicalOrder {
-        let name = propertyName(for: binding)
-        guard scope.borrowedBindingPropertyNames.contains(name),
-            case .provider(let provider) = binding
-        else { continue }
-        borrowAccessPaths[name] = provider.accessPath
-    }
-    let resolveBorrow: (String) -> String? = { borrowAccessPaths[$0] }
-
-    lines.append("")
-    // No explicit `Sendable` conformance — Swift auto-derives it when
-    // every stored binding is itself `Sendable` (the dominant case:
-    // every server-side `@Singleton` / `@Provides` binding is
-    // typically Sendable). When a binding *isn't* Sendable (e.g. a
-    // class with `weak var` that's neither `@MainActor` nor
-    // `@unchecked Sendable`), the struct is non-Sendable too, and
-    // the compiler surfaces that at the *use site* (where the user
-    // tries to cross an isolation boundary) rather than at the
-    // generated struct declaration. Right place for the trade-off:
-    // the user chose the binding's isolation story, Wire respects it.
-    lines.append("internal struct \(structName) {")
-    for binding in storedBindings {
-        let property = propertyName(for: binding)
-        lines.append("    let \(property): \(binding.boundTypeReference)")
-    }
-    lines.append("}")
-
-    lines.append("")
-    lines.append(
-        "private func \(bootstrapFunction)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(parentGraphTypeReference)) async throws -> \(structName) {"
-    )
-
-    if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {
-        lines.append("    \(structName)()")
-        lines.append("}")
-        return
-    }
-
-    for binding in scope.topologicalOrder {
-        let local = propertyName(for: binding)
-        // Borrows are inlined at their consumers' arg sites — no let-
-        // line is needed (or wanted: unused borrows would otherwise
-        // leave dead lines in the emitted bootstrap).
-        if scope.borrowedBindingPropertyNames.contains(local) { continue }
-        let construction = constructionExpression(for: binding, resolvingLocal: resolveBorrow)
-        // Skip a redundant `let X = X` shadow: it happens when the
-        // construction expression equals the local name, which inside
-        // the seed bootstrap means the synthetic seed binding whose
-        // access path is the parameter's internal name. Subsequent
-        // bare references resolve to the parameter directly. The same
-        // shadow on a module-scope provider would cross from module
-        // scope into the function — that path stays in `appendStruct`
-        // and isn't affected.
-        guard local != construction else { continue }
-        lines.append("    let \(local) = \(construction)")
-    }
-
-    // Post-init member injection block for bindings constructed in
-    // this scope. Borrowed bindings are skipped — their post-init
-    // wiring (if any) belongs to the scope that owns them. Member
-    // injection parameters pointing at a borrowed target route
-    // through `resolveBorrow` so the assignment / method call uses
-    // the borrow's access path (`_WireGraph.logger`) rather than a
-    // non-existent local.
-    lines.append(
-        contentsOf: renderMemberInjections(
-            for: scope.topologicalOrder,
-            resolvingLocal: resolveBorrow,
-            skipConsumers: scope.borrowedBindingPropertyNames
-        )
-    )
-
-    let returnArgs = storedBindings.map { binding -> String in
-        let name = propertyName(for: binding)
-        return "\(name): \(name)"
-    }.joined(separator: ", ")
-    lines.append("    return \(structName)(\(returnArgs))")
-    lines.append("}")
-}
-
 /// The stored-property type for a binding on the generated `_WireGraph` struct:
 /// - a bare `some P` lift node uses its own lifted parameter (`T0`);
 /// - a structural lift node reuses its dependencies' parameters, spelled
@@ -340,7 +202,7 @@ private func appendSeedScopeStruct(
 ///   parameter of the matching bridge target;
 /// - everything else uses its concrete `boundTypeReference` (qualified for a
 ///   nested `@Singleton`).
-private func wireGraphFieldType(
+func wireGraphFieldType(
     for binding: DiscoveredBinding,
     liftedParameterForIdentity: [String: String]
 ) -> String {
@@ -861,7 +723,7 @@ private func renderArguments(
 /// scope's bootstrap). Their post-init wiring belongs to whichever
 /// scope owns their construction, not to scopes that merely
 /// reference them.
-private func renderMemberInjections(
+func renderMemberInjections(
     for topologicalOrder: [DiscoveredBinding],
     resolvingLocal: ((String) -> String?)? = nil,
     skipConsumers: Set<String> = []

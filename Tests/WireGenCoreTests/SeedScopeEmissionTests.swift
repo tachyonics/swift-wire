@@ -182,7 +182,9 @@ struct SeedScopeEmissionTests {
         let thunkLocal = identifierName(forType: thunkType, key: nil)
         // The thunk closure builds the controller from the seed, the borrow resolving to the captured
         // singleton local (`todoRepository`), not `_wireGraph.todoRepository`.
-        #expect(output.contains("let \(thunkLocal): \(thunkType) = { requestSeed in"))
+        // The closure carries its parameter/effects/`@Sendable` inline and infers its return type (so a
+        // generic subject resolves to the concrete backend, not an unspellable `some P` closure return).
+        #expect(output.contains("let \(thunkLocal) = { @Sendable (requestSeed: RequestSeed) async throws in"))
         #expect(
             output.contains("let sessionController = SessionController(seed: requestSeed, repository: todoRepository)")
         )
