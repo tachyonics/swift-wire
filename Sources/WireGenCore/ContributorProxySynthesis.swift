@@ -31,11 +31,14 @@ package func applyContributorProxies(
     let directiveBySubject = contributorProxyDirectives(annotations: annotations, useSites: useSites)
     guard !directiveBySubject.isEmpty else { return (allBindings, useSites, []) }
 
-    // Synthesise a proxy beside each proxied subject, recording subject identity → proxy identity.
+    // Synthesise a proxy beside each proxied subject, recording subject identity → proxy identity. The
+    // proxy is placed in the partition of its declared `proxyScope`, which is where its collated
+    // multibinding aggregates and where it is registered — NOT necessarily the subject's partition. A
+    // `.singleton` proxy over a `@Scoped` subject (a bridge) therefore leaves the subject's seeded
+    // partition and joins this container's app (scope-nil) partition; the subject stays where it is.
     var proxyBySubject: [String: String] = [:]
     var result = allBindings
     for (partition, bindings) in allBindings {
-        var proxies: [DiscoveredBinding] = []
         for binding in bindings {
             guard case .scopeBound(let subject) = binding,
                 let identity = binding.aliasTargetIdentity,
@@ -48,9 +51,9 @@ package func applyContributorProxies(
                 proxyScope: directive.proxyScope
             )
             proxyBySubject[identity] = proxy.qualifiedTypeName
-            proxies.append(.scopeBound(proxy))
+            let target = proxyPartition(directive.proxyScope, subjectPartition: partition)
+            result[target, default: []].append(.scopeBound(proxy))
         }
-        if !proxies.isEmpty { result[partition] = bindings + proxies }
     }
 
     let reattributed = reattributingInputEdges(useSites, toProxies: proxyBySubject, annotations: annotations)
@@ -58,6 +61,16 @@ package func applyContributorProxies(
     // declaration (`renderContributorProxyDeclaration`) into the consumer graph file, since Phase A moves
     // proxy-type emission out of the adapter macro and into the plugin.
     return (result, reattributed, Set(proxyBySubject.values))
+}
+
+/// The partition a contributor proxy is placed in, derived from its `proxyScope`. `.singleton` → the
+/// app (scope-nil) partition of the subject's container: a bridge proxy leaves the subject's seeded
+/// partition and joins the app graph, where its route-contributor collation aggregates and where it is
+/// applied once at bootstrap.
+private func proxyPartition(_ proxyScope: DiscoveredProxyScope, subjectPartition: Partition) -> Partition {
+    switch proxyScope {
+    case .singleton: return Partition(container: subjectPartition.container, scope: nil)
+    }
 }
 
 /// Map each proxied subject's identity to the proxy directive (multibinding key + type-name prefix) it

@@ -103,7 +103,7 @@ struct ContributorProxyEmissionTests {
             DependencyParameter(
                 name: contributorProxyScopeEntryFieldName,  // labelled — `_wireEnterScope`
                 type: thunkType,
-                kind: .injectInitParameter,
+                kind: .scopeEntryThunk,
                 location: mockLocation("C.swift")
             )
         ]
@@ -134,7 +134,7 @@ struct ContributorProxyEmissionTests {
         let expected = """
             struct _WireRouteContributor_SessionController<Repository: TodoRepository>: Sendable {
                 let _wireEnterScope: @Sendable (RequestSeed) async throws -> SessionController<Repository>
-                init(_wireEnterScope: @Sendable (RequestSeed) async throws -> SessionController<Repository>) {
+                init(_wireEnterScope: @escaping @Sendable (RequestSeed) async throws -> SessionController<Repository>) {
                     self._wireEnterScope = _wireEnterScope
                 }
             }
@@ -150,7 +150,7 @@ struct ContributorProxyEmissionTests {
             struct _WireRouteContributor_SessionController<Repository: TodoRepository>: Sendable {
                 let _wireEnterScope: @Sendable (RequestSeed) async throws -> SessionController<Repository>
                 let _wireFactory_Keys_backend: _WireFactory_Keys_backend
-                init(_wireEnterScope: @Sendable (RequestSeed) async throws -> SessionController<Repository>, _wireFactory_Keys_backend: _WireFactory_Keys_backend) {
+                init(_wireEnterScope: @escaping @Sendable (RequestSeed) async throws -> SessionController<Repository>, _wireFactory_Keys_backend: _WireFactory_Keys_backend) {
                     self._wireEnterScope = _wireEnterScope
                     self._wireFactory_Keys_backend = _wireFactory_Keys_backend
                 }

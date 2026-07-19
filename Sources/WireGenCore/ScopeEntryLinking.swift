@@ -19,13 +19,24 @@ package func linkingScopeEntryCaptures(
     into singletons: [DiscoveredBinding],
     orchestrations: [SeedScopeOrchestration]
 ) -> [DiscoveredBinding] {
-    // Per seed: one `.scopeCapture` dependency for each singleton the scope reaches as a borrow.
+    // Per seed: one `.scopeCapture` dependency for each singleton the scope *genuinely uses* as a borrow.
+    // The borrow set is over-generated (one synthetic borrow per app singleton, whether the scope reaches
+    // it or not — and, since a bridge proxy is itself an app singleton, that includes the proxy). Capturing
+    // an unused borrow would add a spurious edge (a proxy capturing itself → a cycle), so restrict to the
+    // borrow types the scope's own (non-borrow) bindings actually depend on.
     var capturesBySeed: [String: [DependencyParameter]] = [:]
     for orchestration in orchestrations {
         let reached = orchestration.result.outcome.topologicalOrder ?? []
+        let borrowNames = orchestration.borrowedBindingPropertyNames
+        var usedTypes: Set<String> = []
+        for binding in reached {
+            let name = identifierName(forType: binding.boundType, key: binding.keyIdentifier)
+            guard !borrowNames.contains(name) else { continue }  // a borrow itself uses nothing here
+            for dependency in binding.dependencies { usedTypes.insert(dependency.type) }
+        }
         capturesBySeed[orchestration.seedTypeExpression] = reached.compactMap { binding in
             let name = identifierName(forType: binding.boundType, key: binding.keyIdentifier)
-            guard orchestration.borrowedBindingPropertyNames.contains(name) else { return nil }
+            guard borrowNames.contains(name), usedTypes.contains(binding.boundType) else { return nil }
             return DependencyParameter(
                 name: nil,
                 type: binding.boundType,

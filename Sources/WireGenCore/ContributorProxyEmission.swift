@@ -94,11 +94,14 @@ package func renderContributorProxyDeclaration(_ proxy: DiscoveredScopeBoundType
         if dependency.kind == .scopeCapture { continue }
         let fieldName = dependency.name ?? contributorProxySubjectFieldName
         fields.append("let \(fieldName): \(dependency.type)")
-        // Unlabelled (subject) → `_ name`; labelled (factory) → `name`.
+        // The scope-entry thunk is a closure stored on the proxy, so its init parameter is `@escaping`.
+        let parameterType =
+            dependency.kind == .scopeEntryThunk ? "@escaping \(dependency.type)" : dependency.type
+        // Unlabelled (subject) → `_ name`; labelled (factory / scope-entry thunk) → `name`.
         let parameter =
             dependency.name == nil
-            ? "_ \(fieldName): \(dependency.type)"
-            : "\(fieldName): \(dependency.type)"
+            ? "_ \(fieldName): \(parameterType)"
+            : "\(fieldName): \(parameterType)"
         initParameters.append(parameter)
         assignments.append("self.\(fieldName) = \(fieldName)")
     }
