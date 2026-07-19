@@ -139,14 +139,20 @@ struct ContributorProxySynthesisTests {
     @Test func bridgesSeededControllerViaScopeEntryThunk() {
         // A `.singleton` proxy over a `@Scoped(seed:)` subject bridges: instead of holding the seeded
         // subject (which would be a cross-scope violation), the app-scoped proxy takes a labelled
-        // scope-entry thunk `(Seed) async throws -> Subject`.
+        // scope-entry thunk `(Seed) async throws -> Subject`. The subject lives in its seeded partition;
+        // the proxy must land in the app (`.default`) partition — where the app graph collates it.
+        let seedPartition = Partition(scope: ScopeKey(seed: "RequestSeed"))
         let result = applyContributorProxies(
-            to: [.default: [scopedController()]],
+            to: [seedPartition: [scopedController()]],
             annotations: [controllerAnnotation()],
             useSites: [useSite("Controller", on: "SessionController")]
         )
         let proxy = binding(named: "_WireRouteContributor_SessionController", in: result.bindings[.default] ?? [])
         #expect(proxy != nil)
+        // ...and not in the subject's seeded partition.
+        #expect(
+            binding(named: "_WireRouteContributor_SessionController", in: result.bindings[seedPartition] ?? []) == nil
+        )
         // The proxy is app-scoped (singleton), not seeded — it collates into the app graph.
         #expect(proxy?.scopeKey == nil)
         // Generic exactly as the subject, so the injected backend threads into the thunk's return type.
@@ -157,8 +163,8 @@ struct ContributorProxySynthesisTests {
         #expect(primary?.type == "@Sendable (RequestSeed) async throws -> SessionController<Repository>")
         #expect(proxy?.contributions.first?.keyReference == key)
 
-        // The controller stays a plain seeded binding — no contribution of its own.
-        let plainController = binding(named: "SessionController", in: result.bindings[.default] ?? [])
+        // The controller stays a plain seeded binding in its seeded partition — no contribution of its own.
+        let plainController = binding(named: "SessionController", in: result.bindings[seedPartition] ?? [])
         #expect(plainController?.contributions.isEmpty == true)
         #expect(plainController?.scopeKey?.seed == "RequestSeed")
     }
