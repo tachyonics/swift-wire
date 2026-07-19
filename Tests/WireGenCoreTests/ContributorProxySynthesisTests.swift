@@ -150,7 +150,9 @@ struct ContributorProxySynthesisTests {
         let proxy = binding(named: "_WireRouteContributor_SessionController", in: result.bindings[.default] ?? [])
         #expect(proxy != nil)
         // ...and not in the subject's seeded partition.
-        #expect(binding(named: "_WireRouteContributor_SessionController", in: result.bindings[seedPartition] ?? []) == nil)
+        #expect(
+            binding(named: "_WireRouteContributor_SessionController", in: result.bindings[seedPartition] ?? []) == nil
+        )
         // The proxy is app-scoped (singleton), not seeded — it collates into the app graph.
         #expect(proxy?.scopeKey == nil)
         // Generic exactly as the subject, so the injected backend threads into the thunk's return type.
