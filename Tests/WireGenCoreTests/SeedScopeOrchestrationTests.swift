@@ -125,6 +125,92 @@ struct SeedScopeOrchestrationTests {
         #expect(repositoryIndex < proxyIndex)
     }
 
+    @Test func bridgeProxyCapturesBorrowReachedThroughAGenericScopeBinding() throws {
+        // The two-axis case: a *generic* `@Scoped` binding (`Session<Manager: SessionManager>`) injects an
+        // app singleton through its OWN type parameter (`manager: Manager`), and the bridge subject reaches
+        // that singleton only *through* it. The injecting dependency's type is the bare parameter `Manager`,
+        // not the borrow's opaque form (`some SessionManager`), so the capture linking must resolve the
+        // determined parameter to its constraint — otherwise the borrow is unrecognised as used, the proxy
+        // gains no `.scopeCapture` edge, sorts *before* it, and its thunk captures an undeclared local.
+        let manager = singletonProvider("someSessionManager", type: "some SessionManager")
+        let session = DiscoveredScopeBoundType(
+            typeName: "Session",
+            typeKind: "struct",
+            genericParameterNames: ["Manager"],
+            genericParameterConstraints: ["Manager": "SessionManager"],
+            dependencies: [
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("Session.swift")
+                ),
+                DependencyParameter(
+                    name: "manager",
+                    type: "Manager",
+                    kind: .injectInitParameter,
+                    location: mockLocation("Session.swift")
+                ),
+            ],
+            location: mockLocation("Session.swift"),
+            scopeKey: ScopeKey(seed: "RequestSeed"),
+            originModule: testModule
+        )
+        let subject = DiscoveredScopeBoundType(
+            typeName: "MeController",
+            typeKind: "struct",
+            genericParameterNames: ["Manager"],
+            genericParameterConstraints: ["Manager": "SessionManager"],
+            dependencies: [
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("Me.swift")
+                ),
+                DependencyParameter(
+                    name: "session",
+                    type: "Session<Manager>",
+                    kind: .injectInitParameter,
+                    location: mockLocation("Me.swift")
+                ),
+            ],
+            location: mockLocation("Me.swift"),
+            scopeKey: ScopeKey(seed: "RequestSeed"),
+            originModule: testModule
+        )
+        let proxy = contributorProxyBinding(
+            for: subject,
+            key: "WireMVCKeys.routeContributors",
+            prefix: "_WireRouteContributor_",
+            proxyScope: .singleton
+        )
+        let orchestration = orchestrateSeedScope(
+            seedKey: ScopeKey(seed: "RequestSeed"),
+            scopeBindings: [.scopeBound(session), .scopeBound(subject)],
+            borrowBindings: syntheticSingletonBorrowBindings(from: [manager]),
+            typealiases: [],
+            module: testModule
+        )
+
+        let linked = linkingScopeEntryCaptures(
+            into: [manager, .scopeBound(proxy)],
+            orchestrations: [orchestration]
+        )
+
+        let linkedProxy = try #require(
+            linked.compactMap { binding -> DiscoveredScopeBoundType? in
+                guard case .scopeBound(let type) = binding, type.typeName.hasPrefix("_WireRouteContributor_") else {
+                    return nil
+                }
+                return type
+            }.first
+        )
+        let captures = linkedProxy.dependencies.filter { $0.kind == .scopeCapture }
+        // The transitively-reached borrow is captured, spelled as its constraint's opaque form.
+        #expect(captures.map(\.type) == ["some SessionManager"])
+    }
+
     // MARK: - Validation
 
     @Test func scopeBindingDependingOnSeedOnlyValidates() throws {
