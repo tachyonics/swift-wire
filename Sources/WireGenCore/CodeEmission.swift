@@ -233,13 +233,53 @@ private func appendSeedScopeStruct(
     let wireGraphExternal = wireGraphParameterLabel(forType: scope.parentGraphType)
     let wireGraphInternal = wireGraphParameterInternalName(forType: scope.parentGraphType)
 
+    // Opaque-lift the seed-scope struct + bootstrap, mirroring `_WireGraph<T0>`: a *generic* scoped
+    // binding stores `MeController<some TodoRepository>`, and `some P` can't be a plain struct field, so
+    // every opaque axis the stored bindings use is lifted to a generic parameter `T0`. The private
+    // bootstrap threads the same parameter through its wire-graph argument (`_WireGraph<T0>`); the façade
+    // keeps the opaque-erased shape (`… -> _<S>WireScope<some P>`, wire-graph `_WireGraph<some P>`).
+    var usedOpaque: Set<String> = []
+    for binding in storedBindings {
+        if binding.boundType.hasPrefix("some ") {
+            usedOpaque.insert(canonicalTypeName(binding.boundType))
+        } else if binding.allGenericParametersDetermined {
+            for parameter in binding.genericParameterNames {
+                usedOpaque.insert(canonicalTypeName("some \(binding.genericParameterConstraints[parameter] ?? "")"))
+            }
+        }
+    }
+    var liftedParameterForIdentity: [String: String] = [:]
+    var liftedConstraints: [String] = []
+    var parentGraphArguments: [String] = []
+    for axis in topLevelGenericArguments(of: parentGraphTypeReference) {
+        if axis.hasPrefix("some "), usedOpaque.contains(canonicalTypeName(axis)) {
+            let parameter = "T\(liftedConstraints.count)"
+            liftedParameterForIdentity[canonicalTypeName(axis)] = parameter
+            liftedConstraints.append(String(axis.dropFirst("some ".count)))
+            parentGraphArguments.append(parameter)
+        } else {
+            parentGraphArguments.append(axis)  // an axis the scope doesn't use stays opaque
+        }
+    }
+    let genericClause =
+        liftedConstraints.isEmpty
+        ? ""
+        : "<" + liftedConstraints.enumerated().map { "T\($0.offset): \($0.element)" }.joined(separator: ", ") + ">"
+    let parentGraphLifted =
+        parentGraphArguments.isEmpty
+        ? scope.parentGraphType
+        : "\(scope.parentGraphType)<\(parentGraphArguments.joined(separator: ", "))>"
+    let openStructReference =
+        liftedConstraints.isEmpty
+        ? structName
+        : "\(structName)<" + liftedConstraints.map { "some \($0)" }.joined(separator: ", ") + ">"
+
     // The seed scope's bootstrap entry point on the `Wire` façade — keeps the
-    // `(seed:, <parentGraph>:)` parameter shape, forwarding to the private
-    // free function.
+    // `(seed:, <parentGraph>:)` parameter shape (opaque-erased), forwarding to the private free function.
     entries.append(
         BootstrapEntry(
             signature:
-                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)) async throws -> \(structName)",
+                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)) async throws -> \(openStructReference)",
             body: "try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal))"
         )
     )
@@ -273,16 +313,18 @@ private func appendSeedScopeStruct(
     // tries to cross an isolation boundary) rather than at the
     // generated struct declaration. Right place for the trade-off:
     // the user chose the binding's isolation story, Wire respects it.
-    lines.append("internal struct \(structName) {")
+    lines.append("internal struct \(structName)\(genericClause) {")
     for binding in storedBindings {
         let property = propertyName(for: binding)
-        lines.append("    let \(property): \(binding.boundTypeReference)")
+        lines.append(
+            "    let \(property): \(wireGraphFieldType(for: binding, liftedParameterForIdentity: liftedParameterForIdentity))"
+        )
     }
     lines.append("}")
 
     lines.append("")
     lines.append(
-        "private func \(bootstrapFunction)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(parentGraphTypeReference)) async throws -> \(structName) {"
+        "private func \(bootstrapFunction)\(genericClause)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(parentGraphLifted)) async throws -> \(openStructReference) {"
     )
 
     if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {
@@ -331,6 +373,37 @@ private func appendSeedScopeStruct(
     }.joined(separator: ", ")
     lines.append("    return \(structName)(\(returnArgs))")
     lines.append("}")
+}
+
+/// The top-level generic arguments of a type reference (`_WireGraph<some A, Foo<B>>` → `["some A",
+/// "Foo<B>"]`); `[]` when there are none. Depth-aware so a nested `<…>` isn't split on its commas.
+private func topLevelGenericArguments(of typeReference: String) -> [String] {
+    guard let open = typeReference.firstIndex(of: "<"), typeReference.hasSuffix(">") else { return [] }
+    let inner = typeReference[typeReference.index(after: open)..<typeReference.index(before: typeReference.endIndex)]
+    var arguments: [String] = []
+    var current = ""
+    var depth = 0
+    for character in inner {
+        switch character {
+        case "<": depth += 1; current.append(character)
+        case ">": depth -= 1; current.append(character)
+        case "," where depth == 0:
+            arguments.append(trimmingSpaces(current))
+            current = ""
+        default: current.append(character)
+        }
+    }
+    let last = trimmingSpaces(current)
+    if !last.isEmpty { arguments.append(last) }
+    return arguments
+}
+
+/// Strip leading/trailing ASCII spaces (Foundation-free — `trimmingCharacters` isn't available here).
+private func trimmingSpaces(_ string: String) -> String {
+    var slice = Substring(string)
+    while slice.first == " " { slice = slice.dropFirst() }
+    while slice.last == " " { slice = slice.dropLast() }
+    return String(slice)
 }
 
 /// The stored-property type for a binding on the generated `_WireGraph` struct:

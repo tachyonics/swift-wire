@@ -24,21 +24,46 @@ func scopeEntryThunkLines(
     guard case .scopeBound(let proxy) = binding,
         let scopeEntry = proxy.dependencies.first(where: { $0.name == contributorProxyScopeEntryFieldName })
     else { return nil }
-    return scopeEntryThunkLines(for: scopeEntry, scopes: scopes)
+    // A *generic* bridge proxy is a lift node: the graph specialised its subject at the opaque backend
+    // (`MeController<Repository>` → `MeController<some TodoRepository>`). Apply the same lift substitution
+    // to the thunk's declared type — format-preserving, unlike the whitespace-canonicalised identity form,
+    // which `async throws` needs — so the emitted thunk's type, local name, and return match the proxy's
+    // specialised construction argument, not the raw generic form (whose bare `Repository` isn't in scope
+    // in `_wireBootstrap`). A non-generic proxy is not a lift node, so its thunk type is unchanged.
+    return scopeEntryThunkLines(thunkType: liftSpecialised(scopeEntry.type, in: binding), scopes: scopes)
+}
+
+/// Substitute a lift node's determined generic parameters with their `some Constraint` form in `type`,
+/// preserving the type's spelling (mirrors `bridgedDependencyIdentity`'s Rule 2b, format-preserving).
+private func liftSpecialised(_ type: String, in binding: DiscoveredBinding) -> String {
+    guard binding.isLiftNode else { return type }
+    let canonical = canonicalTypeName(type)
+    var substitutions: [String: String] = [:]
+    for (parameter, constraint) in binding.genericParameterConstraints
+    where constraintIsDetermining(constraint) && parameterAppearsAsGenericArgument(parameter, in: canonical) {
+        substitutions[parameter] = "some \(constraint)"
+    }
+    return substitutions.isEmpty ? type : substitutingIdentifierTokens(type, substitutions)
 }
 
 private func scopeEntryThunkLines(
-    for dependency: DependencyParameter,
+    thunkType: String,
     scopes: [String: SeedScopeEmission]
 ) -> [String]? {
-    guard let (seed, subject) = parsedContributorScopeEntryThunkType(dependency.type),
+    guard let (seed, subject) = parsedContributorScopeEntryThunkType(thunkType),
         let scope = scopes[seed]
     else { return nil }
-    let thunkLocal = identifierName(forType: dependency.type, key: nil)
+    let thunkLocal = identifierName(forType: thunkType, key: nil)
     let seedLocal = identifierName(forType: seed, key: nil)
     let subjectLocal = identifierName(forType: subject, key: nil)
 
-    var lines: [String] = ["    let \(thunkLocal): \(dependency.type) = { \(seedLocal) in"]
+    // Emit the closure with its parameter, effects, and `@Sendable` inline, letting Swift infer the return
+    // type from the body — rather than annotating the `let` with the return type. A subject generic over
+    // the opaque backend then resolves to the *concrete* backend the body constructs
+    // (`MeController<CouchDBTodoRepository>`) instead of an unspellable `some P` closure-return type, and
+    // the proxy's generic parameter is inferred from the passed closure. (`thunkType` still names the local
+    // so the proxy's construction argument resolves to it by identity.)
+    var lines: [String] = ["    let \(thunkLocal) = { @Sendable (\(seedLocal): \(seed)) async throws in"]
     for binding in scope.topologicalOrder {
         let name = propertyName(for: binding)
         // A borrowed singleton resolves to the captured bootstrap local of the same identity name, so
