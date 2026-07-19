@@ -918,13 +918,12 @@ extension BindingDiscovery {
         let accessPath = (scopes.map(\.typeName) + [functionName]).joined(separator: ".")
         recordAdapterUseSites(targetIdentity: accessPath, attributes: node.attributes)
         let dependencies = node.signature.parameterClause.parameters.map { parameter in
-            // Per-parameter `@Inject(<key>)` lets a consumer name the
-            // keyed binding it wants. A bare parameter (no attribute)
-            // is an unkeyed dep — same as if the user wrote `@Inject`
-            // with no argument, which is also legal but redundant here
-            // since `@Provides func` parameters are implicitly deps.
-            let parameterKey = attribute(in: parameter.attributes, named: "Inject")
-                .flatMap { keyIdentifier(from: $0) }
+            // Per-parameter `@Bind(<key>)` lets a consumer name the keyed
+            // binding it wants (`@Inject` is a peer macro, so it can't
+            // attach to a parameter). A bare parameter (no attribute) is
+            // an unkeyed dep, resolved by type — the common case, since
+            // `@Provides func` parameters are implicitly deps.
+            let parameterKey = parameterKeyIdentifier(from: parameter)
             return DependencyParameter(
                 name: parameterName(parameter),
                 type: parameter.type.trimmedDescription,
