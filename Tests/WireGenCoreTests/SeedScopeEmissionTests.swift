@@ -209,8 +209,18 @@ struct SeedScopeEmissionTests {
             typeKind: "struct",
             genericParameterNames: [],
             dependencies: [
-                DependencyParameter(name: "seed", type: "RequestSeed", kind: .injectInitParameter, location: mockLocation("S.swift")),
-                DependencyParameter(name: "connection", type: "RequestConn", kind: .injectInitParameter, location: mockLocation("S.swift")),
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
+                DependencyParameter(
+                    name: "connection",
+                    type: "RequestConn",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                ),
             ],
             location: mockLocation("S.swift"),
             scopeKey: ScopeKey(seed: "RequestSeed"),
