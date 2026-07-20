@@ -452,9 +452,9 @@ phase rather than being sequential milestones with their own gate-between.
 > request via the scope-entry thunk's returned teardown closure + the witness's async `defer`, consistent
 > with singleton scope), and **M5.4.6** (per-root reachability — each controller's thunk constructs and
 > tears down only its reachable subgraph over the resolved edges, so siblings sharing a seed don't
-> cross-construct) are all done. **M5.4 is complete.** Build plan: [M5_4_PLAN.md](M5_4_PLAN.md).
+> cross-construct) are all done. **M5.4 is complete.** Build plan: [M5_4_PLAN.md](Archive/M5_4_PLAN.md).
 
-> **Build plan: [M5_4_PLAN.md](M5_4_PLAN.md)** — the sub-step breakdown (M5.4.1–M5.4.6), the
+> **Build plan: [M5_4_PLAN.md](Archive/M5_4_PLAN.md)** — the sub-step breakdown (M5.4.1–M5.4.6), the
 > shipped shapes it embeds into, and the central mechanism decision (the injected scope-entry
 > thunk that replaces the design-text's weak back-reference, since the shipped `_WireGraph` is a
 > value type). This section carries the *why*; that file carries the *how*.
@@ -633,48 +633,44 @@ unsatisfiable (compile error at the handler — the coupling). Discharged in-rep
 (single-shot) and by the `wire-mvc-examples` `ExportController` streaming per part cross-runtime
 (CouchDB / Valkey / MongoDB, native + `ServerTransport`).
 
-## Iteration M5.5 — Tier-2 `@WireHummingbird` composition-root macro
+## Iteration M5.5 — the WireMVC-native composition root (`@WireMVCBootstrap`)
 
-The M2.6 deferral, un-gated now that the routing/middleware shape is settled.
+**Full plan: [M5_5_PLAN.md](M5_5_PLAN.md).** Rescoped from the earlier
+`@WireHummingbird` framing: the Hummingbird/Vapor integrations are idiomatic in their own
+ecosystems (their `Application`/`@main`, their middleware owns global concerns), so a macro
+there fights the grain. M5.5 is the **proposal-server-native** bootstrap — the one path
+where WireMVC owns the composition root, and therefore needs a home for global middleware,
+default error handling, and introspection mounting.
 
 **Scope:**
-- The `@main @WireHummingbird` macro codifying `bootstrap → router → WireMVCServerTransport.apply →
-  Application → run` — pure sugar over the working two-call `bootstrap()` + `apply()` path
-  (Hummingbird reaches WireMVC through the `ServerTransport` adapter). A sibling proposal-server
-  composition root is thinner still — `bootstrap → RoutableHTTPServerBuilder → WireMVC.apply →
-  serve(on:)`, no framework `Application`. Either macro absorbs the request-scope proxy assembly
-  (M5.4) and the **global-middleware application point**, which is exactly why it's built last:
-  those settle the shape it codifies.
-- **Global middleware is handled here, not in M5.3** — its defining property (pre-routing,
-  unmatched-request coverage) belongs at the router-assembly layer. Three options were
-  weighed; the plan commits to **(i) now, (iii) when forced, never (ii)**:
-  - **(i) default — a framework concern.** The macro exposes the `routerBuilder` hook; the
-    user calls `router.addMiddleware` themselves (constructing the middleware from the
-    graph if it needs deps). Consistent with M2.4's shipped "middleware is app-owned"
-    stance, zero new surface, ships immediately.
-  - **(ii) rejected — a collated `[RouterMiddleware]` passed to the router.** Reintroduces
-    exactly the context-typed-value problem M2.4 named a "hack in the wrong shape":
-    `RouterMiddleware<Context>` pins the context, doesn't collate cleanly, isn't
-    cross-runtime.
-  - **(iii) the eventual cross-runtime path, when a use case forces it** — run a collated
-    **context-free** middleware chain outside the router, preserving pre-routing coverage
-    *and* cross-runtime. Two forms: a hand-rolled `HTTPResponder` (Hummingbird) /
-    `ServerTransport` decorator as a **pre-proposal stopgap**, or — once the proposal ships
-    — the **native** form, where the whole request path is one `Middleware` chain (global =
-    outer stages, per-route stages + handler-as-terminal inside), no bespoke wrapper. This
-    is where the shipped-but-unused `BuilderKey`→opaque-member fold and the
-    standard-`Middleware` aggregation run. Deferred *not* because the type is one-way (it
-    isn't — it threads a return and carries the response sender in `Input`) but because it's
-    raw-transport-level and OS-26.2-gated; shape it against a real global-middleware-with-DI
-    need (matching WireOpenAPI's "middlewares deferred to M5 shape" note).
+- **`@main @WireMVCBootstrap`** on a graph-constructed composition-root struct (its `@Inject`s
+  resolve from the graph; `createServer`/`createRoutableBuilder(for:)` factories build the
+  concrete server + router). Generates `main()` = `bootstrap → createServer →
+  createRoutableBuilder → WireMVC.apply → registerNotFound → serve + ServiceLifecycle`,
+  collapsing the hand-written `main.swift`.
+- **Global `@Middleware` and `@ErrorResponse` are declared on the Bootstrap and folded as a
+  single global tier onto the same per-route fold** — applied identically to real routes and
+  to one **synthetic fallback route** that owns the unmatched case. Invariant: the router is
+  pure dispatch; every response comes from a route that holds the sender. This unifies what
+  the old plan split into a front-layer (middleware) + terminal-fold (errors); global
+  middleware is now **post-routing**, and unmatched coverage comes from the synthetic route.
+- **The terminal owns the 500.** Because the target servers *abort the connection* on an
+  escaped throw rather than producing a 500 (see
+  [Notes/LinearSenderErrorModel.md](Notes/LinearSenderErrorModel.md)), the terminal's
+  outermost error tier **writes** a 500 instead of rethrowing. Introduced here; benefits
+  every native route.
+- **What happens when a *middleware* throws** is deferred to
+  [Notes/LinearSenderErrorModel.md](Notes/LinearSenderErrorModel.md): it aborts the
+  connection (WireMVC never holds a middleware's sender). Middleware express intentional
+  responses by writing, not throwing.
 
-**Why now:** the un-defer gate from M2.6 — "WireMVC's shape is known *and* the
-native-middleware assembly is proven" — is met once M5.3/M5.4 land. Build it once,
-against the settled shape.
+**Why now:** the un-defer gate from M2.6 — WireMVC's shape known *and* native-middleware
+assembly proven — is met once M5.3/M5.4E/M5.4R land. Build it once, against the settled shape.
 
-**Validation gate:** an example's hand-written `main` collapses to the macro and serves
-identically (same requests green before and after); a global middleware added via the
-`routerBuilder` hook (option i) runs on an unmatched route.
+**Validation gate:** `WireMVCExample`'s hand-written `main` collapses to the macro and serves
+identically; then an unmapped handler throw → 500, a Bootstrap global `@ErrorResponse` map, an
+unmatched route → mapped 404, and a global `@Middleware` running on both a matched and an
+unmatched route. (Phased in [M5_5_PLAN.md](M5_5_PLAN.md).)
 
 ## Iteration M5.6 — `WireMVCAbstraction.md` rewrite (doc debt)
 
@@ -749,9 +745,12 @@ transport-only contributor mounts through its own adapter.
   above the core's `26.0` floor, so per-route middleware lands when the deployment floor reaches it.
   Hummingbird's `RouterMiddleware` is incompatible (bidirectional, context-typed). Full record:
   [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md).
-- **Global middleware** (M5.5) — committed to **(i) framework concern now, (iii)
-  context-free responder/transport decorator when forced, never (ii) collated
-  `RouterMiddleware`s**.
+- **Global middleware** (M5.5) — **reconciled: folded as a global tier on the per-route fold,
+  applied to real routes *and* a synthetic fallback route** (native `@WireMVCBootstrap` path).
+  This supersedes the earlier (i)/(iii) split: not a front-layer wrapper, not a collated
+  `RouterMiddleware` list. Global middleware is post-routing; unmatched coverage comes from the
+  synthetic route. Still never (ii). The adapter path (Hummingbird/Vapor) keeps host-framework
+  middleware — no global tier folded. Full record: [M5_5_PLAN.md](M5_5_PLAN.md).
 - **Response surface beyond `@JSONResponse`** — status/headers control, error→response mapping.
   **error→response mapping decided: terminal-scoped `@ErrorResponse` at controller/route scope**
   (iteration M5.4E, interleaved with M5.4) — two shipped forms (`(E.self, .status)` and an inline

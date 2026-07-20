@@ -23,6 +23,13 @@ order of consultation is: route pairs → controller pairs → the built-in
 throw is re-thrown out of the middleware chain to the framework, which produces its default (500) —
 WireMVC never synthesises a 500 of its own.
 
+> **Correction (M5.5):** the rethrow terminus assumed the framework produces a 500 on an escaped
+> throw. It does not — the target servers *abort the connection* (see
+> [LinearSenderErrorModel.md](LinearSenderErrorModel.md)). M5.5 replaces the final **rethrow** with a
+> built-in **500 write** at the terminal (which holds the sender), so an unmapped *handler* throw is a
+> clean 500 rather than a dropped connection. *Middleware* throws still abort — WireMVC never holds
+> their sender. The rest of the consultation order below is unchanged.
+
 ## Why terminal-scoped, not global middleware — the box forces it
 
 The single load-bearing fact: in the Model-B box, **the sender lives *inside* the box**
