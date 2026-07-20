@@ -73,7 +73,43 @@ private func scopeEntryThunkLines(
         if name == construction { continue }
         lines.append("        let \(name) = \(construction)")
     }
-    lines.append("        return \(subjectLocal)")
+    // The scope's teardown closure — the reverse-order `@Teardown` walk for the scope's own bindings (not
+    // the borrowed singletons, which are torn down at app scope). Captures the construction locals above,
+    // so it runs against each binding's concrete instance. Returned alongside the subject; the witness runs
+    // it after the response (M5.4.5). Consistent with the graph's captured `_wireTeardown`.
+    lines.append(contentsOf: scopeTeardownClosureLines(scope, local: scopeTeardownLocalName))
+    lines.append("        return (\(subjectLocal), \(scopeTeardownLocalName))")
     lines.append("    }")
+    return lines
+}
+
+/// The scope-entry thunk's teardown-closure local name. `wireMVC`-free (this is swift-wire), just a
+/// bootstrap-local identifier the thunk returns.
+private let scopeTeardownLocalName = "_wireScopeTeardown"
+
+/// The lines for the scope's teardown closure, emitted inside the scope-entry thunk. Mirrors the graph's
+/// captured `_wireTeardown` (reverse construction order, errors collected not thrown) but scoped to the
+/// seed scope's own `@Teardown` bindings and indented for the thunk body. Always emitted (an empty scope
+/// yields `{ … return errors }` with no calls) so the thunk's return type stays uniform.
+private func scopeTeardownClosureLines(_ scope: SeedScopeEmission, local: String) -> [String] {
+    let torn = scope.topologicalOrder.reversed().filter { binding in
+        binding.teardown != nil && !scope.borrowedBindingPropertyNames.contains(propertyName(for: binding))
+    }
+    let mutatesErrors = torn.contains { binding in
+        switch binding.teardown?.kind {
+        case .member(_, _, let isThrowing): return isThrowing
+        case .action: return true
+        case nil: return false
+        }
+    }
+    var lines: [String] = [
+        "        let \(local): \(scopeEntryTeardownType) = {",
+        "            \(mutatesErrors ? "var" : "let") errors: [any Error] = []",
+    ]
+    for binding in torn {
+        lines.append(contentsOf: teardownCallLines(for: binding).map { "    " + $0 })
+    }
+    lines.append("            return errors")
+    lines.append("        }")
     return lines
 }

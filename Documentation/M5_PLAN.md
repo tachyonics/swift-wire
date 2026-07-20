@@ -433,14 +433,26 @@ cluster's real gate is **M5.4**, where the principal is a request-scoped *inject
 
 ## Remaining work (in completion order)
 
-M5.0–M5.3 are shipped (above), and **M5.4E** (route error handling) is now **shipped** too (it
-interleaved with M5.4 rather than following it). The iterations below are the remaining work,
-top-to-bottom in completion order: **M5.4** is next; **M5.4R** is a conditional raw-track follow-on
-that lands when a transformed-slot example forces it; then **M5.5** and **M5.6**. The `E`/`R`
-suffixes mark items that hang off the M5.4 phase rather than being sequential milestones with their
-own gate-between.
+M5.0–M5.3 are shipped (above); **M5.4** (request-scoped controllers, gate met), **M5.4E** (route error
+handling), **M5.4R** (concrete `@RawRoute` roles / transformed senders), and **M5.4.5** (request-scope
+teardown) are **shipped** too — M5.4E interleaved with M5.4 rather than following it. What remains:
+**M5.4.6** (M5.4's per-root-reachability refinement — see [M5_4_PLAN.md](M5_4_PLAN.md)); then the one
+substantive feature left, **M5.5** (the Tier-2 composition-root macro), and **M5.6** (doc debt). The
+`E`/`R` suffixes mark items that hang off the M5.4
+phase rather than being sequential milestones with their own gate-between.
 
-## Iteration M5.4 — request-scoped controllers — ▶ NEXT
+## Iteration M5.4 — request-scoped controllers — ✅ COMPLETE (gate met; M5.4.5/M5.4.6 deferred)
+
+> **Status: shipped** — a `@Scoped(seed: HTTPRequest.self) @Controller`, including the idiomatic
+> generic opaque-backed shape (M5.4G), serves cross-runtime in `wire-mvc-examples`, injecting a
+> request-scoped value by A-inject alongside a coexisting `@Singleton` controller. The **validation
+> gate is met**: the `sessions` port serves a request-scoped controller where an auth failure returns
+> 401 (throw-at-scope-construction, mapped by M5.4E's `@ErrorResponse`) and a domain failure returns
+> 404 via the terminal error map. Async `@Scoped @Inject init` is also verified. The spine
+> (M5.4.1–M5.4.4), M5.4G, and **M5.4.5** (request-scope teardown — a `@Scoped` binding's `@Teardown` now
+> fires per request via the scope-entry thunk's returned teardown closure + the witness's async `defer`,
+> consistent with singleton scope) are done; only **M5.4.6** (per-root reachability — *refinement*, the
+> spine ships correct whole-scope construction) remains as a tracked deferral. Build plan: [M5_4_PLAN.md](M5_4_PLAN.md).
 
 > **Build plan: [M5_4_PLAN.md](M5_4_PLAN.md)** — the sub-step breakdown (M5.4.1–M5.4.6), the
 > shipped shapes it embeds into, and the central mechanism decision (the injected scope-entry
@@ -578,7 +590,19 @@ throw is re-thrown and still reaches the router's 500. Discharged in-repo by `Wi
 tests; the `wire-mvc-examples` sessions port (throwing `Session` self-production replacing the
 `RequireSession` gate) is the follow-on that exercises the scope-entry-throw path end-to-end.
 
-## Iteration M5.4R — concrete `@RawRoute` roles (raw-track follow-on, when forced)
+## Iteration M5.4R — concrete `@RawRoute` roles (raw-track follow-on) — ✅ COMPLETE
+
+> **Status: shipped.** `@RawRoute(.role, …)` binds a raw handler's parameters positionally by explicit
+> role instead of by type/constraint inference, so a **transformed slot** whose type a middleware produces
+> (`consuming MultiPartSender<S>`) binds by role. Codegen + golden/diagnostic tests in `wire-mvc`,
+> validated in-repo by `WireMVCExample`; the diagnostic for an uninferable parameter points at the
+> explicit form. **Example gate met** — `wire-mvc-examples` ships a real **streaming** multipart export: a
+> sender-transforming `@Middleware` wraps the runtime sender into `MultiPartSender<S>`, and a generic
+> `@Scoped`-free `ExportController`'s `@RawRoute(.responseSender)` handler streams the todos one part at a
+> time through a custom `MultiPartWriter` (per-part `write`, not buffered), served **cross-runtime**
+> (CouchDB / Valkey / MongoDB — proposal-native *and* through the `ServerTransport` adapter). This also
+> proved a **sender-transforming middleware composes through the generated `@MiddlewareFactory` fold**
+> (previously only a context transform was proven, by spike-21).
 
 A contained follow-on to M5.2, positioned here because it lands *after* M5.4 — when the first
 transformed-slot streaming example is ported — not on the M5.4→M5.5 spine. Pulled out of M5.2 (now
@@ -602,9 +626,12 @@ complete) so a shipped iteration doesn't carry unbuilt work.
 is independent of M5.5 (the composition macro doesn't depend on it), so it can slot in whenever the
 transformed-streaming examples are prioritised.
 
-**Validation gate:** a `response-body-processing`/multipart example ports with a handler taking a
-concrete transformed sender (`consuming JsonMultiPartSender`) via `@RawRoute(.responseSender)`, and
-removing the sender-transforming middleware fails to compile at the handler.
+**Validation gate — MET.** A multipart export example ports with a handler taking a transformed sender
+(`consuming MultiPartSender<S>`) via `@RawRoute(.responseSender)`, streaming a `multipart/mixed` body one
+part at a time; removing the sender-transforming middleware makes the handler's parameter type
+unsatisfiable (compile error at the handler — the coupling). Discharged in-repo by `WireMVCExample`
+(single-shot) and by the `wire-mvc-examples` `ExportController` streaming per part cross-runtime
+(CouchDB / Valkey / MongoDB, native + `ServerTransport`).
 
 ## Iteration M5.5 — Tier-2 `@WireHummingbird` composition-root macro
 

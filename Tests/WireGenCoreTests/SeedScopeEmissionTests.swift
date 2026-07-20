@@ -22,7 +22,8 @@ struct SeedScopeEmissionTests {
     private func scopedSingleton(
         _ name: String,
         seed: String,
-        dependencies: [(name: String?, type: String)] = []
+        dependencies: [(name: String?, type: String)] = [],
+        teardown: TeardownAction? = nil
     ) -> DiscoveredBinding {
         let deps = dependencies.map {
             DependencyParameter(
@@ -40,6 +41,7 @@ struct SeedScopeEmissionTests {
                 dependencies: deps,
                 location: mockLocation("\(name).swift"),
                 scopeKey: ScopeKey(seed: seed),
+                teardown: teardown,
                 originModule: testModule
             )
         )
@@ -178,7 +180,7 @@ struct SeedScopeEmissionTests {
             seedScopeOrders: [scope]
         )
 
-        let thunkType = "@Sendable (RequestSeed) async throws -> SessionController"
+        let thunkType = contributorScopeEntryThunkType(seed: "RequestSeed", subject: "SessionController")
         let thunkLocal = identifierName(forType: thunkType, key: nil)
         // The thunk closure builds the controller from the seed, the borrow resolving to the captured
         // singleton local (`todoRepository`), not `_wireGraph.todoRepository`.
@@ -188,11 +190,74 @@ struct SeedScopeEmissionTests {
         #expect(
             output.contains("let sessionController = SessionController(seed: requestSeed, repository: todoRepository)")
         )
-        #expect(output.contains("return sessionController"))
+        // The thunk returns the subject alongside the scope's teardown closure (M5.4.5) — here empty, since
+        // no scope binding carries a @Teardown.
+        #expect(output.contains("let _wireScopeTeardown: @Sendable () async -> [any Error] = {"))
+        #expect(output.contains("return (sessionController, _wireScopeTeardown)"))
         // The proxy's `_wireEnterScope` argument wires to the thunk local.
         #expect(output.contains("_WireRouteContributor_SessionController(_wireEnterScope: \(thunkLocal))"))
         // The borrow is never re-constructed as a local inside the thunk.
         #expect(!output.contains("let todoRepository = _wireGraph.todoRepository"))
+    }
+
+    @Test func scopeEntryThunkTearsDownScopedBindings() {
+        // A `@Scoped` resource carrying a `@Teardown func close() async` — the scope-entry thunk's teardown
+        // closure calls it against the construction local (M5.4.5, consistent with the graph's teardown).
+        // The borrowed app singleton is excluded (it is torn down at app scope, not per request).
+        let subject = DiscoveredScopeBoundType(
+            typeName: "SessionController",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [
+                DependencyParameter(name: "seed", type: "RequestSeed", kind: .injectInitParameter, location: mockLocation("S.swift")),
+                DependencyParameter(name: "connection", type: "RequestConn", kind: .injectInitParameter, location: mockLocation("S.swift")),
+            ],
+            location: mockLocation("S.swift"),
+            scopeKey: ScopeKey(seed: "RequestSeed"),
+            originModule: testModule
+        )
+        let proxy = contributorProxyBinding(
+            for: subject,
+            key: "WireMVCKeys.routeContributors",
+            prefix: "_WireRouteContributor_",
+            proxyScope: .singleton
+        )
+        let close = TeardownAction(
+            kind: .member(methodName: "close", isAsync: true, isThrowing: false),
+            location: mockLocation("RequestConn.swift")
+        )
+        let scope = SeedScopeEmission(
+            seedTypeExpression: "RequestSeed",
+            identifierSuffix: "RequestSeed",
+            parentGraphType: "_WireGraph",
+            topologicalOrder: [
+                syntheticProvider(boundType: "RequestSeed", accessPath: "requestSeed"),
+                syntheticProvider(boundType: "TodoRepository", accessPath: "_wireGraph.todoRepository"),
+                scopedSingleton(
+                    "RequestConn",
+                    seed: "RequestSeed",
+                    dependencies: [(name: "seed", type: "RequestSeed")],
+                    teardown: close
+                ),
+                scopedSingleton(
+                    "SessionController",
+                    seed: "RequestSeed",
+                    dependencies: [(name: "seed", type: "RequestSeed"), (name: "connection", type: "RequestConn")]
+                ),
+            ],
+            borrowedBindingPropertyNames: ["todoRepository"]
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [singleton("TodoRepository"), .scopeBound(proxy)],
+            seedScopeOrders: [scope]
+        )
+        // The scoped resource is constructed, then torn down in the thunk's teardown closure.
+        #expect(output.contains("let requestConn = RequestConn(seed: requestSeed)"))
+        #expect(output.contains("let _wireScopeTeardown: @Sendable () async -> [any Error] = {"))
+        #expect(output.contains("await requestConn.close()"))
+        // The borrowed app singleton is not torn down here.
+        #expect(!output.contains("todoRepository.close()"))
     }
 
     @Test func seedScopeBorrowingSingletonsExcludesThemFromStoredProperties() {
