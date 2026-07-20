@@ -523,7 +523,8 @@ extension WireGen {
                 identifierSuffix: orchestration.identifierSuffix,
                 parentGraphType: orchestration.parentGraphType,
                 topologicalOrder: order,
-                borrowedBindingPropertyNames: orchestration.borrowedBindingPropertyNames
+                borrowedBindingPropertyNames: orchestration.borrowedBindingPropertyNames,
+                edges: orchestration.result.edges
             )
         }
     }

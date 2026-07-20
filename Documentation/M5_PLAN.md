@@ -433,15 +433,14 @@ cluster's real gate is **M5.4**, where the principal is a request-scoped *inject
 
 ## Remaining work (in completion order)
 
-M5.0–M5.3 are shipped (above); **M5.4** (request-scoped controllers, gate met), **M5.4E** (route error
-handling), **M5.4R** (concrete `@RawRoute` roles / transformed senders), and **M5.4.5** (request-scope
-teardown) are **shipped** too — M5.4E interleaved with M5.4 rather than following it. What remains:
-**M5.4.6** (M5.4's per-root-reachability refinement — see [M5_4_PLAN.md](M5_4_PLAN.md)); then the one
-substantive feature left, **M5.5** (the Tier-2 composition-root macro), and **M5.6** (doc debt). The
-`E`/`R` suffixes mark items that hang off the M5.4
+M5.0–M5.3 are shipped (above); **M5.4 is fully complete** — the spine, **M5.4E** (route error handling),
+**M5.4R** (concrete `@RawRoute` roles / transformed senders), **M5.4.5** (request-scope teardown), and
+**M5.4.6** (per-root reachability) are all shipped (M5.4E interleaved with M5.4 rather than following it).
+What remains in M5: the one substantive feature left, **M5.5** (the Tier-2 composition-root macro), and
+**M5.6** (doc debt). The `E`/`R` suffixes mark items that hang off the M5.4
 phase rather than being sequential milestones with their own gate-between.
 
-## Iteration M5.4 — request-scoped controllers — ✅ COMPLETE (gate met; M5.4.5/M5.4.6 deferred)
+## Iteration M5.4 — request-scoped controllers — ✅ COMPLETE
 
 > **Status: shipped** — a `@Scoped(seed: HTTPRequest.self) @Controller`, including the idiomatic
 > generic opaque-backed shape (M5.4G), serves cross-runtime in `wire-mvc-examples`, injecting a
@@ -449,10 +448,11 @@ phase rather than being sequential milestones with their own gate-between.
 > gate is met**: the `sessions` port serves a request-scoped controller where an auth failure returns
 > 401 (throw-at-scope-construction, mapped by M5.4E's `@ErrorResponse`) and a domain failure returns
 > 404 via the terminal error map. Async `@Scoped @Inject init` is also verified. The spine
-> (M5.4.1–M5.4.4), M5.4G, and **M5.4.5** (request-scope teardown — a `@Scoped` binding's `@Teardown` now
-> fires per request via the scope-entry thunk's returned teardown closure + the witness's async `defer`,
-> consistent with singleton scope) are done; only **M5.4.6** (per-root reachability — *refinement*, the
-> spine ships correct whole-scope construction) remains as a tracked deferral. Build plan: [M5_4_PLAN.md](M5_4_PLAN.md).
+> (M5.4.1–M5.4.4), M5.4G, **M5.4.5** (request-scope teardown — a `@Scoped` binding's `@Teardown` fires per
+> request via the scope-entry thunk's returned teardown closure + the witness's async `defer`, consistent
+> with singleton scope), and **M5.4.6** (per-root reachability — each controller's thunk constructs and
+> tears down only its reachable subgraph over the resolved edges, so siblings sharing a seed don't
+> cross-construct) are all done. **M5.4 is complete.** Build plan: [M5_4_PLAN.md](M5_4_PLAN.md).
 
 > **Build plan: [M5_4_PLAN.md](M5_4_PLAN.md)** — the sub-step breakdown (M5.4.1–M5.4.6), the
 > shipped shapes it embeds into, and the central mechanism decision (the injected scope-entry

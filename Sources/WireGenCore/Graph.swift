@@ -14,10 +14,20 @@
 package struct GraphResult: Sendable {
     package let outcome: Outcome
     package let genericTemplates: [DiscoveredBinding]
+    /// The resolved producer adjacency — each binding's identity to the identities of the bindings that
+    /// satisfy its init-time dependencies (as `resolveDependencies` computed for the topological sort).
+    /// Surfaced so per-root reachability (a seed scope constructed per routed controller — M5.4.6) can BFS
+    /// from a root over the real resolution rather than re-deriving edges. Empty for a failed graph.
+    package let edges: [BindingIdentity: [BindingIdentity]]
 
-    package init(outcome: Outcome, genericTemplates: [DiscoveredBinding]) {
+    package init(
+        outcome: Outcome,
+        genericTemplates: [DiscoveredBinding],
+        edges: [BindingIdentity: [BindingIdentity]] = [:]
+    ) {
         self.outcome = outcome
         self.genericTemplates = genericTemplates
+        self.edges = edges
     }
 
     /// Either a valid topological order (the graph constructs cleanly)
@@ -499,7 +509,7 @@ package func buildDependencyGraph(
         )
     }
 
-    return GraphResult(outcome: outcome, genericTemplates: genericTemplates)
+    return GraphResult(outcome: outcome, genericTemplates: genericTemplates, edges: dependencyEdges)
 }
 
 /// Bucket every discovered binding by what role it plays in graph

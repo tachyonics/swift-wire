@@ -179,19 +179,26 @@ package struct SeedScopeEmission: Sendable {
     package let parentGraphType: String
     package let topologicalOrder: [DiscoveredBinding]
     package let borrowedBindingPropertyNames: Set<String>
+    /// The resolved producer adjacency for the scope's graph — used by the scope-entry thunk emission to
+    /// construct (and tear down) only the bindings reachable from the routed controller (per-root
+    /// reachability, M5.4.6). Empty means "no pruning" (every scope binding is treated as reachable),
+    /// preserving whole-scope behaviour for callers that don't supply edges.
+    package let edges: [BindingIdentity: [BindingIdentity]]
 
     package init(
         seedTypeExpression: String,
         identifierSuffix: String,
         parentGraphType: String,
         topologicalOrder: [DiscoveredBinding],
-        borrowedBindingPropertyNames: Set<String>
+        borrowedBindingPropertyNames: Set<String>,
+        edges: [BindingIdentity: [BindingIdentity]] = [:]
     ) {
         self.seedTypeExpression = seedTypeExpression
         self.identifierSuffix = identifierSuffix
         self.parentGraphType = parentGraphType
         self.topologicalOrder = topologicalOrder
         self.borrowedBindingPropertyNames = borrowedBindingPropertyNames
+        self.edges = edges
     }
 }
 

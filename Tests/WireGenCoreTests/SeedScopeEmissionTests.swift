@@ -270,6 +270,63 @@ struct SeedScopeEmissionTests {
         #expect(!output.contains("todoRepository.close()"))
     }
 
+    @Test func scopeEntryThunkPrunesUnreachableBindings() {
+        // Per-root reachability (M5.4.6): the scope has a sibling controller's resource (`BResource`) that
+        // the routed `AController` doesn't reach. Given the resolved edges, the thunk constructs only the
+        // reachable subgraph — `AResource` + `AController`, never `BResource`.
+        let subject = DiscoveredScopeBoundType(
+            typeName: "AController",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [
+                DependencyParameter(name: "seed", type: "RequestSeed", kind: .injectInitParameter, location: mockLocation("A.swift")),
+                DependencyParameter(name: "resource", type: "AResource", kind: .injectInitParameter, location: mockLocation("A.swift")),
+            ],
+            location: mockLocation("A.swift"),
+            scopeKey: ScopeKey(seed: "RequestSeed"),
+            originModule: testModule
+        )
+        let proxy = contributorProxyBinding(
+            for: subject,
+            key: "WireMVCKeys.routeContributors",
+            prefix: "_WireRouteContributor_",
+            proxyScope: .singleton
+        )
+        let seedBinding = syntheticProvider(boundType: "RequestSeed", accessPath: "requestSeed")
+        let aResource = scopedSingleton("AResource", seed: "RequestSeed", dependencies: [(name: "seed", type: "RequestSeed")])
+        let bResource = scopedSingleton("BResource", seed: "RequestSeed", dependencies: [(name: "seed", type: "RequestSeed")])
+        let aController = scopedSingleton(
+            "AController",
+            seed: "RequestSeed",
+            dependencies: [(name: "seed", type: "RequestSeed"), (name: "resource", type: "AResource")]
+        )
+        let scope = SeedScopeEmission(
+            seedTypeExpression: "RequestSeed",
+            identifierSuffix: "RequestSeed",
+            parentGraphType: "_WireGraph",
+            topologicalOrder: [seedBinding, aResource, bResource, aController],
+            borrowedBindingPropertyNames: [],
+            edges: [
+                aController.identity: [seedBinding.identity, aResource.identity],
+                aResource.identity: [seedBinding.identity],
+                bResource.identity: [seedBinding.identity],
+            ]
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [.scopeBound(proxy)],
+            seedScopeOrders: [scope]
+        )
+        // Assert on the per-request `_wireEnterScope` thunk (emitted in `_wireBootstrap`), not the standalone
+        // whole-scope `_wireBootstrap<S>Scope` façade below it (which the generated witness never calls).
+        let facadeStart = output.firstRange(of: "_wireBootstrapRequestSeedScope")
+        let thunk = facadeStart.map { String(output[..<$0.lowerBound]) } ?? output
+        #expect(thunk.contains("let aResource = AResource(seed: requestSeed)"))
+        #expect(thunk.contains("let aController = AController(seed: requestSeed, resource: aResource)"))
+        // BResource is reachable only from a sibling controller, so the routed thunk must not construct it.
+        #expect(!thunk.contains("BResource(seed:"))
+    }
+
     @Test func seedScopeBorrowingSingletonsExcludesThemFromStoredProperties() {
         // Singletons borrowed via the synthetic-borrow mechanism are
         // inlined at consumer call sites — emission substitutes the

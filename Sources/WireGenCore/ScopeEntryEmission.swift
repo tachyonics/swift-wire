@@ -63,8 +63,15 @@ private func scopeEntryThunkLines(
     // (`MeController<CouchDBTodoRepository>`) instead of an unspellable `some P` closure-return type, and
     // the proxy's generic parameter is inferred from the passed closure. (`thunkType` still names the local
     // so the proxy's construction argument resolves to it by identity.)
+    // Per-root reachability (M5.4.6): construct — and, below, tear down — only the bindings reachable from
+    // the routed controller, so two controllers sharing a seed don't build each other's subgraphs. `nil`
+    // means no pruning (the scope carried no edges, or the subject binding wasn't found): whole-scope, the
+    // pre-M5.4.6 behaviour.
+    let reachable = reachableBindings(from: subjectLocal, in: scope)
+
     var lines: [String] = ["    let \(thunkLocal) = { @Sendable (\(seedLocal): \(seed)) async throws in"]
     for binding in scope.topologicalOrder {
+        if let reachable, !reachable.contains(binding.identity) { continue }
         let name = propertyName(for: binding)
         // A borrowed singleton resolves to the captured bootstrap local of the same identity name, so
         // it is not re-constructed here; the seed's `let seed = seed` shadow is likewise redundant.
@@ -74,13 +81,30 @@ private func scopeEntryThunkLines(
         lines.append("        let \(name) = \(construction)")
     }
     // The scope's teardown closure — the reverse-order `@Teardown` walk for the scope's own bindings (not
-    // the borrowed singletons, which are torn down at app scope). Captures the construction locals above,
-    // so it runs against each binding's concrete instance. Returned alongside the subject; the witness runs
-    // it after the response (M5.4.5). Consistent with the graph's captured `_wireTeardown`.
-    lines.append(contentsOf: scopeTeardownClosureLines(scope, local: scopeTeardownLocalName))
+    // the borrowed singletons, which are torn down at app scope), pruned to the reachable set so a request
+    // to one controller never tears down a sibling's binding. Captures the construction locals above, so it
+    // runs against each binding's concrete instance. Returned alongside the subject; the witness runs it
+    // after the response (M5.4.5). Consistent with the graph's captured `_wireTeardown`.
+    lines.append(contentsOf: scopeTeardownClosureLines(scope, local: scopeTeardownLocalName, reachable: reachable))
     lines.append("        return (\(subjectLocal), \(scopeTeardownLocalName))")
     lines.append("    }")
     return lines
+}
+
+/// The binding identities reachable from the routed controller over the scope's resolved edges — a BFS
+/// rooted at the subject binding (found by its construction-local name). Returns `nil` (no pruning) when
+/// the scope carries no edges or the subject binding isn't found, preserving whole-scope construction.
+private func reachableBindings(from subjectLocal: String, in scope: SeedScopeEmission) -> Set<BindingIdentity>? {
+    guard !scope.edges.isEmpty,
+        let subject = scope.topologicalOrder.first(where: { propertyName(for: $0) == subjectLocal })
+    else { return nil }
+    var reachable: Set<BindingIdentity> = []
+    var queue = [subject.identity]
+    while let identity = queue.popLast() {
+        guard reachable.insert(identity).inserted else { continue }
+        queue.append(contentsOf: scope.edges[identity] ?? [])
+    }
+    return reachable
 }
 
 /// The scope-entry thunk's teardown-closure local name. `wireMVC`-free (this is swift-wire), just a
@@ -91,9 +115,15 @@ private let scopeTeardownLocalName = "_wireScopeTeardown"
 /// captured `_wireTeardown` (reverse construction order, errors collected not thrown) but scoped to the
 /// seed scope's own `@Teardown` bindings and indented for the thunk body. Always emitted (an empty scope
 /// yields `{ … return errors }` with no calls) so the thunk's return type stays uniform.
-private func scopeTeardownClosureLines(_ scope: SeedScopeEmission, local: String) -> [String] {
+private func scopeTeardownClosureLines(
+    _ scope: SeedScopeEmission,
+    local: String,
+    reachable: Set<BindingIdentity>?
+) -> [String] {
     let torn = scope.topologicalOrder.reversed().filter { binding in
-        binding.teardown != nil && !scope.borrowedBindingPropertyNames.contains(propertyName(for: binding))
+        binding.teardown != nil
+            && !scope.borrowedBindingPropertyNames.contains(propertyName(for: binding))
+            && (reachable?.contains(binding.identity) ?? true)
     }
     let mutatesErrors = torn.contains { binding in
         switch binding.teardown?.kind {
