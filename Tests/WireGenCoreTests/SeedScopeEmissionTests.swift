@@ -279,8 +279,18 @@ struct SeedScopeEmissionTests {
             typeKind: "struct",
             genericParameterNames: [],
             dependencies: [
-                DependencyParameter(name: "seed", type: "RequestSeed", kind: .injectInitParameter, location: mockLocation("A.swift")),
-                DependencyParameter(name: "resource", type: "AResource", kind: .injectInitParameter, location: mockLocation("A.swift")),
+                DependencyParameter(
+                    name: "seed",
+                    type: "RequestSeed",
+                    kind: .injectInitParameter,
+                    location: mockLocation("A.swift")
+                ),
+                DependencyParameter(
+                    name: "resource",
+                    type: "AResource",
+                    kind: .injectInitParameter,
+                    location: mockLocation("A.swift")
+                ),
             ],
             location: mockLocation("A.swift"),
             scopeKey: ScopeKey(seed: "RequestSeed"),
@@ -293,8 +303,16 @@ struct SeedScopeEmissionTests {
             proxyScope: .singleton
         )
         let seedBinding = syntheticProvider(boundType: "RequestSeed", accessPath: "requestSeed")
-        let aResource = scopedSingleton("AResource", seed: "RequestSeed", dependencies: [(name: "seed", type: "RequestSeed")])
-        let bResource = scopedSingleton("BResource", seed: "RequestSeed", dependencies: [(name: "seed", type: "RequestSeed")])
+        let aResource = scopedSingleton(
+            "AResource",
+            seed: "RequestSeed",
+            dependencies: [(name: "seed", type: "RequestSeed")]
+        )
+        let bResource = scopedSingleton(
+            "BResource",
+            seed: "RequestSeed",
+            dependencies: [(name: "seed", type: "RequestSeed")]
+        )
         let aController = scopedSingleton(
             "AController",
             seed: "RequestSeed",
