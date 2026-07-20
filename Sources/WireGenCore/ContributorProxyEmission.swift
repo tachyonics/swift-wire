@@ -31,23 +31,33 @@ package let contributorProxySubjectFieldName = "_wireSubject"
 /// synthesised in M5.4.2; M5.4.1 emits the field.
 package let contributorProxyScopeEntryFieldName = "_wireEnterScope"
 
-/// The type of a bridging proxy's scope-entry thunk: `@Sendable (Seed) async throws -> Subject`. One
-/// builder shared by the synthesis (which types the `_wireEnterScope` dependency) and the emission
-/// (which types the emitted closure and finds its target scope), so the seed/subject contract lives in
-/// one place.
+/// The type of the reverse-order scope teardown a scope-entry thunk returns alongside its subject. The
+/// caller (the generated witness) runs it after the response, in place of the app-scope teardown walk for
+/// request-scoped bindings. Errors are collected, not thrown, matching the app-scope contract. A fixed
+/// string (no generic parameters), so it is stripped verbatim when recovering the subject.
+package let scopeEntryTeardownType = "@Sendable () async -> [any Error]"
+
+/// The type of a bridging proxy's scope-entry thunk: `@Sendable (Seed) async throws -> (Subject,
+/// @Sendable () async -> [any Error])` — the constructed subject **and** a closure that tears its scope
+/// down (M5.4.5, consistent with the graph's `teardown()`). One builder shared by the synthesis (which
+/// types the `_wireEnterScope` dependency) and the emission (which types the emitted closure and finds its
+/// target scope), so the seed/subject contract lives in one place.
 package func contributorScopeEntryThunkType(seed: String, subject: String) -> String {
-    "@Sendable (\(seed)) async throws -> \(subject)"
+    "@Sendable (\(seed)) async throws -> (\(subject), \(scopeEntryTeardownType))"
 }
 
 /// Recover `(seed, subject)` from a thunk type built by `contributorScopeEntryThunkType` — the inverse
-/// the emission uses to locate the target seed scope and name the subject it returns. `nil` for a string
-/// not in that shape.
+/// the emission uses to locate the target seed scope and name the subject it returns. The subject is the
+/// tuple's first element; the teardown-closure suffix is a fixed string stripped verbatim (so a subject
+/// with its own generic-argument commas is recovered intact). `nil` for a string not in that shape.
 package func parsedContributorScopeEntryThunkType(_ type: String) -> (seed: String, subject: String)? {
     let opening = "@Sendable ("
-    let middle = ") async throws -> "
-    guard type.hasPrefix(opening), let middleRange = type.firstRange(of: middle) else { return nil }
+    let middle = ") async throws -> ("
+    let closing = ", \(scopeEntryTeardownType))"
+    guard type.hasPrefix(opening), type.hasSuffix(closing), let middleRange = type.firstRange(of: middle)
+    else { return nil }
     let seed = String(type[type.index(type.startIndex, offsetBy: opening.count)..<middleRange.lowerBound])
-    let subject = String(type[middleRange.upperBound...])
+    let subject = String(type[middleRange.upperBound..<type.index(type.endIndex, offsetBy: -closing.count)])
     guard !seed.isEmpty, !subject.isEmpty else { return nil }
     return (seed, subject)
 }

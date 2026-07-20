@@ -160,7 +160,10 @@ struct ContributorProxySynthesisTests {
         // Primary dependency is the labelled scope-entry thunk, not the positional subject.
         let primary = proxy?.dependencies.first
         #expect(primary?.name == "_wireEnterScope")
-        #expect(primary?.type == "@Sendable (RequestSeed) async throws -> SessionController<Repository>")
+        #expect(
+            primary?.type
+                == "@Sendable (RequestSeed) async throws -> (SessionController<Repository>, @Sendable () async -> [any Error])"
+        )
         #expect(proxy?.contributions.first?.keyReference == key)
 
         // The controller stays a plain seeded binding in its seeded partition — no contribution of its own.

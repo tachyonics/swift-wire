@@ -204,25 +204,32 @@ scoped binding). Validated **end-to-end by the example** (graph-driven lift, so 
 false negative). *(swift-wire main `1814788`, 626 tests; files: `SeedScopeStructEmission.swift` (new),
 `ScopeEntryEmission.swift`, `CodeEmission.swift`.)*
 
-### M5.4.5 — request-scope teardown  *(swift-wire — conditional)*
+### M5.4.5 — request-scope teardown — ✅ DONE
 
-**Scope:** the M4-deferred piece. Give `_<S>WireScope` a `teardown()` (it has none today —
-`Documentation/Notes/TeardownDesign.md:19-20`, `CodeEmission.swift:264`) and run it after the response
-in reverse construction order.
+Built ahead of a concrete use case — not because the auth cluster forces it (it doesn't; auth values are
+plain, ARC-reclaimed), but because a `@Teardown` on a `@Scoped` binding was **silently dropped** (recorded
+in discovery, never emitted), a real resource-leak footgun. Consistency with singleton scope: a scope now
+tears down like the graph does.
 
-**Not for the auth cluster.** Auth request-scoped values (principal, session, decoded claims) are
-**plain values** — nothing owns a lifecycle, so there is nothing to tear down and no leak (ARC reclaims
-them). Teardown's forcing case is a request-scoped **resource**: a per-request DB connection/transaction,
-a unit-of-work, a temp handle — a *persistence* concern, independent of auth. `sessions` needs none;
-`todos-auth-fluent` needs it **only if** the port models a per-request transaction as a `@Scoped(seed:)
-@Teardown` binding (the typical shape keeps the pool app-scoped and checks out per-query, so it doesn't).
+**Mechanism.** The scope-entry thunk's return grows from `Subject` to `(Subject, @Sendable () async ->
+[any Error])` — a teardown closure built in the thunk (reusing the app-scope `teardownCallLines`), tearing
+down the scope's **own** `@Teardown` bindings in reverse construction order (the borrowed app singletons are
+excluded — they tear down at app scope). The generated witness destructures the tuple and runs teardown via
+an **async `defer`** (SE-0493, unconditional in Swift 6.4): `defer { _ = await wireMVCScopeTeardown() }`
+declared right after a successful entry. That `defer` runs on every exit of its scope — handler return, a
+mapped throw, an unmapped rethrow — and is skipped when entry itself threw (nothing constructed), so it
+composes correctly with M5.4E's scope-entry-inside-the-`catch` with no nested guard and no double call.
+Teardown errors are collected by the closure and discarded at the witness (the response is the outcome).
 
-**Why now (deferred, not spine):** trigger = the **first request-scoped `@Teardown`** (a per-request
-resource / unit-of-work). The auth cluster gates M5.4 with zero teardown.
+swift-wire: `ContributorProxyEmission` (tuple thunk type + parser), `ScopeEntryEmission` (the teardown
+closure + tuple return), `TeardownEmission` (`teardownCallLines` made reusable); 562 tests incl. a
+non-empty-teardown golden. wire-mvc: the scoped witness's prologue (tuple destructure + async `defer`).
+**Validated end-to-end** — `WireMVCExample`'s `RequestResource` (`@Scoped @Teardown func close()`) fires
+per request (probe = 2 for two `/whoami` requests), served on `NIOHTTPServer`.
 
-**Validation gate:** a per-request resource is torn down after each request, in reverse order, and a
-teardown failure is collected/logged without stopping the rest (mirroring the app-scope teardown
-contract).
+**Not done:** per-*partial-construction* teardown (a scope-entry throw part-way leaves earlier bindings
+un-torn-down) — the same accepted edge as app-scope bootstrap-throw; and surfacing teardown errors (they're
+collected but discarded at the witness — a logger seam for later).
 
 ### M5.4.6 — per-root reachability  *(swift-wire — refinement)*
 
