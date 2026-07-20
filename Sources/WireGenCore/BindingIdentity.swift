@@ -98,16 +98,16 @@ func optionalityStripped(_ canonical: String) -> (base: String, isOptional: Bool
 /// Unkeyed deps (`key == nil`) match only unkeyed bindings; keyed deps
 /// match only same-key bindings — keys partition the binding space
 /// (Dagger semantics).
-struct BindingIdentity: Hashable, Comparable {
-    let base: String
-    let isOptional: Bool
-    let key: String?
+package struct BindingIdentity: Hashable, Comparable, Sendable {
+    package let base: String
+    package let isOptional: Bool
+    package let key: String?
 
     /// The type as written for diagnostics — `base` with the optional
     /// layer re-applied (`T` or `T?`). IUO (`T!`) renders as `T?`.
-    var displayType: String { isOptional ? base + "?" : base }
+    package var displayType: String { isOptional ? base + "?" : base }
 
-    static func < (lhs: Self, rhs: Self) -> Bool {
+    package static func < (lhs: Self, rhs: Self) -> Bool {
         if lhs.base != rhs.base { return lhs.base < rhs.base }
         // Non-optional sorts before its optional sibling.
         if lhs.isOptional != rhs.isOptional { return !lhs.isOptional }
@@ -127,7 +127,7 @@ struct BindingIdentity: Hashable, Comparable {
 }
 
 extension DiscoveredBinding {
-    var identity: BindingIdentity {
+    package var identity: BindingIdentity {
         let split = optionalityStripped(canonicalTypeName(boundType))
         return BindingIdentity(base: split.base, isOptional: split.isOptional, key: keyIdentifier)
     }

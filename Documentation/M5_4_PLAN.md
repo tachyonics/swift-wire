@@ -231,19 +231,32 @@ per request (probe = 2 for two `/whoami` requests), served on `NIOHTTPServer`.
 un-torn-down) — the same accepted edge as app-scope bootstrap-throw; and surfacing teardown errors (they're
 collected but discarded at the witness — a logger seam for later).
 
-### M5.4.6 — per-root reachability  *(swift-wire — refinement)*
+### M5.4.6 — per-root reachability — ✅ DONE
 
-**Scope:** today's `bootstrap<S>Scope` builds the *entire* S-scope. Make the scope-entry **rooted at
-the controller** — construct the controller plus only its transitive request-scoped deps — so two
-controllers sharing seed S do not cross-construct (a request to A never builds a B-only scoped
-binding). Same seeded scope by seed identity; per-request construction is per-root (M5_PLAN.md M5.4
-precisions).
+Was framed as a "refinement", but M5.4.5 turned it into a **correctness** fix: with two `@Scoped(seed:)`
+controllers sharing a seed, each controller's `_wireEnterScope` thunk built the **whole** scope —
+including the *sibling controller* and its resources — and (post-M5.4.5) tore them all down. So a request
+to A constructed B's controller + resource and fired B's `@Teardown`. Confirmed empirically before fixing.
 
-**Why now (refinement):** the spine can ship whole-scope (correct, slightly over-constructs); per-root
-is the structural guarantee the design promises, added as a bounded follow-on.
+**Mechanism.** The per-request thunk now constructs — and tears down — only the bindings **reachable from
+its root controller**, over the *real* resolved edges. `resolveDependencies` already computes the producer
+adjacency (`[BindingIdentity: [BindingIdentity]]`) for the topological sort; M5.4.6 **surfaces** it on
+`GraphResult.edges` (and threads it to `SeedScopeEmission.edges`) so the thunk emission does a BFS from the
+subject binding and prunes the construction loop + the M5.4.5 teardown filter to that reachable set. Empty
+edges ⇒ no pruning (whole-scope), preserving every existing test. `BindingIdentity` (+ `DiscoveredBinding.identity`)
+became `package` so it can appear in the surfaced API. **swift-wire-only** — the wire-mvc witness is
+unchanged (`_wireEnterScope` still returns `(controller, teardown)`; it just constructs less).
 
-**Validation gate:** with two `@Scoped(seed: S)` controllers A and B sharing a scope, a request routed
-to A constructs no binding reachable only from B.
+swift-wire: `Graph.swift` (surface `edges`), `CodeEmission.swift` (`SeedScopeEmission.edges`), `WireGen.swift`
+(thread it), `ScopeEntryEmission.swift` (the `reachableBindings` BFS + prune), `BindingIdentity.swift`
+(`package`); 563 tests incl. a `scopeEntryThunkPrunesUnreachableBindings` golden. Validated **end-to-end** by
+`WireMVCExample`'s `OtherController` — a second `@Scoped(seed: HTTPRequest.self)` controller: a `/whoami`
+request never bumps `OtherResource`'s teardown probe, and a `/other` request never bumps
+`WhoAmIController`'s.
+
+**Not done:** the standalone whole-scope façade `Wire.bootstrap<S>Scope` / `_<S>WireScope` struct stays
+whole-scope — it isn't the per-request path (the generated witness never calls it) and isn't per-root by
+nature (a scope struct has no single root). It's vestigial for the request path; retiring it is separate.
 
 ## Key sub-decisions (pinned — all resolved as shipped)
 
