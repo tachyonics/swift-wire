@@ -103,6 +103,15 @@ func appendSeedScopeStruct(
         return
     }
 
+    // Rule 3 — a promoted producer that is *borrowed* has no let-line here
+    // (borrows are inlined at arg sites), so its alias binds up front off the
+    // borrow's access path; the rest hang off their own construction line below.
+    let aliases = scopeExistentialAliasPlan(scope, constructedHere: scope.topologicalOrder)
+    for alias in aliases.upFront {
+        let producer = alias.producerLocalName
+        lines.append(contentsOf: existentialAliasLines(alias, boundTo: resolveBorrow(producer) ?? producer))
+    }
+
     for binding in scope.topologicalOrder {
         let local = propertyName(for: binding)
         // Borrows are inlined at their consumers' arg sites — no let-
@@ -120,6 +129,7 @@ func appendSeedScopeStruct(
         // and isn't affected.
         guard local != construction else { continue }
         lines.append("    let \(local) = \(construction)")
+        lines.append(contentsOf: existentialAliasLines(aliases.afterConstruction[binding.identity], boundTo: local))
     }
 
     // Post-init member injection block for bindings constructed in

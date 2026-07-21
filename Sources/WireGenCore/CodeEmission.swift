@@ -187,6 +187,12 @@ package struct SeedScopeEmission: Sendable {
     /// reachability, M5.4.6). Empty means "no pruning" (every scope binding is treated as reachable),
     /// preserving whole-scope behaviour for callers that don't supply edges.
     package let edges: [BindingIdentity: [BindingIdentity]]
+    /// The scope graph's rule-3 promotions — an `any P` consumer inside this
+    /// scope reading a `some P` producer, whether the producer is scope-bound or
+    /// a borrowed singleton. Each scope body binds its own existential aliases;
+    /// the parent graph's aliases aren't in scope for the whole-scope façade, and
+    /// the thunk's captured ones only exist if the bootstrap body itself promoted.
+    package let existentialPromotions: [ExistentialPromotion]
 
     package init(
         seedTypeExpression: String,
@@ -194,7 +200,8 @@ package struct SeedScopeEmission: Sendable {
         parentGraphType: String,
         topologicalOrder: [DiscoveredBinding],
         borrowedBindingPropertyNames: Set<String>,
-        edges: [BindingIdentity: [BindingIdentity]] = [:]
+        edges: [BindingIdentity: [BindingIdentity]] = [:],
+        existentialPromotions: [ExistentialPromotion] = []
     ) {
         self.seedTypeExpression = seedTypeExpression
         self.identifierSuffix = identifierSuffix
@@ -202,6 +209,7 @@ package struct SeedScopeEmission: Sendable {
         self.topologicalOrder = topologicalOrder
         self.borrowedBindingPropertyNames = borrowedBindingPropertyNames
         self.edges = edges
+        self.existentialPromotions = existentialPromotions
     }
 }
 
@@ -247,32 +255,90 @@ func openGraphTypeReference(structName: String, topologicalOrder: [DiscoveredBin
     return "\(structName)<" + liftedConstraints.map { "some \($0)" }.joined(separator: ", ") + ">"
 }
 
-/// The existential aliases one body must bind, keyed by the producer each
-/// aliases. Restricted to promotions whose *consumer* is constructed in that
-/// body: an alias nothing reads would be an unused local, which Swift warns on.
-/// At most one alias per producer even when several consumers share it — they
-/// all derive the same name from the same identity, so a second would be an
-/// invalid redeclaration. See `ExistentialPromotion`.
-private func existentialAliases(
+/// How one body binds its existential aliases: those whose producer is
+/// constructed here, emitted right after that construction line, and those whose
+/// producer is already in scope — a borrowed singleton, or a captured bootstrap
+/// local — which are bound up front instead, since no construction line will
+/// come along to hang them off.
+struct ExistentialAliasPlan {
+    let afterConstruction: [BindingIdentity: ExistentialPromotion]
+    let upFront: [ExistentialPromotion]
+}
+
+/// Plan one body's existential aliases. `consumers` is the set of identities
+/// actually constructed in that body (already reachability-pruned by the caller):
+/// an alias nothing reads would be an unused local, which Swift warns on. At most
+/// one alias per producer even when several consumers share it — they all derive
+/// the same name from the same identity, so a second would be an invalid
+/// redeclaration. See `ExistentialPromotion`.
+func existentialAliasPlan(
     from promotions: [ExistentialPromotion],
-    constructedIn topologicalOrder: [DiscoveredBinding]
-) -> [BindingIdentity: ExistentialPromotion] {
-    let constructedHere = Set(topologicalOrder.map(\.identity))
-    return Dictionary(
-        grouping: promotions.filter { constructedHere.contains($0.consumer) },
+    consumers: Set<BindingIdentity>,
+    producersWithLetLine: Set<BindingIdentity>
+) -> ExistentialAliasPlan {
+    let needed = Dictionary(
+        grouping: promotions.filter { consumers.contains($0.consumer) },
         by: \.producer
     ).compactMapValues { sharing in
         // Deterministic pick: consumers may spell the existential differently
         // (`any P` vs `any  P`) while sharing one alias.
         sharing.min { $0.existentialType < $1.existentialType }
     }
+    var afterConstruction: [BindingIdentity: ExistentialPromotion] = [:]
+    var upFront: [ExistentialPromotion] = []
+    for producer in needed.keys.sorted() {
+        guard let alias = needed[producer] else { continue }
+        if producersWithLetLine.contains(producer) {
+            afterConstruction[producer] = alias
+        } else {
+            upFront.append(alias)
+        }
+    }
+    return ExistentialAliasPlan(afterConstruction: afterConstruction, upFront: upFront)
 }
 
 /// The `let anyP: any P = someP` line binding one existential alias, or nothing
 /// when this binding isn't promoted to by anything in the body.
-private func existentialAliasLine(_ alias: ExistentialPromotion?, boundTo local: String) -> [String] {
+func existentialAliasLines(
+    _ alias: ExistentialPromotion?,
+    boundTo value: String,
+    indent: String = "    "
+) -> [String] {
     guard let alias else { return [] }
-    return ["    let \(alias.aliasName): \(alias.existentialType) = \(local)"]
+    return ["\(indent)let \(alias.aliasName): \(alias.existentialType) = \(value)"]
+}
+
+/// A scope body's alias plan. Both scope bodies — the whole-scope façade and the
+/// per-request thunk — share it: `constructedHere` is whatever that body actually
+/// builds (reachability-pruned for the thunk), and a *borrowed* producer gets no
+/// construction line in either, so its alias lands in `upFront`.
+func scopeExistentialAliasPlan(
+    _ scope: SeedScopeEmission,
+    constructedHere: [DiscoveredBinding]
+) -> ExistentialAliasPlan {
+    existentialAliasPlan(
+        from: scope.existentialPromotions,
+        consumers: Set(constructedHere.map(\.identity)),
+        producersWithLetLine: Set(
+            constructedHere
+                .filter { !scope.borrowedBindingPropertyNames.contains(propertyName(for: $0)) }
+                .map(\.identity)
+        )
+    )
+}
+
+/// The bootstrap body constructs everything it references, so every alias hangs
+/// off the producer it aliases and none needs binding up front.
+private func bootstrapExistentialAliasPlan(
+    _ promotions: [ExistentialPromotion],
+    constructedIn topologicalOrder: [DiscoveredBinding]
+) -> ExistentialAliasPlan {
+    let identities = Set(topologicalOrder.map(\.identity))
+    return existentialAliasPlan(
+        from: promotions,
+        consumers: identities,
+        producersWithLetLine: identities
+    )
 }
 
 private func appendStruct(
@@ -377,7 +443,7 @@ private func appendStruct(
         return
     }
 
-    let aliasesNeeded = existentialAliases(from: existentialPromotions, constructedIn: topologicalOrder)
+    let aliases = bootstrapExistentialAliasPlan(existentialPromotions, constructedIn: topologicalOrder)
 
     // Construction body — bare local names. `let logger = logger`
     // works because Swift resolves the RHS in the outer scope before
@@ -413,7 +479,7 @@ private func appendStruct(
         // body. Bind the existential once, here, so the boxing is a single visible
         // line the consumers share rather than a conversion repeated at each
         // argument site. See `ExistentialPromotion`.
-        lines.append(contentsOf: existentialAliasLine(aliasesNeeded[binding.identity], boundTo: local))
+        lines.append(contentsOf: existentialAliasLines(aliases.afterConstruction[binding.identity], boundTo: local))
     }
 
     // Post-init member injection block — emits after all locals
