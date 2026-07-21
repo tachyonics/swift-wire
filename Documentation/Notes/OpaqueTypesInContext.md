@@ -6,13 +6,35 @@
 > comparison implies for Wire's public claims. Framework behaviour is cited from
 > primary docs and issue trackers as of the research date.
 
-## The question
+## The question, and the two axes it splits into
 
 Every DI framework must answer: **how does a consumer depend on an abstraction
 rather than a concrete type, and what does that abstraction cost?** Wire answers
 with `some P` as a nominal binding identity plus the constrained-parameter
 bridge. Nobody else answers it that way, and the reason is not that Wire is
 cleverer — it is that the question means something different in Swift.
+
+Comparing the cost across languages needs two separate measurements, and
+conflating them produces claims that don't survive scrutiny:
+
+1. **Does the framework match hand-written wiring in its own language?** This is
+   a fair comparison between frameworks, and it is the one this note makes. The
+   unit is the delta the framework imposes over what you would have written by
+   hand in that same language.
+2. **Which language's constructs set the higher ceiling for this shape?** This is
+   a language question, not a framework question — no DI framework can raise its
+   language's ceiling, only decline to reach it.
+
+They compose: **axis 2 sets the ceiling, axis 1 says whether the framework
+forfeits it.** Wire's claim is the conjunction — Swift's ceiling is higher for a
+dependency graph, and the opaque model exists so the framework doesn't forfeit
+it. Stated separately, each half is weaker than it sounds: on axis 1 alone Wire
+reaches *parity* with Dagger rather than beating it, and on axis 2 alone the
+credit belongs to Swift, not to Wire.
+
+Axis 1 is settled below from primary sources. Axis 2 is asserted here and not
+measured — see *The unmeasured half* — and is deferred to the post-M6
+performance round, which will benchmark against servers in other languages.
 
 ## Wire's shipped model, in one table
 
@@ -41,15 +63,15 @@ support" without distinguishing them.
 
 ## Against Swift DI
 
-| Framework | How abstraction is expressed | Generic self-production | Runtime cost |
+| Framework | How abstraction is expressed | Generic self-production | Delta over hand-written Swift (axis 1) |
 |---|---|---|---|
-| **swift-wire** | `some P` identity + constrained-parameter bridge | Generic `@Singleton` lifted as a `_WireGraph` parameter; real type preserved | None — static specialisation |
-| **SafeDI** | `fulfillingAdditionalTypes:` on `@Instantiable` | Extension with `static func instantiate() -> GenericType<ConcreteType>` — one overload per closed type argument | `any P` boxing + witness dispatch |
-| **Needle** | Dependency protocols (`var repo: TaskRepository { get }`) | Closed types only | Existential |
-| **Swinject / Factory / Resolver** | Runtime container keyed by `Service.Type` | One registration per closed generic type | Existential + runtime lookup |
-| **swift-dependencies** | `DependencyKey.Value` reached by keypath | A generic dependency in `DependencyValues` isn't expressible type-safely | Struct-of-closures (sidesteps protocols entirely) |
+| **swift-wire** | `some P` identity + constrained-parameter bridge | Generic `@Singleton` lifted as a `_WireGraph` parameter; real type preserved | None — the graph holds the same types you'd have written |
+| **SafeDI** | `fulfillingAdditionalTypes:` on `@Instantiable` | Extension with `static func instantiate() -> GenericType<ConcreteType>` — one overload per closed type argument | Forces `any P`: boxing + witness dispatch |
+| **Needle** | Dependency protocols (`var repo: TaskRepository { get }`) | Closed types only | Forces an existential |
+| **Swinject / Factory / Resolver** | Runtime container keyed by `Service.Type` | One registration per closed generic type | Forces an existential, plus runtime lookup |
+| **swift-dependencies** | `DependencyKey.Value` reached by keypath | A generic dependency in `DependencyValues` isn't expressible type-safely | Closure indirection rather than boxing — a softer form of the same loss |
 
-Two things fall out.
+Three things fall out.
 
 **SafeDI's `fulfillingAdditionalTypes` is the direct analogue of Wire's deferred
 multi-identity aliasing** — same idea, same bounds (one instance, several
@@ -58,8 +80,16 @@ deferred here, so their diagnostics are worth reading before Wire builds its own
 
 **No Swift DI framework other than Wire treats `some P` as a binding identity.**
 SafeDI's manual mentions opaque types only as function parameters; the others
-resolve through existentials or runtime type keys. This is the narrow claim Wire
-should make, and it is stronger than a claim about other ecosystems.
+resolve through existentials or runtime type keys.
+
+**This — not the cross-language comparison — is where the win is.** These
+frameworks forfeit Swift's ceiling: they hand you a JVM-shaped execution model in
+a language that didn't have to have one, and the worst case is arguably worse
+than the JVM's, since boxing a large struct existential can allocate per copy
+where the JVM allocates once. The opaque model exists so that Wire doesn't
+forfeit it. Against the Swift field that is a substantial difference; against
+Dagger, as the next section shows, the same machinery buys parity rather than
+advantage.
 
 ## Against non-Swift DI
 
@@ -93,6 +123,15 @@ framework nothing. Fruit is the useful control here — C++ has the same zero-co
 baseline as Swift, so its interface bindings pay a real delta, and it took that
 delta rather than build the template machinery to avoid it.
 
+**On axis 1 this is parity, not advantage.** Dagger imposes no delta over
+hand-written JVM wiring, and Wire imposes none over hand-written Swift; Dagger
+gets there for free and could not be improved by adding opaque identities,
+because the JVM has no cheaper baseline to preserve. Wire has to build the
+lifting, the bridge, and the identity model to arrive at the same "the framework
+costs you nothing" position. Any claim that Wire is *faster than Dagger* is an
+axis-2 claim about Swift versus the JVM, and belongs to the language, not to
+this framework.
+
 Those ecosystems spent their effort on the *other* axis instead: open generics
 and variance-aware matching. The trade inverts cleanly:
 
@@ -119,6 +158,46 @@ the target audience already has:
   statically where .NET and Autofac resolve it reflectively. This is Wire's
   answer on the one axis the JVM/.NET world otherwise wins, and neither the
   README nor `OpaqueTypesSupport.md` currently frames it that way.
+
+## The unmeasured half: axis 2
+
+Everything above is axis 1, settled from primary sources. Axis 2 — whether
+Swift's constructs set a higher ceiling than the JVM's for a dependency graph —
+is asserted in this note and **has not been measured**. It is deferred to the
+performance round after M6, which will benchmark against servers in other
+languages. Recording the shape of the question now so that round has a starting
+point rather than a blank page:
+
+**What plausibly decides it.** Construction cost is once-at-boot and irrelevant
+everywhere. Layout favours Swift where dependencies are value types held inline
+in the graph struct rather than heap nodes pointer-chased from a field — narrower
+than it sounds, since most injected services are reference types in Swift too.
+The real question is steady-state call sites through injected references.
+
+**The JVM is stronger there than the bytecode suggests.** HotSpot's
+class-hierarchy analysis devirtualises and inlines monomorphic call sites
+aggressively, and a DI graph is overwhelmingly monomorphic — one implementation
+loaded per interface. So the JVM often *reaches* near-static dispatch
+dynamically, behind a deopt guard, after warmup. Swift's advantage is better
+characterised as *static and predictable* — no warmup, no guard, no deopt, and it
+holds in a 50 ms CLI as well as a long-running server — rather than as a large
+steady-state margin.
+
+**The caveat that could invalidate the whole claim.** Swift only realises the win
+when specialisation actually happens. Generic code called across module
+boundaries falls back to unspecialised generics with witness tables and
+value-witness calls unless it is `@inlinable`, `@_specialize`d, or the build
+enables cross-module optimisation. Wire's opaque chain *deliberately* spans
+modules — the leaf and the repository typically live in library targets while
+`_WireGraph` is generated in the consumer. If SwiftPM's default release
+configuration doesn't specialise across that boundary, the chain pays
+unspecialised-generic dispatch, which is not obviously better than
+`invokeinterface`, and the axis-2 claim collapses to "predictable, not faster."
+
+This is the first thing the performance round should check, because it is cheap
+to answer (a two-module opaque chain built in release, inspecting whether the
+call specialises) and it gates whether the rest of the benchmarking is measuring
+what it thinks it is.
 
 ## What Spring does that Wire deliberately doesn't
 

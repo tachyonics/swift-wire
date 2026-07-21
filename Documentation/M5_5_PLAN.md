@@ -30,26 +30,30 @@ linear-sender box model with no new response machinery.
 ## The surface
 
 ```swift
-@main
-@WireMVCBootstrap
-@Middleware(GlobalMiddleware.requestLogging)          // global tier — outermost middleware
+@Singleton                                            // required — makes it a graph binding
+@WireMVCBootstrap                                     // marker; the @main entry is *generated*, not written
+@Middleware(GlobalMiddleware.requestLogging)          // global tier — outermost middleware (Phase 5)
 @Middleware(GlobalMiddleware.cors)
-@ErrorResponse(NotFound.self, .notFound)              // global tier — default error map
+@ErrorResponse(NotFound.self, .notFound)              // global tier — default error map (Phase 3)
 @ErrorResponse({ (e: Swift.Error) in .status(.internalServerError) })
 struct Bootstrap {
-    @Inject(Logger.application) let logger: Logger    // resolved from the graph
-    @Inject let config: ConfigReader
+    @Inject let config: ServerConfig                  // resolved from the graph
 
-    func createServer() -> some HTTPServer {          // concrete server defines its own assoc types
-        NIOHTTPServer(logger: logger, configuration: try .init(
-            bindTarget: .hostAndPort(host: config.string("host"), port: config.int("port")),
+    func createServer() throws -> NIOHTTPServer {     // the CONCRETE server — see note
+        NIOHTTPServer(logger: Logger(label: "app"), configuration: try .init(
+            bindTarget: .hostAndPort(host: config.host, port: config.port),
             supportedHTTPVersions: [.http1_1],
             transportSecurity: .plaintext))
     }
 
     func createRoutableBuilder<Server: HTTPServer>(   // generic over the server it is handed
         for server: borrowing Server
-    ) -> some RoutableHTTPServerBuilder<Server.RequestContext, Server.Reader, Server.ResponseSender> {
+    ) -> some RoutableHTTPServerBuilder<Server.RequestContext, Server.Reader, Server.ResponseSender>
+        & HTTPServerRequestHandler                    // the router must also be servable
+    where
+        Server.RequestContext: ~Copyable, Server.Reader: ~Copyable,
+        Server.ResponseSender: ~Copyable, Server.ResponseSender.Writer: ~Copyable
+    {
         WireRouter(for: server)
     }
 
