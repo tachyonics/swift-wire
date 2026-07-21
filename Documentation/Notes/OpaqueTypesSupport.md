@@ -12,8 +12,10 @@
 > closure invariant*); the literal `some P` init/var form does not compile. The
 > model deliberately stops short of conformance-based resolution (see *Identity
 > model*); it is opaque *nominal identity* plus a small, closed set of promotion
-> rules. Deferred within it: the `some P` satisfies `any P` promotion and
-> multi-identity aliasing (each marked below).
+> rules. Rule 3 — `some P` satisfies `any P`, with the existential bound once per
+> scope body as an alias local — shipped after iteration 10, together with its
+> corollary that a `some P` and an `any P` producer for one protocol are
+> duplicates. Deferred within it: multi-identity aliasing (marked below).
 
 ## The pattern
 
@@ -192,10 +194,7 @@ identities, where the wrapper boilerplate starts to grate.
 
 ## Resolving consumers
 
-Three rules, in precedence order. None require conformance search. **Rules 1 and
-2 are shipped; rule 3 is designed but not implemented** — `matchProducer` today
-promotes only optionality, so a `some P` binding does not yet satisfy an `any P`
-consumer.
+Three rules, in precedence order. None require conformance search.
 
 1. **Exact token.** `some P` is one graph slot: two producers declaring the
    same `some P` identity collide as a duplicate, and a dependency already
@@ -216,14 +215,31 @@ consumer.
    Swift compiler specialises the generic — Wire never names the hidden
    type.
 
-3. **Qualifier promotion: `some P` satisfies `any P`** *(designed, not
-   implemented)*. A `some P` binding
+3. **Qualifier promotion: `some P` satisfies `any P`.** A `some P` binding
    may feed an `any P` consumer (the concrete-underlying value boxes into
    the existential). One-directional: `any P` can never feed `some P` (an
    existential has erased the single underlying type `some P` requires).
    The boxing cost lands at the `any P` consumption site — the consumer
    that chose the existential pays for it; the binding stays zero-cost for
    its `some P` consumers.
+
+   Codegen spends that cost **once per scope body**, not once per consumer,
+   by binding an *existential alias* local next to the producer:
+
+   ```swift
+   let someGreeting = greeting
+   let anyGreeting: any Greeting = someGreeting   // the one box
+   let greetingAuditor = GreetingAuditor(greeting: anyGreeting)
+   let greetingReporter = GreetingReporter(greeting: anyGreeting)
+   ```
+
+   The alias is what makes promotion work at all, and the reason it needs
+   machinery where optional promotion needed none: `T` and `T?` sanitise to
+   the same generated identifier, so a `T?` consumer's argument site already
+   names the `T` producer's local, whereas `some P` and `any P` sanitise to
+   `someP` and `anyP`. Aliases are emitted only into bodies that actually
+   construct a promoted consumer — an alias nothing reads would be an unused
+   local, which Swift warns on.
 
    This is the second member of a **closed set** of qualifier promotions,
    alongside `T` satisfies `T?` (see
@@ -243,10 +259,22 @@ conflicts are caught at declaration, not at a consumer:
 - **Two bindings with the *same* `some P` identity** (e.g. two unkeyed
   `@Provides -> some DatabaseClient`) are a duplicate-binding error, the
   same as any duplicate. Disambiguate with keys.
-- **A `some P` binding and an `any P` binding** are distinct identities but
-  lower to the same generated name, so declaring both at one key is an
-  identifier collision — exactly as `T` and `T?` collide. Keys give them
-  distinct names and let them coexist.
+- **A `some P` binding and an `any P` binding** at one key are a
+  **duplicate-binding error**. Under rule 3 the `some P` binding already
+  satisfies every `any P` consumer, so binding both is two instances of one
+  dependency, and which one a consumer got would depend on nothing more than
+  how it happened to spell the type. Keys separate them if both are genuinely
+  wanted.
+
+  (An earlier draft of this note claimed the two "lower to the same generated
+  name" and collide as identifiers. They don't — `sanitizeIdentifier` keeps the
+  qualifier, so they generate `someP` and `anyP`. The duplicate rule is a
+  deliberate check on the normalised identity, not a naming accident.)
+
+  A **concrete** binding for `P` is *not* folded in: Wire can't tell a bare `P`
+  protocol name from a concrete type syntactically, so it can't claim `P` and
+  `any P` are one slot even though Swift says they are. That is a known gap in
+  the identity model, not a decision.
 
 Both fire when the producers are declared, independent of any consumer, so
 adding a consumer later can never turn a valid graph ambiguous.

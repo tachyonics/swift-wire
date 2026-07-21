@@ -49,6 +49,81 @@ struct BindingIdentityTests {
         #expect(optionalityStripped(canonicalTypeName("(B & A)?")).isOptional)
     }
 
+    // MARK: - Qualifier promotion (rule 3)
+
+    /// A producer set holding exactly the given bound types, keyed by identity.
+    private func producers(_ boundTypes: String...) -> [BindingIdentity: DiscoveredBinding] {
+        var result: [BindingIdentity: DiscoveredBinding] = [:]
+        for boundType in boundTypes {
+            let binding = DiscoveredBinding.scopeBound(
+                DiscoveredScopeBoundType(
+                    typeName: "Impl",
+                    typeKind: "struct",
+                    genericParameterNames: [],
+                    explicitIdentity: boundType.hasPrefix("some ")
+                        ? String(boundType.dropFirst("some ".count)) : nil,
+                    dependencies: [],
+                    location: mockLocation("P.swift"),
+                    originModule: testModule
+                )
+            )
+            result[identity(boundType)] = binding
+        }
+        return result
+    }
+
+    private func identity(_ type: String, key: String? = nil) -> BindingIdentity {
+        let components = identityComponents(type)
+        return BindingIdentity(
+            qualifier: components.qualifier,
+            base: components.base,
+            isOptional: components.isOptional,
+            key: key
+        )
+    }
+
+    @Test func anyConsumerBorrowsTheSomeProducer() {
+        let match = matchProducer(for: identity("any Logger"), in: producers("some Logger"))
+        #expect(match == .resolved(identity("some Logger")))
+    }
+
+    @Test func someConsumerNeverBorrowsTheAnyProducer() {
+        // One-directional: `any P` has erased the single underlying type `some P` needs.
+        let match = matchProducer(for: identity("some Logger"), in: producers("any Logger"))
+        #expect(match == .missing(nil))
+    }
+
+    @Test func anExactAnyProducerWinsOverThePromotion() {
+        // Exact-first ordering, asserted at the matcher. The graph rejects this
+        // producer set upstream as a duplicate binding (see
+        // `someAndAnyProducersForOneProtocolAreDuplicates`), so the case can't
+        // reach a real codegen run — the ordering is asserted here so promotion
+        // can never silently outrank an exact match if that rule ever loosens.
+        let match = matchProducer(
+            for: identity("any Logger"),
+            in: producers("any Logger", "some Logger")
+        )
+        #expect(match == .resolved(identity("any Logger")))
+    }
+
+    @Test func promotionRespectsKeys() {
+        // Keys partition the binding space — an unkeyed `some P` can't feed a keyed `any P`.
+        let keyed = identity("any Logger", key: "Log.primary")
+        #expect(matchProducer(for: keyed, in: producers("some Logger")) == .missing(nil))
+    }
+
+    @Test func optionalAndExistentialPromotionsCompose() {
+        // `any P?` reaches a non-optional `some P` producer through both promotions.
+        let match = matchProducer(for: identity("any Logger?"), in: producers("some Logger"))
+        #expect(match == .resolved(identity("some Logger")))
+    }
+
+    @Test func aConcreteProducerNeverSatisfiesAnExistential() {
+        // The line that keeps this from becoming conformance search: `Logger` is
+        // a different identity from `any Logger`, promotion or not.
+        #expect(matchProducer(for: identity("any Logger"), in: producers("Logger")) == .missing(nil))
+    }
+
     // MARK: - Resolution
 
     @Test func bridgesAReorderedConstraintToTheSameIdentity() {
@@ -78,11 +153,14 @@ struct BindingIdentityTests {
             kind: .injectInitParameter,
             location: mockLocation("R.swift")
         )
+        let producer = identityComponents("some DBTable & Sendable")
         let producerIdentity = BindingIdentity(
-            base: canonicalTypeName("some DBTable & Sendable"),
-            isOptional: false,
+            qualifier: producer.qualifier,
+            base: producer.base,
+            isOptional: producer.isOptional,
             key: nil
         )
         #expect(bridgedDependencyIdentity(dependency, in: consumer) == producerIdentity)
+        #expect(producerIdentity.displayType == "someDBTable&Sendable")
     }
 }

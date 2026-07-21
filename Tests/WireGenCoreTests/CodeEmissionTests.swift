@@ -30,6 +30,58 @@ struct CodeEmissionTests {
         )
     }
 
+    private func provider(_ accessPath: String, boundType: String) -> DiscoveredBinding {
+        .provider(
+            DiscoveredProvider(
+                boundType: boundType,
+                accessPath: accessPath,
+                form: .property,
+                dependencies: [],
+                genericParameterNames: [],
+                location: mockLocation("\(accessPath).swift"),
+                originModule: testModule
+            )
+        )
+    }
+
+    /// Rule 3 — an `any P` consumer reads a `some P` producer through one
+    /// existential alias local, so the boxing is a single visible line rather than
+    /// a conversion repeated at each argument site.
+    @Test func existentialPromotionBindsOneAliasSharedByItsConsumers() throws {
+        let producer = provider("opaqueLogger", boundType: "some Logger")
+        let first = singleton("Reporter", dependencies: [(name: "logger", type: "any Logger")])
+        let second = singleton("Auditor", dependencies: [(name: "logger", type: "any Logger")])
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [producer, first, second],
+            existentialPromotions: [first, second].map {
+                ExistentialPromotion(
+                    consumer: $0.identity,
+                    producer: producer.identity,
+                    existentialType: "any Logger"
+                )
+            }
+        )
+        // Bound once, immediately after the producer it aliases...
+        let aliasLines = output.split(separator: "\n").filter {
+            $0.contains("let anyLogger: any Logger = someLogger")
+        }
+        #expect(aliasLines.count == 1)
+        // ...and read by both consumers under the name their own `any Logger`
+        // dependency renders.
+        #expect(output.contains("Reporter(logger: anyLogger)"))
+        #expect(output.contains("Auditor(logger: anyLogger)"))
+    }
+
+    @Test func noAliasIsBoundWhenNothingInTheBodyPromotes() throws {
+        // An alias with no reader would be an unused local, which Swift warns on.
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [provider("opaqueLogger", boundType: "some Logger")]
+        )
+        #expect(!output.contains("anyLogger"))
+    }
+
     @Test func syntheticTypeDeclarationsEmitAtModuleScopeBeforeTheGraph() throws {
         // A plugin-synthesised type (e.g. a `@Factory` factory struct) is emitted
         // verbatim above the graph struct, and its registered binding is constructed

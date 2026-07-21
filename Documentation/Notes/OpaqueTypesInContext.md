@@ -50,7 +50,8 @@ Grounded in `BindingIdentity.swift`, `Graph.swift`'s `partitionBindings`, and
 | Structural identity + minimal `_WireGraph<T0…>` lifting | Shipped (iteration 10) |
 | Undetermined generic `@Singleton` → error steering to `@Provides func` | Shipped |
 | Generic `@Provides func` as the specialise-per-consumer template | Shipped |
-| `some P` satisfies `any P` promotion | Designed, not implemented |
+| `some P` satisfies `any P` promotion (+ existential alias local) | Shipped |
+| `some P` and `any P` producers for one protocol are duplicates | Shipped |
 | Multi-identity aliasing / conformance-derived aliases | Deferred |
 | `some P<A, B, C>` (parameterized opaque) | Deferred to M2 |
 

@@ -127,7 +127,9 @@ struct DiscoveryTests {
         // The binding is keyed as `some TaskRepository`...
         let binding = DiscoveredBinding.scopeBound(scopeBound)
         #expect(binding.boundType == "some TaskRepository")
-        #expect(binding.identity.base == "someTaskRepository")
+        #expect(binding.identity.qualifier == .some)
+        #expect(binding.identity.base == "TaskRepository")
+        #expect(binding.identity.displayType == "someTaskRepository")
         // ...while construction still uses the concrete type.
         #expect(scopeBound.typeName == "DynamoDBTaskRepository")
         #expect(scopeBound.qualifiedTypeName == "DynamoDBTaskRepository")

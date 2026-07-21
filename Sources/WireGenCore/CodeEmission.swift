@@ -43,7 +43,8 @@ package func renderWireGraph(
     seedScopeOrders: [SeedScopeEmission] = [],
     graphConformances: [DiscoveredGraphConformance] = [],
     multibindingKeys: [DiscoveredMultibindingKey] = [],
-    syntheticTypeDeclarations: [String] = []
+    syntheticTypeDeclarations: [String] = [],
+    existentialPromotions: [ExistentialPromotion] = []
 ) -> String {
     var lines: [String] = []
     var bootstrapEntries: [BootstrapEntry] = []
@@ -85,6 +86,7 @@ package func renderWireGraph(
         bootstrapMethod: "bootstrap",
         topologicalOrder: topologicalOrder,
         seedScopes: seedScopeMap(forParent: "_WireGraph"),
+        existentialPromotions: existentialPromotions,
         into: &lines,
         entries: &bootstrapEntries
     )
@@ -101,6 +103,7 @@ package func renderWireGraph(
             bootstrapMethod: "bootstrap\(containerName)",
             topologicalOrder: order,
             seedScopes: seedScopeMap(forParent: "_\(containerName)WireGraph"),
+            existentialPromotions: existentialPromotions,
             into: &lines,
             entries: &bootstrapEntries
         )
@@ -244,12 +247,41 @@ func openGraphTypeReference(structName: String, topologicalOrder: [DiscoveredBin
     return "\(structName)<" + liftedConstraints.map { "some \($0)" }.joined(separator: ", ") + ">"
 }
 
+/// The existential aliases one body must bind, keyed by the producer each
+/// aliases. Restricted to promotions whose *consumer* is constructed in that
+/// body: an alias nothing reads would be an unused local, which Swift warns on.
+/// At most one alias per producer even when several consumers share it — they
+/// all derive the same name from the same identity, so a second would be an
+/// invalid redeclaration. See `ExistentialPromotion`.
+private func existentialAliases(
+    from promotions: [ExistentialPromotion],
+    constructedIn topologicalOrder: [DiscoveredBinding]
+) -> [BindingIdentity: ExistentialPromotion] {
+    let constructedHere = Set(topologicalOrder.map(\.identity))
+    return Dictionary(
+        grouping: promotions.filter { constructedHere.contains($0.consumer) },
+        by: \.producer
+    ).compactMapValues { sharing in
+        // Deterministic pick: consumers may spell the existential differently
+        // (`any P` vs `any  P`) while sharing one alias.
+        sharing.min { $0.existentialType < $1.existentialType }
+    }
+}
+
+/// The `let anyP: any P = someP` line binding one existential alias, or nothing
+/// when this binding isn't promoted to by anything in the body.
+private func existentialAliasLine(_ alias: ExistentialPromotion?, boundTo local: String) -> [String] {
+    guard let alias else { return [] }
+    return ["    let \(alias.aliasName): \(alias.existentialType) = \(local)"]
+}
+
 private func appendStruct(
     structName: String,
     bootstrapFunction: String,
     bootstrapMethod: String,
     topologicalOrder: [DiscoveredBinding],
     seedScopes: [String: SeedScopeEmission] = [:],
+    existentialPromotions: [ExistentialPromotion] = [],
     into lines: inout [String],
     entries: inout [BootstrapEntry]
 ) {
@@ -345,6 +377,8 @@ private func appendStruct(
         return
     }
 
+    let aliasesNeeded = existentialAliases(from: existentialPromotions, constructedIn: topologicalOrder)
+
     // Construction body — bare local names. `let logger = logger`
     // works because Swift resolves the RHS in the outer scope before
     // binding the LHS local, so the local shadows cleanly.
@@ -375,6 +409,11 @@ private func appendStruct(
         } else {
             lines.append("    let \(local) = \(construction)")
         }
+        // Rule 3 — this binding is read by an `any P` consumer somewhere in this
+        // body. Bind the existential once, here, so the boxing is a single visible
+        // line the consumers share rather than a conversion repeated at each
+        // argument site. See `ExistentialPromotion`.
+        lines.append(contentsOf: existentialAliasLine(aliasesNeeded[binding.identity], boundTo: local))
     }
 
     // Post-init member injection block — emits after all locals

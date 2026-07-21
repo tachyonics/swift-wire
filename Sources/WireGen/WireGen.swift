@@ -115,7 +115,11 @@ struct WireGen {
                 factories: preGraph.factories,
                 proxyIdentities: preGraph.proxyIdentities,
                 in: aggregate.allBindings
-            )
+            ),
+            // Rule 3 — the default graph's promotions plus every container's, so
+            // each `appendStruct` finds the ones whose consumers it constructs.
+            existentialPromotions: defaultGraph.existentialPromotions
+                + containerGraphs.flatMap { $0.result.existentialPromotions }
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")

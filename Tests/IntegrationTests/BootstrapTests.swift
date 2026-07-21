@@ -11,6 +11,16 @@ struct BootstrapTests {
         #expect(graph.greeter.greet("alice") == "alice: [log] UserRepository")
     }
 
+    @Test func existentialConsumersShareOnePromotedOpaqueBinding() async throws {
+        // Rule 3 — both consumers asked for `any Greeting` and were fed the one
+        // `some Greeting` binding through the existential alias. The opaque
+        // binding is still on the graph under its own identity, unboxed.
+        let graph = try await Wire.bootstrap()
+        #expect(graph.greetingReporter.report() == "Hello, world!")
+        #expect(graph.greetingAuditor.audit() == 13)
+        #expect(graph.someGreeting.greet() == "Hello, world!")
+    }
+
     @Test func storedPropertiesAreNamedByLowerCamelCasedTypeName() async throws {
         // Confirms WireGen's naming convention round-trips: the
         // accessor on the generated struct is lowerCamelCased(typeName).

@@ -19,15 +19,23 @@ package struct GraphResult: Sendable {
     /// Surfaced so per-root reachability (a seed scope constructed per routed controller — M5.4.6) can BFS
     /// from a root over the real resolution rather than re-deriving edges. Empty for a failed graph.
     package let edges: [BindingIdentity: [BindingIdentity]]
+    /// Every `any P` consumer that resolved to a `some P` producer through rule 3.
+    /// Codegen turns each distinct producer into one existential alias local; the
+    /// edges alone can't carry this, since they record only which producer
+    /// satisfied a dependency, not which qualifier the consumer asked for.
+    /// Empty for a failed graph.
+    package let existentialPromotions: [ExistentialPromotion]
 
     package init(
         outcome: Outcome,
         genericTemplates: [DiscoveredBinding],
-        edges: [BindingIdentity: [BindingIdentity]] = [:]
+        edges: [BindingIdentity: [BindingIdentity]] = [:],
+        existentialPromotions: [ExistentialPromotion] = []
     ) {
         self.outcome = outcome
         self.genericTemplates = genericTemplates
         self.edges = edges
+        self.existentialPromotions = existentialPromotions
     }
 
     /// Either a valid topological order (the graph constructs cleanly)
@@ -486,7 +494,7 @@ package func buildDependencyGraph(
         )
     }
 
-    let (dependencyEdges, missingBindings) = resolveDependencies(
+    let (dependencyEdges, missingBindings, existentialPromotions) = resolveDependencies(
         in: resolvedBindings,
         typealiases: typealiases
     )
@@ -509,7 +517,12 @@ package func buildDependencyGraph(
         )
     }
 
-    return GraphResult(outcome: outcome, genericTemplates: genericTemplates, edges: dependencyEdges)
+    return GraphResult(
+        outcome: outcome,
+        genericTemplates: genericTemplates,
+        edges: dependencyEdges,
+        existentialPromotions: existentialPromotions
+    )
 }
 
 /// Bucket every discovered binding by what role it plays in graph
@@ -577,6 +590,24 @@ private func splitUniqueFromDuplicates(
             )
         }
     }
+    // Rule 3's corollary — `some P` and `any P` are one dependency spelled two
+    // ways, not two slots. `some P` already satisfies every `any P` consumer, so
+    // binding both is two instances of one thing, and which one a consumer gets
+    // would depend on how it happened to spell the type. Producer-side
+    // disambiguation applies as it does to any duplicate: key them apart. See
+    // `OpaqueTypesSupport.md`, *Disambiguation is producer-side*.
+    let byQualifierVariant = Dictionary(grouping: unique.keys.sorted(), by: \.qualifierNormalised)
+    for variant in byQualifierVariant.keys.sorted() {
+        guard let identities = byQualifierVariant[variant], identities.count > 1 else { continue }
+        duplicates.append(
+            DuplicateBinding(
+                boundType: variant.displayType,
+                keyIdentifier: variant.key,
+                bindings: identities.compactMap { unique[$0] }
+            )
+        )
+        for identity in identities { unique[identity] = nil }
+    }
     return (unique, duplicates)
 }
 
@@ -622,7 +653,8 @@ private func resolveDependencies(
     typealiases: [DiscoveredTypealias]
 ) -> (
     edges: [BindingIdentity: [BindingIdentity]],
-    missing: [MissingBinding]
+    missing: [MissingBinding],
+    promotions: [ExistentialPromotion]
 ) {
     let typealiasByName = Dictionary(
         typealiases.map { ($0.name, $0) },
@@ -630,6 +662,7 @@ private func resolveDependencies(
     )
     var edges: [BindingIdentity: [BindingIdentity]] = [:]
     var missing: [MissingBinding] = []
+    var promotions: [ExistentialPromotion] = []
     for identity in resolvedBindings.keys.sorted() {
         guard let binding = resolvedBindings[identity] else { continue }
         var resolved: [BindingIdentity] = []
@@ -640,15 +673,26 @@ private func resolveDependencies(
             // forms no edge and is never "missing". Its ordering is carried by the proxy's `.scopeCapture`
             // deps instead. See `DependencyKind.scopeEntryThunk`.
             if dependency.kind == .scopeEntryThunk { continue }
-            switch matchProducer(
-                for: bridgedDependencyIdentity(dependency, in: binding),
-                in: resolvedBindings
-            ) {
+            let dependencyIdentity = bridgedDependencyIdentity(dependency, in: binding)
+            switch matchProducer(for: dependencyIdentity, in: resolvedBindings) {
             case .resolved(let producerIdentity):
                 // May differ from the dependency's own identity under
                 // promotion (a `T?` dep resolves to the `T` producer);
                 // the edge must point at the actual producer node.
                 resolved.append(producerIdentity)
+                // Rule 3 — an `any P` consumer reached a `some P` producer. Codegen needs
+                // to know so it can emit the existential alias the consumer's argument
+                // site will reference; the edge alone doesn't carry which qualifier the
+                // consumer asked for. See `ExistentialPromotion`.
+                if dependencyIdentity.qualifier == .any, producerIdentity.qualifier == .some {
+                    promotions.append(
+                        ExistentialPromotion(
+                            consumer: identity,
+                            producer: producerIdentity,
+                            existentialType: optionalLayerDropped(dependency.type)
+                        )
+                    )
+                }
             case .missing(let optionalHint):
                 missing.append(
                     MissingBinding(
@@ -695,7 +739,7 @@ private func resolveDependencies(
         }
         edges[identity] = resolved
     }
-    return (edges, missing)
+    return (edges, missing, promotions)
 }
 
 /// Build a `TypealiasHint` for a missing dependency when its type
@@ -707,10 +751,11 @@ private func typealiasHintFor(
     resolvedBindings: [BindingIdentity: DiscoveredBinding]
 ) -> TypealiasHint? {
     guard let typealiasDecl = typealiasByName[dependency.type] else { return nil }
-    let underlyingSplit = optionalityStripped(canonicalTypeName(typealiasDecl.underlyingType))
+    let underlying = identityComponents(typealiasDecl.underlyingType)
     let underlyingIdentity = BindingIdentity(
-        base: underlyingSplit.base,
-        isOptional: underlyingSplit.isOptional,
+        qualifier: underlying.qualifier,
+        base: underlying.base,
+        isOptional: underlying.isOptional,
         key: dependency.keyIdentifier
     )
     guard resolvedBindings[underlyingIdentity] != nil else { return nil }
