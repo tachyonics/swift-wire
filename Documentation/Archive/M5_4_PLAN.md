@@ -1,12 +1,19 @@
-# M5.4 build plan — request-scoped controllers
+# M5.4 build plan — request-scoped controllers — archived
 
-The build breakdown for iteration **M5.4** of [M5_PLAN.md](M5_PLAN.md) (the overall WireMVC plan
+> **Archived.** M5.4 is complete — every sub-step below shipped: the request-scope proxy +
+> scope-entry thunk (M5.4.1–M5.4.3), the sessions example across three runtimes, generic
+> `@Scoped(seed:) @Controller` (M5.4G), route error handling (M5.4E → [Notes/RouteErrorHandling.md](../Notes/RouteErrorHandling.md)),
+> concrete `@RawRoute` roles (M5.4R), request-scope teardown (M5.4.5), and per-root reachability
+> (M5.4.6). Kept as the historical build record. Active WireMVC work is M5.5
+> ([../M5_5_PLAN.md](../M5_5_PLAN.md)) and M5.6, tracked in [../M5_PLAN.md](../M5_PLAN.md).
+
+The build breakdown for iteration **M5.4** of [M5_PLAN.md](../M5_PLAN.md) (the overall WireMVC plan
 carries the *why* and the A-inject decision; this file carries the *how*). Same discipline as the
 milestone plans: each sub-step runs end-to-end and has a validation gate; highest-risk seam first.
 Grounded in the shipped shapes (verified in the `swift-wire` and `wire-mvc` trees, cited below) —
-not a predicted model. Related design records: [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md)
-(M5.4E, interleaved), [Notes/WireMVCMiddleware.md](Notes/WireMVCMiddleware.md) (the fold the scope
-entry composes with), [Notes/ScopeAndKeyModelEvolution.md](Notes/ScopeAndKeyModelEvolution.md)
+not a predicted model. Related design records: [Notes/RouteErrorHandling.md](../Notes/RouteErrorHandling.md)
+(M5.4E, interleaved), [Notes/WireMVCMiddleware.md](../Notes/WireMVCMiddleware.md) (the fold the scope
+entry composes with), [Notes/ScopeAndKeyModelEvolution.md](../Notes/ScopeAndKeyModelEvolution.md)
 (seeded scopes).
 
 ## The headline
@@ -15,7 +22,7 @@ A `@Scoped(seed: RequestSeed.self) @Controller` becomes an **app-scoped route-co
 whose per-route register closure, *per request*, builds the seed, enters a fresh request scope,
 constructs the controller from it, and dispatches. The controller consumes its request-scoped
 values by **A-inject** (ordinary `@Inject` off the request scope), never by projecting off the
-middleware box — see [M5_PLAN.md](M5_PLAN.md), M5.4. The scope-entry handle reaches the register
+middleware box — see [M5_PLAN.md](../M5_PLAN.md), M5.4. The scope-entry handle reaches the register
 closure as an **injected thunk**, not a weak back-reference (the shipped graph is a value type — see
 *The central mechanism decision*). App-scoped (`@Singleton`) and request-scoped (`@Scoped`)
 controllers coexist unchanged in one app: both are boxed as `any RouteContributor`; the only
@@ -157,11 +164,11 @@ on demand when the subject is narrower than `proxyScope`."
 ## Sub-steps
 
 **Status:** the spine (**M5.4.1–M5.4.4**), **M5.4G** (generic/opaque-backed scoped controllers), and
-**M5.4E** (route error handling — [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md), §M5.4E in
-[M5_PLAN.md](M5_PLAN.md)) are all **shipped**: a `@Scoped(seed: HTTPRequest.self) @Controller` — including
+**M5.4E** (route error handling — [Notes/RouteErrorHandling.md](../Notes/RouteErrorHandling.md), §M5.4E in
+[M5_PLAN.md](../M5_PLAN.md)) are all **shipped**: a `@Scoped(seed: HTTPRequest.self) @Controller` — including
 the idiomatic generic opaque-backed shape — serves cross-runtime, and a route/handler throw maps at the
 terminal. **Remaining: M5.4.5** (request-scope teardown — conditional) and **M5.4.6** (per-root
-reachability — refinement), both below. Overall sequence in [M5_PLAN.md](M5_PLAN.md): **M5.4 spine ✅ →
+reachability — refinement), both below. Overall sequence in [M5_PLAN.md](../M5_PLAN.md): **M5.4 spine ✅ →
 M5.4G ✅ → M5.4E ✅ → M5.4R → M5.4.5 / M5.4.6 → M5.5 → M5.6.** The shipped sub-steps are collapsed to
 one-liners below; the *central mechanism decision* and *proxyScope hold/bridge* sections above are the
 durable rationale for why the shipped code is shaped as it is.
@@ -256,7 +263,10 @@ request never bumps `OtherResource`'s teardown probe, and a `/other` request nev
 
 **Not done:** the standalone whole-scope façade `Wire.bootstrap<S>Scope` / `_<S>WireScope` struct stays
 whole-scope — it isn't the per-request path (the generated witness never calls it) and isn't per-root by
-nature (a scope struct has no single root). It's vestigial for the request path; retiring it is separate.
+nature (a scope struct has no single root). It's still swift-wire's own testable seed-scope constructor
+(`BootstrapTests` validates shared-singletons / per-seed-identity / ordering through it), so it's not dead
+globally — but in a *consumer* it's emitted-but-`internal` dead code. Retiring it from consumer emission is
+tracked as **ROADMAP M6d** (needs a thunk-based construction harness for `BootstrapTests` first).
 
 ## Key sub-decisions (pinned — all resolved as shipped)
 
@@ -279,7 +289,7 @@ nature (a scope struct has no single root). It's vestigial for the request path;
 - **M5.4E interleave (load-bearing) — resolved.** A failed verify throws at scope entry; that entry
   now sits inside the terminal's `catch` (M5.4.3 emits it there), so it maps rather than reaching a
   router 500 — the concrete seam where M5.4 and M5.4E touch. See
-  [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
+  [Notes/RouteErrorHandling.md](../Notes/RouteErrorHandling.md).
 - **Coexistence** — confirm a graph with both a `@Singleton` and a `@Scoped` controller collates and
   serves; the uniform `any RouteContributor` boxing should make this fall out, but it is the M5.4.3
   gate's second half.
