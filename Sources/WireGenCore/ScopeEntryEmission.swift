@@ -69,7 +69,19 @@ private func scopeEntryThunkLines(
     // pre-M5.4.6 behaviour.
     let reachable = reachableBindings(from: subjectLocal, in: scope)
 
+    // Rule 3 — existential aliases for the promotions this thunk actually constructs, so the pruned
+    // set never binds an alias for a controller it doesn't serve. A promoted *borrowed* producer is
+    // captured from the bootstrap body under its own name but its alias may not be (the bootstrap
+    // binds one only if it promotes too), so that alias is bound up front here off the captured local.
+    let aliases = scopeExistentialAliasPlan(
+        scope,
+        constructedHere: scope.topologicalOrder.filter { reachable?.contains($0.identity) ?? true }
+    )
+
     var lines: [String] = ["    let \(thunkLocal) = { @Sendable (\(seedLocal): \(seed)) async throws in"]
+    for alias in aliases.upFront {
+        lines.append(contentsOf: existentialAliasLines(alias, boundTo: alias.producerLocalName, indent: "        "))
+    }
     for binding in scope.topologicalOrder {
         if let reachable, !reachable.contains(binding.identity) { continue }
         let name = propertyName(for: binding)
@@ -79,6 +91,13 @@ private func scopeEntryThunkLines(
         let construction = constructionExpression(for: binding)
         if name == construction { continue }
         lines.append("        let \(name) = \(construction)")
+        lines.append(
+            contentsOf: existentialAliasLines(
+                aliases.afterConstruction[binding.identity],
+                boundTo: name,
+                indent: "        "
+            )
+        )
     }
     // The scope's teardown closure — the reverse-order `@Teardown` walk for the scope's own bindings (not
     // the borrowed singletons, which are torn down at app scope), pruned to the reachable set so a request

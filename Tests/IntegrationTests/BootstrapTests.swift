@@ -21,6 +21,19 @@ struct BootstrapTests {
         #expect(graph.someGreeting.greet() == "Hello, world!")
     }
 
+    @Test func scopedExistentialConsumerBorrowsThePromotedSingleton() async throws {
+        // Rule 3 across the scope boundary — the scope-bound consumer asked for
+        // `any Greeting` and the producer is an app-scope `some Greeting` it
+        // borrows, so the alias binds off the borrow's access path rather than a
+        // construction line in the scope body.
+        let graph = try await Wire.bootstrap()
+        let scope = try await Wire.bootstrapTestRequestSeedScope(
+            seed: TestRequestSeed(id: "req-9"),
+            wireGraph: graph
+        )
+        #expect(scope.scopedGreetingReporter.report() == "[req-9] Hello, world!")
+    }
+
     @Test func storedPropertiesAreNamedByLowerCamelCasedTypeName() async throws {
         // Confirms WireGen's naming convention round-trips: the
         // accessor on the generated struct is lowerCamelCased(typeName).

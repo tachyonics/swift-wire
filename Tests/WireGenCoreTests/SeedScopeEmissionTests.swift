@@ -200,6 +200,75 @@ struct SeedScopeEmissionTests {
         #expect(!output.contains("let todoRepository = _wireGraph.todoRepository"))
     }
 
+    /// Rule 3 inside the per-request thunk. The controller asks for `any Repository`
+    /// and the producer is a borrowed `some Repository` singleton — so it has no
+    /// construction line in the thunk (it's captured from the bootstrap under its own
+    /// name). The alias is bound up front off that captured local.
+    @Test func scopeEntryThunkBindsAnAliasForAPromotedBorrowedSingleton() {
+        let subject = DiscoveredScopeBoundType(
+            typeName: "SessionController",
+            typeKind: "struct",
+            genericParameterNames: [],
+            dependencies: [
+                DependencyParameter(
+                    name: "repository",
+                    type: "any Repository",
+                    kind: .injectInitParameter,
+                    location: mockLocation("S.swift")
+                )
+            ],
+            location: mockLocation("S.swift"),
+            scopeKey: ScopeKey(seed: "RequestSeed"),
+            originModule: testModule
+        )
+        let proxy = contributorProxyBinding(
+            for: subject,
+            key: "WireMVCKeys.routeContributors",
+            prefix: "_WireRouteContributor_",
+            proxyScope: .singleton
+        )
+        let borrowedProducer = syntheticProvider(
+            boundType: "some Repository",
+            accessPath: "_wireGraph.someRepository"
+        )
+        let controller = scopedSingleton(
+            "SessionController",
+            seed: "RequestSeed",
+            dependencies: [(name: "repository", type: "any Repository")]
+        )
+        let scope = SeedScopeEmission(
+            seedTypeExpression: "RequestSeed",
+            identifierSuffix: "RequestSeed",
+            parentGraphType: "_WireGraph",
+            topologicalOrder: [
+                syntheticProvider(boundType: "RequestSeed", accessPath: "requestSeed"),
+                borrowedProducer,
+                controller,
+            ],
+            borrowedBindingPropertyNames: ["someRepository"],
+            existentialPromotions: [
+                ExistentialPromotion(
+                    consumer: controller.identity,
+                    producer: borrowedProducer.identity,
+                    existentialType: "any Repository"
+                )
+            ]
+        )
+        let output = renderWireGraph(
+            imports: [],
+            topologicalOrder: [
+                syntheticProvider(boundType: "some Repository", accessPath: "makeRepository()"),
+                .scopeBound(proxy),
+            ],
+            seedScopeOrders: [scope]
+        )
+        // Bound inside the thunk off the captured singleton local, not re-constructed...
+        #expect(output.contains("        let anyRepository: any Repository = someRepository"))
+        #expect(!output.contains("let someRepository = _wireGraph.someRepository"))
+        // ...and read by the controller under the name its `any Repository` dependency renders.
+        #expect(output.contains("let sessionController = SessionController(repository: anyRepository)"))
+    }
+
     @Test func scopeEntryThunkTearsDownScopedBindings() {
         // A `@Scoped` resource carrying a `@Teardown func close() async` — the scope-entry thunk's teardown
         // closure calls it against the construction local (M5.4.5, consistent with the graph's teardown).

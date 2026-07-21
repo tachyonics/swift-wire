@@ -321,6 +321,12 @@ package struct ExistentialPromotion: Hashable, Sendable {
     package var aliasName: String {
         identifierName(forType: producer.qualified(.any).nonOptionalDisplay, key: producer.key)
     }
+
+    /// The producer's own local name — the alias's right-hand side wherever the
+    /// producer is in scope under it.
+    package var producerLocalName: String {
+        identifierName(forType: producer.displayType, key: producer.key)
+    }
 }
 
 extension BindingIdentity {

@@ -241,6 +241,20 @@ Three rules, in precedence order. None require conformance search.
    construct a promoted consumer — an alias nothing reads would be an unused
    local, which Swift warns on.
 
+   **Every body binds its own.** The bootstrap, the whole-scope seed-scope
+   façade, and the per-request scope-entry thunk each plan aliases
+   independently, because an alias bound in one isn't in scope for the others
+   (and the thunk's pruned per-root subset may not even include the consumer).
+   Where the promoted producer is a **borrowed singleton** it has no
+   construction line in the scope body at all — borrows are inlined at argument
+   sites — so its alias binds *up front*, off the borrow's access path:
+
+   ```swift
+   private func _wireBootstrapTestRequestSeedScope(seed: …, wireGraph _wireGraph: …) … {
+       let anyGreeting: any Greeting = _wireGraph.someGreeting
+       let scopedReporter = ScopedGreetingReporter(seed: seed, greeting: anyGreeting)
+   ```
+
    This is the second member of a **closed set** of qualifier promotions,
    alongside `T` satisfies `T?` (see
    [`OptionalMatchingAndCycles.md`](OptionalMatchingAndCycles.md)).
