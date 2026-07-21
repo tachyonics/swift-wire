@@ -192,7 +192,10 @@ identities, where the wrapper boilerplate starts to grate.
 
 ## Resolving consumers
 
-Three rules, in precedence order. None require conformance search.
+Three rules, in precedence order. None require conformance search. **Rules 1 and
+2 are shipped; rule 3 is designed but not implemented** — `matchProducer` today
+promotes only optionality, so a `some P` binding does not yet satisfy an `any P`
+consumer.
 
 1. **Exact token.** `some P` is one graph slot: two producers declaring the
    same `some P` identity collide as a duplicate, and a dependency already
@@ -213,7 +216,8 @@ Three rules, in precedence order. None require conformance search.
    Swift compiler specialises the generic — Wire never names the hidden
    type.
 
-3. **Qualifier promotion: `some P` satisfies `any P`.** A `some P` binding
+3. **Qualifier promotion: `some P` satisfies `any P`** *(designed, not
+   implemented)*. A `some P` binding
    may feed an `any P` consumer (the concrete-underlying value boxes into
    the existential). One-directional: `any P` can never feed `some P` (an
    existential has erased the single underlying type `some P` requires).

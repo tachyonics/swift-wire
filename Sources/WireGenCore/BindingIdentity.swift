@@ -11,12 +11,70 @@
 /// users writing the same type with different formatting would
 /// previously fail to resolve against each other.
 ///
+/// Protocol-composition members are additionally sorted, so
+/// `DBTable & Sendable` and `Sendable & DBTable` name the same slot. The
+/// two spellings are one type to Swift, so a producer written in one
+/// order and a consumer constraint written in the other must resolve
+/// against each other; without sorting they are distinct identities and
+/// the consumer reports a missing binding naming a type the user reads
+/// as the one they bound. A leading `some`/`any` stays in front of the
+/// sorted members.
+///
 /// Codegen continues to use the binding's original `boundType` text
 /// (whatever the user wrote) — only the *identity* used for graph
 /// lookup is canonicalised. The generated file keeps idiomatic
 /// formatting; only the resolution layer normalises.
 package func canonicalTypeName(_ raw: String) -> String {
-    raw.filter { !$0.isWhitespace }
+    let (qualifier, body) = splitLeadingTypeQualifier(raw)
+    let members = topLevelCompositionMembers(body)
+    guard members.count > 1 else { return qualifier + whitespaceStripped(body) }
+    return qualifier + members.map(whitespaceStripped).sorted().joined(separator: "&")
+}
+
+private func whitespaceStripped(_ text: Substring) -> String {
+    String(text.filter { !$0.isWhitespace })
+}
+
+/// Split a leading `some`/`any` qualifier off a type expression:
+/// `"some P & Q"` → `("some", " P & Q")`. The qualifier must be followed by
+/// whitespace, so a type named `someThing` keeps its whole name. Anything else
+/// yields an empty qualifier and the leading-whitespace-trimmed expression.
+private func splitLeadingTypeQualifier(_ raw: String) -> (qualifier: String, body: Substring) {
+    let body = raw.drop { $0.isWhitespace }
+    for qualifier in ["some", "any"] where body.hasPrefix(qualifier) {
+        let rest = body.dropFirst(qualifier.count)
+        if let next = rest.first, next.isWhitespace { return (qualifier, rest) }
+    }
+    return ("", body)
+}
+
+/// Split a type expression at its depth-0 `&`s, keeping nested compositions
+/// (`Box<A & B>`) and parenthesised ones (`(A & B)?`) intact as one member. The
+/// `>` of a function arrow doesn't close a generic argument list, so it doesn't
+/// decrement the depth. Malformed input yields whatever was accumulated — the
+/// build plugin trusts its inputs to be parsed Swift type expressions.
+private func topLevelCompositionMembers(_ body: Substring) -> [Substring] {
+    var members: [Substring] = []
+    var depth = 0
+    var memberStart = body.startIndex
+    var previous: Character?
+    for index in body.indices {
+        let character = body[index]
+        switch character {
+        case "<", "(", "[":
+            depth += 1
+        case ">" where previous != "-", ")", "]":
+            depth = max(0, depth - 1)
+        case "&" where depth == 0:
+            members.append(body[memberStart..<index])
+            memberStart = body.index(after: index)
+        default:
+            break
+        }
+        previous = character
+    }
+    members.append(body[memberStart...])
+    return members
 }
 
 /// Split a type expression into its maximal identifier runs (`[A-Za-z0-9_]+`), in written order:
