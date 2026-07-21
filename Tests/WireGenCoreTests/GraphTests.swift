@@ -720,6 +720,79 @@ struct GraphTests {
         #expect(errors.duplicateBindings[0].boundType == "Logger")
     }
 
+    @Test func someAndAnyProducersForOneProtocolAreDuplicates() throws {
+        // Rule 3's corollary — `some P` already satisfies every `any P` consumer,
+        // so binding both is two instances of one dependency, and which one a
+        // consumer got would depend on how it spelled the type.
+        let result = buildDependencyGraph(from: [
+            providerProperty("opaqueLogger", boundType: "some Logger"),
+            providerProperty("boxedLogger", boundType: "any Logger"),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.duplicateBindings.count == 1)
+        #expect(errors.duplicateBindings[0].boundType == "anyLogger")
+        #expect(errors.duplicateBindings[0].bindings.count == 2)
+    }
+
+    @Test func keysSeparateSomeAndAnyProducers() throws {
+        // Producer-side disambiguation, same as any other duplicate.
+        let result = buildDependencyGraph(from: [
+            providerProperty("opaqueLogger", boundType: "some Logger", key: "Log.opaque"),
+            providerProperty("boxedLogger", boundType: "any Logger", key: "Log.boxed"),
+        ])
+        #expect(result.outcome.validationErrors == nil)
+    }
+
+    @Test func aConcreteBindingIsNotADuplicateOfTheExistential() throws {
+        // `.none` is left out of the normalisation: Wire can't tell a bare `P`
+        // protocol name from a concrete type syntactically, so it can't claim
+        // these are one slot.
+        let result = buildDependencyGraph(from: [
+            providerProperty("boxedLogger", boundType: "any Logger"),
+            singleton("Logger"),
+        ])
+        #expect(result.outcome.validationErrors == nil)
+    }
+
+    // MARK: - Qualifier promotion (rule 3)
+
+    @Test func anyConsumerResolvesToTheSomeProducer() throws {
+        let result = buildDependencyGraph(from: [
+            providerProperty("opaqueLogger", boundType: "some Logger"),
+            singleton("Service", dependencies: [(name: "logger", type: "any Logger")]),
+        ])
+        #expect(result.outcome.validationErrors == nil)
+        let order = try #require(result.outcome.topologicalOrder)
+        // The producer sorts before its consumer, so the alias has something to bind.
+        #expect(order.map(\.boundType) == ["some Logger", "Service"])
+        let promotion = try #require(result.existentialPromotions.first)
+        #expect(result.existentialPromotions.count == 1)
+        #expect(promotion.producer.displayType == "someLogger")
+        #expect(promotion.existentialType == "any Logger")
+        #expect(promotion.aliasName == "anyLogger")
+    }
+
+    @Test func aSomeConsumerIsNotSatisfiedByAnAnyProducer() throws {
+        // The reverse never promotes — an existential has erased the single
+        // underlying type. Spelled here as a `some P` dependency with only the
+        // boxed producer bound.
+        let result = buildDependencyGraph(from: [
+            providerProperty("boxedLogger", boundType: "any Logger"),
+            singleton("Service", dependencies: [(name: "logger", type: "some Logger")]),
+        ])
+        let errors = try #require(result.outcome.validationErrors)
+        #expect(errors.missingBindings.count == 1)
+    }
+
+    @Test func promotionIsNotRecordedWithoutAnExistentialConsumer() throws {
+        let result = buildDependencyGraph(from: [
+            providerProperty("opaqueLogger", boundType: "some Logger"),
+            singleton("Service", dependencies: [(name: "logger", type: "some Logger")]),
+        ])
+        #expect(result.outcome.validationErrors == nil)
+        #expect(result.existentialPromotions.isEmpty)
+    }
+
     @Test func duplicateBindingsShortCircuitOtherValidation() throws {
         // When duplicates exist, the graph is fundamentally ambiguous
         // and the rest of validation isn't trustworthy. Cycles and

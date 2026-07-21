@@ -48,13 +48,12 @@ struct Bootstrap {
 
     func createRoutableBuilder<Server: HTTPServer>(   // generic over the server it is handed
         for server: borrowing Server
-    ) -> some RoutableHTTPServerBuilder<Server.RequestContext, Server.Reader, Server.ResponseSender>
-        & HTTPServerRequestHandler                    // the router must also be servable
+    ) -> some ServableRoutableHTTPServerBuilder<Server.RequestContext, Server.Reader, Server.ResponseSender>
     where
         Server.RequestContext: ~Copyable, Server.Reader: ~Copyable,
         Server.ResponseSender: ~Copyable, Server.ResponseSender.Writer: ~Copyable
     {
-        WireRouter(for: server)
+        TrieRouteBuilder(for: server)                 // WireMVCRouter — build → freeze → serve
     }
 
     // Optional pre-router seam (default identity). Home for routing-affecting logic —
@@ -67,13 +66,25 @@ struct Bootstrap {
 }
 ```
 
-Refinements over the initial sketch:
+Refinements (some **corrected during Phase 1 implementation**):
 
-- **`createServer` is not generic over the associated types.** A concrete `NIOHTTPServer`
-  *defines* its `RequestContext`/`Reader`/`ResponseSender`; the caller doesn't choose them.
-  It returns `some HTTPServer` and the types **flow from** it. `createRoutableBuilder(for:)`
-  is generic over the server it receives — mirroring `WireRouter(for:)`'s inference. The
-  generated `main()` threads `Server` through both.
+- **`createServer` returns the *concrete* server, not `some HTTPServer`.** The proposal's
+  `Reader`/`ResponseSender` are `~Copyable`, and a bare `some HTTPServer` opaque return can't
+  express that — it forces the associated types `Copyable` (a real compile error). So the factory
+  returns e.g. `NIOHTTPServer`; the generated `main()` binds to whatever concrete type it returns.
+- **`createRoutableBuilder(for:)` returns `some ServableRoutableHTTPServerBuilder<…>`** — the
+  native-path refinement of the core builder (adds `finalize() -> some HTTPServerRequestHandler`),
+  restating the `~Copyable` requirements on `Server`'s associated types (they don't propagate — same
+  as `WireMVC.apply`). The **build → freeze → serve** lifecycle: `WireMVC.apply` registers routes onto
+  the mutable builder; the generated `main()` `finalize()`s it into the immutable handler the server
+  serves. `finalize()` is on the *refinement*, not the router-agnostic core, because the
+  `ServerTransport` adapter's builder conforms to the core but doesn't serve via
+  `HTTPServerRequestHandler`. `WireMVCRouter`'s `TrieRouteBuilder` (a segment trie, ported from
+  `wire-mvc-examples`) is what the native path returns; it's generic over the server it receives.
+- **`@Singleton` is required, `@main` is generated.** No swift-wire capability makes a type a
+  binding on its own, so `@WireMVCBootstrap` rides `@Singleton` (as `@Singleton @Controller` does);
+  the `@main` entry (`_WireMVCBootstrapEntry`) is emitted by `WireMVCRouteGen`, reading the binding
+  as `graph.<lowerCamelType>` and serving via the `WireMVC.serve` helper.
 - **`Bootstrap` is a graph binding.** `@WireMVCBootstrap` makes it graph-constructed (its
   `@Inject`s resolve). No cycle: it depends on its own deps, not on the collated route
   contributors.
@@ -165,11 +176,13 @@ but the adapter path doesn't use `@WireMVCBootstrap`, so its fallback stays fram
 6. Register the synthetic fallback route via `builder.registerNotFound(...)`.
 7. If `bootstrap.mountIntrospectionAt()` is non-nil, mount introspection there, guarded by
    that method's `@Middleware`.
-8. Wrap the router with the pre-router seam: `let handler = bootstrap.wrapHandler(builder)`
+8. `let handler = builder.finalize()` — freeze the builder into the immutable servable handler
+   (build → freeze → serve).
+9. Wrap the handler with the pre-router seam: `let served = bootstrap.wrapHandler(handler)`
    (default identity — no-op unless overridden for routing-affecting logic).
-9. Run `services` (collated `@BackgroundService`s) **and** `server.serve(handler: handler)`
-   together under ServiceLifecycle — the orchestration the current hand-written `main.swift`
-   spells out.
+10. Run `services` (collated `@BackgroundService`s) **and** `server.serve(handler: served)`
+    together under ServiceLifecycle — the orchestration the current hand-written `main.swift`
+    spells out.
 
 ## Scope boundary
 
@@ -186,13 +199,23 @@ but the adapter path doesn't use `@WireMVCBootstrap`, so its fallback stays fram
 Phased so each step ships and is validated independently; the example repo is the gate
 ([M5_PLAN.md § The example repo as the progressive gate](M5_PLAN.md)).
 
-- **Phase 1 — `@WireMVCBootstrap` surface + generated `@main`, no global tiers.** The macro
-  makes `Bootstrap` a graph binding; the plugin emits `main()` doing steps 1–5, 8–9 above
-  (server/builder factories, apply, `wrapHandler` identity seam, ServiceLifecycle serve;
-  fallback registration + introspection land in later phases). Global `@Middleware`/
-  `@ErrorResponse` on the type are parsed but not yet folded. *Validation:*
-  `WireMVCExample`'s hand-written `main.swift` collapses to the macro and serves identically
-  (same requests green before/after).
+- **Phase 1 — `@WireMVCBootstrap` surface + generated `@main`, no global tiers. — ✅ DONE.**
+  `@WireMVCBootstrap` is a peer marker (reuses `RouteMarkerMacro`); `WireMVCCodegen`'s
+  `BootstrapGeneration` emits a top-level `@main struct _WireMVCBootstrapEntry` into `_WireRoutes.swift`
+  that does steps 1–5 + `builder.finalize()` + serve via the new non-generic-at-the-callsite
+  `WireMVC.serve(on:handler:services:)` helper (fallback registration + introspection + `wrapHandler`
+  are later phases; global `@Middleware`/`@ErrorResponse` not yet folded). Ships alongside the
+  **`WireMVCRouter`** target — the `ServableRoutableHTTPServerBuilder` refinement + a segment-trie
+  router (`TrieRouteBuilder`/`FrozenTrieRouter`, ported from `wire-mvc-examples`; non-generic
+  `RouteTrie` core, 11 tests) — so the native path has a router to return. A new thin
+  `WireMVCBootstrapExample` target (`@Singleton @WireMVCBootstrap` + one controller) proves it;
+  `WireMVCExample` stays the full-matrix self-checker (now on the same trie router). *Validation:* the package builds; the example serves end-to-end
+  (`GET /hello/Ada` → `200 {"message":"Hello, Ada!"}`, unmatched → `404`); 3 golden tests in
+  `WireMVCCodegenTests` pin the emitted entry (32 tests green). **Notes:** `swift build --target X`
+  doesn't run the build-tool plugin — a full `swift build` (or building the example) is required;
+  the `WireMVC.serve` helper runs serving in the task-group *body* (non-Sendable `server`/`builder`
+  used directly, never captured into a `@Sendable` child task) with only the `Sendable` services in a
+  child task — the shape that satisfies region isolation under `NonisolatedNonsendingByDefault`.
 - **Phase 2 — terminal owns the 500.** Change the terminal's outermost tier from rethrow to
   a built-in 500 write ([RouteCodegen](../../wire-mvc/Sources/WireMVCCodegen/RouteCodegen.swift)).
   Small, independent, benefits all native routes. *Validation:* an unmapped handler throw

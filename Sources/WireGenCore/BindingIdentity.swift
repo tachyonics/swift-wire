@@ -143,30 +143,70 @@ func optionalityStripped(_ canonical: String) -> (base: String, isOptional: Bool
     return (canonical, false)
 }
 
-/// Compound identity for a binding — `(base, isOptional, keyIdentifier?)`.
-/// `base` is the canonical inner type with at most one top-level optional
-/// layer removed; `isOptional` records whether that layer was present
-/// (`T?` or `T!`). Splitting optionality out of the type string — rather
-/// than folding `?` into it — lets the matcher promote a `T` producer to
-/// satisfy a `T?` consumer (and forbid the reverse) as a structural rule.
-/// See `OptionalMatchingAndCycles.md`.
+/// A type's promotable qualifier — the leading `some`/`any`, or neither.
+/// Split out of the identity string for the same reason `isOptional` is: the
+/// matcher promotes across it structurally (a `some P` producer satisfies an
+/// `any P` consumer, never the reverse), and deciding that on the raw text
+/// rather than on a whitespace-stripped prefix keeps a type named `anyThing`
+/// from being read as `any Thing`. See `OpaqueTypesSupport.md`, rule 3.
+package enum TypeQualifier: String, Hashable, Comparable, Sendable {
+    case none = ""
+    case some = "some"
+    case any = "any"
+
+    package static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+/// Drop a single top-level optional layer from a type *as written*, preserving
+/// the user's spacing: `any Logger?` → `any Logger`. Used for the existential
+/// alias's annotation, where the spelling is emitted rather than compared.
+func optionalLayerDropped(_ raw: String) -> String {
+    if raw.hasSuffix("?") || raw.hasSuffix("!") { return String(raw.dropLast()) }
+    return raw
+}
+
+/// Compound identity for a binding — `(qualifier, base, isOptional, keyIdentifier?)`.
+/// `base` is the canonical inner type with the leading `some`/`any` and at most
+/// one top-level optional layer removed; `qualifier` and `isOptional` record what
+/// was removed. Splitting both out of the type string — rather than folding them
+/// into it — lets the matcher promote a `T` producer to satisfy a `T?` consumer,
+/// and a `some P` producer to satisfy an `any P` consumer (forbidding both
+/// reverses), as structural rules. See `OptionalMatchingAndCycles.md` and
+/// `OpaqueTypesSupport.md`.
 ///
-/// Two bindings with the same `(base, isOptional)` but different `key`s
-/// coexist; same `base`, same `isOptional`, same `key` are duplicates.
-/// Unkeyed deps (`key == nil`) match only unkeyed bindings; keyed deps
-/// match only same-key bindings — keys partition the binding space
-/// (Dagger semantics).
+/// Two bindings with the same `(qualifier, base, isOptional)` but different
+/// `key`s coexist; all four the same are duplicates. Unkeyed deps
+/// (`key == nil`) match only unkeyed bindings; keyed deps match only same-key
+/// bindings — keys partition the binding space (Dagger semantics).
 package struct BindingIdentity: Hashable, Comparable, Sendable {
+    package let qualifier: TypeQualifier
     package let base: String
     package let isOptional: Bool
     package let key: String?
 
-    /// The type as written for diagnostics — `base` with the optional
-    /// layer re-applied (`T` or `T?`). IUO (`T!`) renders as `T?`.
-    package var displayType: String { isOptional ? base + "?" : base }
+    package init(qualifier: TypeQualifier = .none, base: String, isOptional: Bool, key: String?) {
+        self.qualifier = qualifier
+        self.base = base
+        self.isOptional = isOptional
+        self.key = key
+    }
+
+    /// The type as written for diagnostics and for deriving generated
+    /// identifiers — the qualifier and optional layer re-applied to `base`,
+    /// in the same whitespace-free spelling canonicalisation produces
+    /// (`someP`, `anyP?`). IUO (`T!`) renders as `T?`.
+    package var displayType: String { qualifier.rawValue + base + (isOptional ? "?" : "") }
+
+    /// The same identity read through a different qualifier — how the matcher
+    /// spells a promotion target. `any P` asks for `.some` and finds the opaque
+    /// binding that satisfies it.
+    func qualified(_ qualifier: TypeQualifier) -> Self {
+        Self(qualifier: qualifier, base: base, isOptional: isOptional, key: key)
+    }
 
     package static func < (lhs: Self, rhs: Self) -> Bool {
         if lhs.base != rhs.base { return lhs.base < rhs.base }
+        if lhs.qualifier != rhs.qualifier { return lhs.qualifier < rhs.qualifier }
         // Non-optional sorts before its optional sibling.
         if lhs.isOptional != rhs.isOptional { return !lhs.isOptional }
         // Unkeyed sorts before any keyed identity; among keyed, sort
@@ -184,17 +224,41 @@ package struct BindingIdentity: Hashable, Comparable, Sendable {
     }
 }
 
+/// Split a raw type expression into the components the matcher promotes over:
+/// the leading `some`/`any`, the canonical remainder, and whether a top-level
+/// optional layer was present. `any P & Q` → `(.any, "P&Q", false)`;
+/// `some P?` → `(.some, "P", true)`; `Foo<some P>` → `(.none, "Foo<someP>", false)`,
+/// since only a *leading* qualifier is split — a nested one stays part of the
+/// structural base, which is what a lift node's identity is built from.
+func identityComponents(
+    _ raw: String
+) -> (qualifier: TypeQualifier, base: String, isOptional: Bool) {
+    let (qualifier, body) = splitLeadingTypeQualifier(raw)
+    let split = optionalityStripped(canonicalTypeName(String(body)))
+    return (TypeQualifier(rawValue: qualifier) ?? .none, split.base, split.isOptional)
+}
+
 extension DiscoveredBinding {
     package var identity: BindingIdentity {
-        let split = optionalityStripped(canonicalTypeName(boundType))
-        return BindingIdentity(base: split.base, isOptional: split.isOptional, key: keyIdentifier)
+        let components = identityComponents(boundType)
+        return BindingIdentity(
+            qualifier: components.qualifier,
+            base: components.base,
+            isOptional: components.isOptional,
+            key: keyIdentifier
+        )
     }
 }
 
 extension DependencyParameter {
     var identity: BindingIdentity {
-        let split = optionalityStripped(canonicalTypeName(type))
-        return BindingIdentity(base: split.base, isOptional: split.isOptional, key: keyIdentifier)
+        let components = identityComponents(type)
+        return BindingIdentity(
+            qualifier: components.qualifier,
+            base: components.base,
+            isOptional: components.isOptional,
+            key: keyIdentifier
+        )
     }
 }
 
@@ -204,7 +268,7 @@ extension DependencyParameter {
 /// exact `T?` producer or, failing that, a promoted `T` producer; a `T`
 /// dependency is satisfied only by an exact `T` producer — a `T?`
 /// producer can never satisfy a non-optional consumer.
-enum DependencyMatch {
+enum DependencyMatch: Equatable {
     /// Resolved to the producer with this identity. Under promotion this
     /// differs from the dependency's own identity: a `T?` dependency
     /// resolves to the `T` producer.
@@ -228,6 +292,49 @@ package enum OptionalMismatchHint: Sendable, Equatable {
     /// Wire never injects nil for an absent binding, so even an optional
     /// dependency needs an explicit producer.
     case optionalNeedsExplicitProducer
+}
+
+/// A `some P` producer reached by an `any P` consumer through rule 3's qualifier
+/// promotion. Recorded during resolution and surfaced to codegen, which emits one
+/// *existential alias* local per promoted producer — `let anyP: any P = someP` —
+/// so the value boxes once per scope body rather than once per consumption site,
+/// and so consumers find a local under the name `renderArguments` derives from
+/// their own `any P` dependency. Without the alias the two sides disagree:
+/// `some P` and `any P` sanitise to different identifiers (`someP` vs `anyP`),
+/// unlike `T` and `T?`, which is why optional promotion needs no such machinery.
+package struct ExistentialPromotion: Hashable, Sendable {
+    package let consumer: BindingIdentity
+    package let producer: BindingIdentity
+    /// The existential as the consumer wrote it, with any optional layer
+    /// dropped — the alias's type annotation. A non-optional alias also
+    /// satisfies an `any P?` consumer, so one alias serves both spellings.
+    package let existentialType: String
+
+    package init(consumer: BindingIdentity, producer: BindingIdentity, existentialType: String) {
+        self.consumer = consumer
+        self.producer = producer
+        self.existentialType = existentialType
+    }
+
+    /// The alias local's name — the same one a consumer's `any P` dependency
+    /// renders at its argument site.
+    package var aliasName: String {
+        identifierName(forType: producer.qualified(.any).nonOptionalDisplay, key: producer.key)
+    }
+}
+
+extension BindingIdentity {
+    /// `displayType` with the optional layer dropped — the spelling an alias
+    /// local is named and typed from.
+    var nonOptionalDisplay: String { qualifier.rawValue + base }
+
+    /// This identity with `some` folded into `any` — the slot two qualifier
+    /// variants of one protocol share. Two bindings landing on the same
+    /// normalised identity are duplicates; `.none` is left alone, since Wire
+    /// can't tell a bare `P` protocol name from a concrete type syntactically.
+    var qualifierNormalised: Self {
+        qualifier == .some ? qualified(.any) : self
+    }
 }
 
 /// Translate a dependency to the identity it resolves against, applying the
@@ -264,8 +371,13 @@ func bridgedDependencyIdentity(
 
     // Rule 2a — the dependency IS a bare generic parameter: resolve to its `some C` binding.
     if let constraint = binding.genericParameterConstraints[canonicalDependencyType] {
-        let split = optionalityStripped(canonicalTypeName("some \(constraint)"))
-        return BindingIdentity(base: split.base, isOptional: split.isOptional, key: dependency.keyIdentifier)
+        let components = identityComponents("some \(constraint)")
+        return BindingIdentity(
+            qualifier: components.qualifier,
+            base: components.base,
+            isOptional: components.isOptional,
+            key: dependency.keyIdentifier
+        )
     }
 
     // Rule 2b (transitive lift) — the dependency is a parameterised type whose generic arguments
@@ -287,23 +399,48 @@ func bridgedDependencyIdentity(
     return dependency.identity
 }
 
+/// The identities a dependency will accept, in precedence order — itself first,
+/// then each promotion the closed set allows. Both promotions flow one way only:
+/// a `T?` consumer may borrow a `T` producer, and an `any P` consumer may borrow
+/// a `some P` producer (the underlying value boxes into the existential at the
+/// consumption site). Neither reverse is ever offered — a `T?` producer can't
+/// satisfy `T`, and an `any P` producer has erased the single underlying type
+/// `some P` requires. When a dependency is both optional and existential all four
+/// combinations are tried, exact-most first.
+private func acceptableProducers(for dependency: BindingIdentity) -> [BindingIdentity] {
+    var candidates = [dependency]
+    if dependency.isOptional { candidates.append(dependency.nonOptional) }
+    if dependency.qualifier == .any {
+        candidates.append(dependency.qualified(.some))
+        if dependency.isOptional { candidates.append(dependency.qualified(.some).nonOptional) }
+    }
+    return candidates
+}
+
+extension BindingIdentity {
+    fileprivate var nonOptional: Self {
+        Self(qualifier: qualifier, base: base, isOptional: false, key: key)
+    }
+
+    fileprivate var optional: Self {
+        Self(qualifier: qualifier, base: base, isOptional: true, key: key)
+    }
+}
+
 func matchProducer(
     for dependency: BindingIdentity,
     in producers: [BindingIdentity: DiscoveredBinding]
 ) -> DependencyMatch {
-    if producers[dependency] != nil { return .resolved(dependency) }
-    // Promotion flows one way only: a `T?` consumer may borrow a `T`
-    // producer. A non-optional consumer never borrows a `T?` producer.
+    for candidate in acceptableProducers(for: dependency) where producers[candidate] != nil {
+        return .resolved(candidate)
+    }
     if dependency.isOptional {
-        let promoted = BindingIdentity(base: dependency.base, isOptional: false, key: dependency.key)
-        if producers[promoted] != nil { return .resolved(promoted) }
         // Optional dep, nothing matched: neither `T?` nor `T` is bound.
         return .missing(.optionalNeedsExplicitProducer)
     }
     // Non-optional dep: if only the optional form is bound, that's the
     // asymmetry — flag it so the diagnostic can say why and how to fix.
-    let optionalProducer = BindingIdentity(base: dependency.base, isOptional: true, key: dependency.key)
-    if producers[optionalProducer] != nil {
+    if producers[dependency.optional] != nil {
         return .missing(.optionalProducerCannotSatisfyNonOptional)
     }
     return .missing(nil)

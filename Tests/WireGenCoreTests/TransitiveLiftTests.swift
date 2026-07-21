@@ -77,7 +77,8 @@ struct TransitiveLiftTests {
     @Test func bridgesBareParameterToSomeConstraint() {
         let controller = binding(typeName: "TodosController", deps: [("repository", "Repository")])
         let identity = bridgedDependencyIdentity(dependency("repository", "Repository"), in: controller)
-        #expect(identity.base == "someTodoRepository")
+        #expect(identity.qualifier == .some)
+        #expect(identity.base == "TodoRepository")
     }
 
     @Test func bridgesParameterisedDependencyToWrappedLiftNodeIdentity() {
