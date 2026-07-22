@@ -51,6 +51,16 @@ public enum WireAdapterCapability {
     /// whether the argument is a factory key, a binding key, or a metatype.
     case injectsFromGraph
 
+    /// `@X` on a declaration tells WireGen **not** to apply its default handling to the listed peer
+    /// annotations sitting on that same declaration — the adapter's own codegen owns them instead. The
+    /// peers are named by attribute spelling (without the leading `@`). A composition-root marker
+    /// (WireMVC's `@WireMVCBootstrap`) carries `.suppressesPeers(["Middleware"])` so a *global* `@Middleware`
+    /// on the root is read by the adapter's route generator and folded from the graph, rather than injected
+    /// as a dependency of the root binding by the `.injectsFromGraph` pass. General: a marker reserves
+    /// certain co-located peers for its own downstream handling. Co-located-interaction precedent:
+    /// `.mapsFactoryRoles` joining a peer `@Factory`.
+    case suppressesPeers([String])
+
     /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the **role mapping** for the
     /// factory's assisted (non-`@Inject`-typed) generic parameters. `roles` is the adapter's ordered
     /// vocabulary of canonical slot names (e.g. `["RequestContext", "Reader", "ResponseSender"]`), read

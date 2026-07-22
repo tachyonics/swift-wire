@@ -665,6 +665,10 @@ private func applyPreGraphBindingPasses(
     bindingKeys: [DiscoveredBindingKey],
     consumerModule: String
 ) -> (factories: [SynthesizedFactory], proxyIdentities: Set<String>) {
+    // Drop peer use-sites a co-located `.suppressesPeers` marker reserves (a global `@Middleware` on a
+    // `@WireMVCBootstrap` root) before any input-edge pass sees them — so they are neither aliased,
+    // reattributed, injected, nor factory-synthesised; the adapter's own codegen owns them.
+    let aliasUseSites = applyPeerSuppression(annotations: adapterAnnotations, useSites: aliasUseSites)
     allBindings = applyAliasContributions(
         to: allBindings,
         aliases: adapterAnnotations,

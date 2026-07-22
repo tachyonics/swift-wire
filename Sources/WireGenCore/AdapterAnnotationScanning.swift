@@ -33,6 +33,10 @@ package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// `@Factory(key)` template) injects that factory; a `BindingKey<T>` injects that keyed binding;
     /// `T.self` injects the binding of type `T`.
     case injectsFromGraph
+    /// `@X` on a declaration tells WireGen to skip its default handling of the listed peer annotations on
+    /// that declaration — the adapter's own codegen owns them (WireMVC's `@WireMVCBootstrap` suppressing a
+    /// global `@Middleware` so the front layer reads it instead of the `.injectsFromGraph` pass injecting it).
+    case suppressesPeers(peers: [String])
     /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the role mapping for its assisted
     /// parameters; `roles` is the adapter's ordered vocabulary of canonical slot names (opaque to Wire).
     case mapsFactoryRoles(roles: [String])
@@ -126,6 +130,15 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
                 proxyTypePrefix: prefix,
                 proxyScope: .singleton
             )
+        }
+        if member.declName.baseName.text == "suppressesPeers",
+            let arrayArgument = call.arguments.first,
+            let array = arrayArgument.expression.as(ArrayExprSyntax.self)
+        {
+            let peers = array.elements.compactMap {
+                $0.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
+            }
+            return .suppressesPeers(peers: peers)
         }
         if member.declName.baseName.text == "mapsFactoryRoles",
             let rolesArgument = call.arguments.first(where: { $0.label?.text == "roles" }),
