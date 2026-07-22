@@ -35,7 +35,10 @@ struct GlobalInjectionFanOutTests {
     private func bootstrapAnnotation() -> DiscoveredAdapterAnnotation {
         DiscoveredAdapterAnnotation(
             annotationName: "WireMVCBootstrap",
-            capability: .injectsPeerFromGraphIntoAll(peer: "Middleware", collatingInto: "WireMVCKeys.routeContributors"),
+            capability: .injectsPeerFromGraphIntoAll(
+                peer: "Middleware",
+                collatingInto: "WireMVCKeys.routeContributors"
+            ),
             location: mockLocation("Adapter.swift"),
             originModule: testModule
         )
