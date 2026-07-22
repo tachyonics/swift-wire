@@ -678,7 +678,15 @@ private func applyPreGraphBindingPasses(
         useSites: aliasUseSites
     )
     allBindings = proxied.bindings
-    let useSites = proxied.useSites
+    // Fan out `.injectsPeerFromGraphIntoAll` directives (a global `@Middleware` on the composition root)
+    // across every proxy collating into their key, before the input-edge passes read the use-sites — so
+    // both the dependency and factory passes land the lifted edge on every route-contributor proxy.
+    let useSites = applyGlobalInjectionFanOut(
+        to: allBindings,
+        annotations: adapterAnnotations,
+        useSites: proxied.useSites,
+        proxyIdentities: proxied.proxyIdentities
+    )
     allBindings = applyAdapterDependencies(
         to: allBindings,
         annotations: adapterAnnotations,

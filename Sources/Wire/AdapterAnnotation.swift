@@ -51,6 +51,18 @@ public enum WireAdapterCapability {
     /// whether the argument is a factory key, a binding key, or a metatype.
     case injectsFromGraph
 
+    /// `@X` on a binding reinterprets its **co-located peer** annotation (named `peer`, e.g. WireMVC's
+    /// `@Middleware`): each peer use-site injects its argument from the graph onto **every proxy collating
+    /// into `collatingInto`**, instead of the peer's own `.injectsFromGraph` (which targets the annotated
+    /// declaration's own proxy). This is the one fan-out input edge — one directive spreads across a whole
+    /// multibinding's proxies — versus `.injectsFromGraph`'s point-to-point. `@WireMVCBootstrap` carries it
+    /// so a global `@Middleware` on the composition root folds onto every route-contributor proxy. The
+    /// argument's kind dispatches exactly as `.injectsFromGraph`: the rewrite re-emits peer-labelled
+    /// use-sites, so factory / keyed / by-type all follow for free. `collatingInto` is read syntactically
+    /// (like `.contributes(to:)`), never executed. Precedent for co-located annotations that combine:
+    /// `.mapsFactoryRoles` joins to a peer `@Factory` on the same type.
+    case injectsPeerFromGraphIntoAll(peer: String, collatingInto: Any)
+
     /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the **role mapping** for the
     /// factory's assisted (non-`@Inject`-typed) generic parameters. `roles` is the adapter's ordered
     /// vocabulary of canonical slot names (e.g. `["RequestContext", "Reader", "ResponseSender"]`), read

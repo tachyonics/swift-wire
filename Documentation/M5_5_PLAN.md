@@ -1,6 +1,7 @@
 # M5.5 — the WireMVC-native composition root (`@WireMVCBootstrap`)
 
-> **Status:** settled design, not yet implemented. Iteration **M5.5** in
+> **Status:** Phases 1–4 shipped; Phase 5 (global `@Middleware`) designed, not yet implemented.
+> Iteration **M5.5** in
 > [M5_PLAN.md](M5_PLAN.md); this file is the detailed plan (same relation M5_4_PLAN.md has to
 > M5.4). Rests on M5.1–M5.4E/M5.4R (shipped). Depends on the error model in
 > [Notes/LinearSenderErrorModel.md](Notes/LinearSenderErrorModel.md) and the `@ErrorResponse`
@@ -21,10 +22,10 @@ for global middleware, default error handling, and introspection mounting.
 properties resolve from the graph and whose factory methods build the concrete server and
 router — and generates `@main`. Its global `@Middleware` and `@ErrorResponse` become a single
 **global tier folded onto the same per-route fold** ([WireMVCMiddleware.md](Notes/WireMVCMiddleware.md)),
-applied identically to real routes and to one **synthetic fallback route** that owns the
+applied identically to real routes and to the **`@NotFound` fallback handler** that owns the
 unmatched-request case. The result is a clean invariant: **the router is pure dispatch, and
-every response comes from a route that holds the sender** — a real match, or the synthetic
-fallback. Nothing responds without holding the sender, so the whole surface stays inside the
+every response comes from a route that holds the sender** — a real match, or the fallback.
+Nothing responds without holding the sender, so the whole surface stays inside the
 linear-sender box model with no new response machinery.
 
 ## The surface
@@ -116,23 +117,26 @@ Both middleware and error maps gain a global tier, and it is the outer/default o
   [LinearSenderErrorModel.md § Correction](Notes/LinearSenderErrorModel.md#correction-wiremvc-must-synthesise-its-own-terminal-500).
   This supersedes RouteErrorHandling.md's rethrow terminus for handler errors.
 
-## The synthetic fallback route (unmatched requests)
+## The `@NotFound` fallback handler (unmatched requests)
 
-"No route matched" becomes literally a route. The router — pure dispatch — hands the sender
-to a generated **synthetic fallback route** when nothing matches. That route folds in the
-same global tier and its terminal throws `WireMVCRouteNotFound`, which the folded global
-error maps catch (built-in 404 if unmapped). So:
+"No route matched" runs a **fallback handler**, not a faked error (the axum `.fallback` / chi
+`.NotFound` / ASP.NET `MapFallback` / Flask `@errorhandler(404)` lineage). A `@NotFound` **method on
+the `@WireMVCBootstrap` type** — DI-capable, in practice `@RawRoute`, so it writes the response with
+full capability (stream a 404 page, negotiate, log) — is the fallback; the generated `@main` registers
+it via `registerNotFound` *before* `finalize()`. When no `@NotFound` is declared, the plugin
+synthesises a plain-404 fallback. Either way it's a **real route**, so:
 
-- **Global middleware runs on unmatched requests too** (via the synthetic route's fold) —
-  recovering the pre-routing/unmatched coverage a front-layer wrapper would have given.
-- **The Bootstrap's `@ErrorResponse` can shape the miss** — an
-  `@ErrorResponse(WireMVCRouteNotFound.self, .notFound)` (or the wildcard) customises it;
-  otherwise a plain 404.
+- **Global middleware runs on unmatched requests too** (Phase 5 folds it into the fallback like any
+  route) — e.g. an access-log middleware wraps the 404. This is why the default *must* be a registered
+  fallback route, not the router's bare 404 (which fires below the fold and would skip the middleware).
 
-Requires one new seam: `RoutableHTTPServerBuilder.registerNotFound(handler:)`, mapping to
-each backend's not-found responder (`WireRouter` gets a default-handler field; the
-`WireMVCServerTransport` adapter maps to Hummingbird/Vapor's existing not-found responder —
-but the adapter path doesn't use `@WireMVCBootstrap`, so its fallback stays framework-owned).
+The seam is native-path only: `FinalizableHTTPServerRouteBuilder.registerNotFound(handler:)` (same
+handler shape as `register`, no template). `TrieRouteBuilder` stores one optional handler;
+`FrozenTrieRouter` dispatches to it on a miss, its built-in 404 demoted to a safety net for the
+never-registered case. `registerNotFound` is on the refinement, not the router-agnostic core, so the
+`WireMVCServerTransport` adapter (whose fallback stays framework-owned) is unaffected. `@Path` on a
+`@NotFound` is diagnosed (no matched template). The former "synthesize a `WireMVCRouteNotFound` and map
+it through `@ErrorResponse`" design is **dropped** — a routing miss isn't an error.
 
 ## Two consequences accepted deliberately
 
@@ -173,7 +177,8 @@ but the adapter path doesn't use `@WireMVCBootstrap`, so its fallback stays fram
 4. `var builder = bootstrap.createRoutableBuilder(for: server)`.
 5. `let services = try WireMVC.apply(graph, to: &builder)` — register collated route
    contributors (each now folding the global tier).
-6. Register the synthetic fallback route via `builder.registerNotFound(...)`.
+6. Register the `@NotFound` fallback handler — or a synthesized 404 when none is declared — via
+   `builder.registerNotFound(...)`.
 7. If `bootstrap.mountIntrospectionAt()` is non-nil, mount introspection there, guarded by
    that method's `@Middleware`.
 8. `let handler = builder.finalize()` — freeze the builder into the immutable servable handler
@@ -216,36 +221,130 @@ Phased so each step ships and is validated independently; the example repo is th
   the `WireMVC.serve` helper runs serving in the task-group *body* (non-Sendable `server`/`builder`
   used directly, never captured into a `@Sendable` child task) with only the `Sendable` services in a
   child task — the shape that satisfies region isolation under `NonisolatedNonsendingByDefault`.
-- **Phase 2 — terminal owns the 500.** Change the terminal's outermost tier from rethrow to
-  a built-in 500 write ([RouteCodegen](../../wire-mvc/Sources/WireMVCCodegen/RouteCodegen.swift)).
-  Small, independent, benefits all native routes. *Validation:* an unmapped handler throw
-  yields a clean `500` (not a dropped connection) — a new `WireMVCExample` check hitting a
-  route that throws an unmapped error.
-- **Phase 3 — global `@ErrorResponse` tier.** The plugin reads the Bootstrap's
-  `@ErrorResponse` and folds them as the default tier of every route's `catch` (by
-  reference; the maps are defined once on the Bootstrap). *Validation:* a Bootstrap
-  `@ErrorResponse(SomeError.self, .status)` maps an otherwise-unmapped throw from a route
-  that declares no local map.
-- **Phase 4 — synthetic fallback route + router fallback seam.**
-  `RoutableHTTPServerBuilder.registerNotFound`, `WireRouter` default-handler field, the
-  `WireMVCRouteNotFound` type, and the generated synthetic route (global tier + terminal
-  throwing `WireMVCRouteNotFound`). *Validation:* an unmatched path returns a
-  Bootstrap-mapped 404 (and a plain 404 with no Bootstrap map).
-- **Phase 5 — global `@Middleware` tier.** Fold the Bootstrap's `@Middleware` as the outer
-  tier of every route *and* the synthetic route. Prefer a single generated
-  `applyGlobalLayers(box, terminal)` helper both call, over inlining N copies. *Validation:*
-  a global middleware runs on a matched route **and** on an unmatched route (the M5.5 gate
-  from M5_PLAN.md, now via the synthetic route rather than a front layer).
+- **Phase 2 — terminal owns the 500. — ✅ DONE.** Every typed terminal now wraps its body (scope-entry
+  prologue + binds + handler + encode) in a `do`, and `errorCatchClause` always ends the `??` chain in a
+  non-optional terminal — a declared catch-all, or the built-in `WireMVCOutcome.status(.internalServerError)`
+  — so it never re-throws ([RouteCodegen](../../wire-mvc/Sources/WireMVCCodegen/RouteCodegen.swift):
+  `closureBody`/`errorCatchClause`). Unified the three former terminal shapes into one. *Validation:* a
+  new `BoomController` throws an unmapped `Boom` → `GET /boom` returns `500` (not a dropped connection) in
+  `WireMVCExample`; 32 `WireMVCCodegen` goldens updated + green. Benefits all native routes; only raw
+  routes (which own their sender) are exempt.
+- **Phase 3 — global `@ErrorResponse` tier. — ✅ DONE.** `WireMVCRouteGen` reads the
+  `@WireMVCBootstrap` type's `@ErrorResponse` **once** (with its own scope diagnostics) and threads it
+  as `[ErrorMapping]` into every route's terminal — composed `route + controller + global`, so the global
+  tier is the default consulted after the controller's, before the binding-error built-in, before the
+  built-in 500. Plumbing: `ErrorMapping` lifted to a top-level `public` type (so it can cross the render
+  functions' signatures); `RouteBlockGenerator` gains a `globalErrorMappings` field; the macro path
+  passes `[]` (no whole-graph view). *Validation:* golden `globalErrorResponseFoldsIntoEveryRoute`; and
+  `WireMVCBootstrapExample`'s `AppBootstrap` gains `@ErrorResponse(TenantMissing.self, .badRequest)` with
+  a `/hello/tenant` route that throws it (no local map) → the CI boot-probe asserts `400`. 33 codegen
+  goldens green.
+- **Phase 4 — `@NotFound` fallback handler + router seam. — ✅ DONE.** Reshaped from the
+  "synthesize a `WireMVCRouteNotFound` error and route it through `@ErrorResponse`" sketch to a
+  **fallback *handler*** (the axum `.fallback` / chi `.NotFound` / ASP.NET `MapFallback` /
+  Flask `@errorhandler(404)` lineage) — cleaner, since "no route matched" is a routing decision, not a
+  faked error, and the handler has full capability (stream via `@RawRoute`, etc.).
+  `HTTPServerRouteBuilder`'s native-path refinement (`FinalizableHTTPServerRouteBuilder`) gains
+  `registerNotFound(handler:)`; `TrieRouteBuilder` stores it, `FrozenTrieRouter` dispatches to it on a
+  miss (its built-in 404 demoted to a safety net for the never-registered case). **`@NotFound` is a
+  method on the `@WireMVCBootstrap` type** (DI-capable, in practice `@RawRoute`; `@Path` diagnosed —
+  no template), rendered through the shared raw-route machinery, dispatched through the `@main`'s
+  `bootstrap` local. The generated `@main` **always** calls `registerNotFound` — with the `@NotFound`
+  handler, or a synthesized 404 when none is declared — *before* `finalize()`, so the fallback is a
+  real fold-able route (Phase 5 folds the global `@Middleware` into it, so e.g. an access-log middleware
+  wraps the 404). `WireMVCRouteNotFound` dropped. *Validation:* goldens
+  `notFoundHandlerRegistersAsFallback` / `notFoundHandlerMustBeRaw` (35 codegen tests green); and
+  `WireMVCBootstrapExample`'s `AppBootstrap` gains a `@NotFound @RawRoute` returning `404 "no route
+  here"`, asserted by the CI boot-probe (`GET /nope`).
+- **Phase 5 — global `@Middleware` tier, via a fan-out proxy-lift.** The global tier folds into
+  every route (and the `@NotFound` fallback) as the **outer** middleware, by lifting the Bootstrap's
+  `@Middleware` bindings onto **every route-contributor proxy** — so each route's witness reads them
+  from `self` exactly as it reads a controller's own `@Middleware`, and the wire-mvc **contract stays
+  frozen** (`RouteContributor`, `WireMVC.apply`, the generated `@main` all unchanged). *Rejected the
+  front-layer wrapper:* the box fold hands its terminal `consuming` reader/sender, but
+  `HTTPServerRequestHandler.handle` (the router) demands `consuming sending`, and the box can't prove
+  `sending` — so a wrapper can't chain to `router.handle`. The fold must terminate in a route handler
+  (`consuming`), which is exactly where lifting puts it.
+
+  - **swift-wire — one capability + one rewrite pass.** A new `WireAdapterCapability` case,
+    `injectsPeerFromGraphIntoAll(peer: String, collatingInto: Any)`: on the decl it sits on, peer
+    use-sites named `peer` inject their argument onto **every proxy collating into `collatingInto`**,
+    instead of the peer's own self-scope `.injectsFromGraph`. `@WireMVCBootstrap` — a pure marker today
+    — is promoted to a `WireAdapterAnnotationV1` carrying
+    `.injectsPeerFromGraphIntoAll(peer: "Middleware", collatingInto: WireMVCKeys.routeContributors)`, so
+    WireGen begins scanning it. One new pass, slotted after `applyContributorProxies` (proxies + their
+    collation keys known) and before `applyAdapterDependencies`, **rewrites** use-sites the way
+    `reattributingInputEdges` already does: for each decl carrying the capability, it removes each peer
+    `@Middleware(X)` use-site and re-emits one `@Middleware(X)` use-site *per proxy* collating into the
+    key (targeting the proxy). Everything downstream — `applyAdapterDependencies` appending `_wire<X>`,
+    factory synthesis, proxy-struct emission — runs **unchanged**; the rewrite deletes the root-targeting
+    use-site, so no existing pass needs skip-logic, and because it re-emits `@Middleware`-labelled
+    use-sites the argument-kind dispatch (`T.self` / `BindingKey` / `FactoryKey`) is inherited for free.
+    Precedent for co-located annotations that combine: `.mapsFactoryRoles` already joins to a peer
+    `@Factory` on the same type.
+  - **wire-mvc codegen — thread the global fold like `globalErrorMappings`.** `WireMVCRouteGen` reads
+    the `@WireMVCBootstrap` type's `@Middleware` **once** and threads the lifted-field constructions
+    (`self._wire<G>`, via the existing `dependencyPropertyName(forType:)`, which already agrees with
+    WireGen's `syntheticDependencyName(forType:)`) into every `renderRouteContributorExtension`, exactly
+    as Phase 3 threads `globalErrorMappings`. `middlewareConstructions` prepends them, so each route's
+    `wireCompose { self._wireG; <controller mw>; <route mw> }` gains the global tier outermost. **Plain
+    routes now fold too** — a route with no middleware keeps today's direct shape absent a global tier,
+    but under one it grows the box / `intercept` / `withPendingContents` scaffold (same body churn as any
+    folded route).
+  - **The `@NotFound` fallback folds the same tier via a different access path.** The fallback is a
+    method on the Bootstrap, rendered into the generated `@main` (Phase 4) — *not* a route-contributor
+    proxy, so the fan-out lift doesn't reach it and it can't read `self._wireG`. It doesn't need to: the
+    `@main` holds `graph`, so its `registerNotFound` closure folds the same singleton bindings read as
+    `graph.<g>` (the composition root's own graph-property access) instead of the `self._wireG` proxy
+    fields the controller witnesses use. Same singletons, both wrapped — the lift covers the controller
+    proxies (which see only `self`), the `@main` covers the fallback (which sees the graph). So middleware
+    on the miss endpoint needs no swift-wire change, only the `@main`'s fallback rendering.
+  - **Free-degrades.** No `@Middleware` on the Bootstrap → no capability directive → no synthetic
+    use-sites → no `_wire<G>` fields → no fold → **byte-identical to today's output**. No conditional in
+    the codegen, no per-request tax on apps without global middleware — the property the front-layer /
+    always-thread-identity alternatives couldn't give.
+  - **Non-transforming in practice, not by a special rule.** Folded onto every proxy, a global
+    middleware is mechanically the *same tier* as a controller's — same `wireCompose`. What differs is
+    **blast radius and locality**, not the fold: global is the *outermost* tier of *every* route, so a
+    sender-*type* transform (S → T, M5.4R) there hands `T` to every inner controller/route middleware and
+    every handler, app-wide, from a declaration none of them can see (a controller/route transform reshapes
+    only its own routes' inner stack, co-located with the `@RawRoute(.role)` handler that opts in). And it
+    is *not* a clean compile error: it flows through wherever the inner stack is sender-generic — typed
+    routes (the codegen owns the sender via `send(on:)`, generic over `HTTPResponseSender`) and bare
+    `@RawRoute` handlers (generic `<Sender: HTTPResponseSender>`) both bind `T` silently — and breaks only
+    where some inner tier assumed the base sender `S` (a controller/route `@Middleware` whose `Input` is
+    `Box<…,S>`, or a `@RawRoute(.role)` naming a concrete non-`T` slot). So a global sender-transform is
+    either invisible action-at-a-distance or a compile error deep in generated code. The codegen can't even
+    diagnose it — it holds only the type name (`AccessLog`), not the middleware's box associated types — so
+    non-transforming is a **documented expectation** backed by "it won't compile where it doesn't fit," not
+    an enforced constraint. The always-safe set is type-preserving: observe (log / metric),
+    short-circuit-by-writing (auth reject, CORS preflight), response-processing that keeps the sender type.
+    Threading a global transform into every handler slot (making it a *supported* effect) is deferred.
+  - **Placement diagnostic.** `@Middleware` on a decl that is neither a `@Controller` nor the
+    `@WireMVCBootstrap` root appends a `_wire<X>` field nothing folds — a silent no-op. The `@Middleware`
+    marker macro sees its host's peer attributes, so it errors locally: *"`@Middleware` here is never
+    folded — put it on a `@Controller` or the `@WireMVCBootstrap` composition root."* No whole-program
+    scan, one spelling to guide toward (no "use the other annotation" redirect — there isn't one).
+
+  *Validation:* a type-preserving global middleware (an access-log) declared `@Middleware(AccessLog.self)`
+  on `AppBootstrap` runs on a **matched** route (`GET /hello/Ada`) **and** the **unmatched** fallback
+  (`GET /nope`) — the CI boot-probe asserts the access line appears for both — the M5.5 gate from
+  M5_PLAN.md. Plus goldens: a plain route folding only the global tier, a middleware route with the
+  global tier prepended, and the free-degrade golden (no Bootstrap `@Middleware` → unchanged output). A
+  WireGen unit test pins the fan-out (root `@Middleware(G.self)` → a `_wireG` field on every proxy
+  collating into `routeContributors`, and none on a non-collating binding).
 
 ### Spikes / open items
 
-- **Shared global-fold helper typing.** If a global middleware is *sender-transforming*
-  (M5.4R), the box's sender type changes across the global tier, so `applyGlobalLayers`'
-  signature must express that transformation generically — possibly not expressible, in
-  which case Phase 5 inlines per route. **Spike this before committing to the shared helper.**
-- **Route codegen ↔ Bootstrap coupling.** Folding the global tier makes each route's output
-  depend on the Bootstrap's global declarations, so touching the Bootstrap invalidates route
-  codegen. Inherent to a cross-cutting concern; note the incremental-build cost, accept it.
+- **Shared global-fold helper typing. — resolved.** No shared `applyGlobalLayers` helper: the fold is
+  inlined per route as `wireCompose { self._wireG; … }`, reading the lifted proxy field, so there is no
+  helper signature to express a cross-tier sender transform. The sender-transforming case is closed by
+  the *non-transforming* constraint above (a transform fails to type-check), not by a helper — see
+  Deferred for lifting that constraint.
+- **Route codegen ↔ Bootstrap coupling.** Folding the global tier makes each route's output depend on
+  the Bootstrap's global `@Middleware`, so touching the Bootstrap invalidates route codegen — and the
+  fan-out adds a `_wire<G>` field to every route-contributor proxy, so it invalidates WireGen's proxy
+  emission too. Inherent to a cross-cutting concern; note the incremental-build cost, accept it.
 - **Introspection method spelling.** `@Middleware` on a config-returning method
   (`mountIntrospectionAt`) is a novel placement (the middleware guards the *route* the path
   names). Keep the method form (it lets the path come from injected `config`); be deliberate
@@ -256,6 +355,12 @@ Phased so each step ships and is validated independently; the example repo is th
 - **Transform-only middleware** (throw ⇒ 500 instead of abort) — the escape hatch in
   [LinearSenderErrorModel.md § escape hatch](Notes/LinearSenderErrorModel.md#the-one-escape-hatch-deferred).
   Not built speculatively.
+- **Sender-type-transforming global middleware** (M5.4R at global scope) — would require the codegen to
+  thread the global tier's box transform into *every* handler's slot type (each handler is shaped only
+  for its own route chain today). Phase 5 leaves global middleware type-preserving as a documented
+  expectation — a transform flows through where the inner stack is sender-generic and fails to compile
+  where it isn't, but it's not cleanly diagnosable (the codegen sees only the type name). Lands as a
+  *supported* effect only if an example forces a global sender transform.
 - **Graph-injected `@ErrorResponse` handler** — the dependency-bearing error tier
   ([RouteErrorHandling.md](Notes/RouteErrorHandling.md)); lands when an example forces
   injected deps in a mapping, orthogonal to M5.5.

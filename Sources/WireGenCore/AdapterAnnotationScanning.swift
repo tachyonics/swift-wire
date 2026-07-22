@@ -33,6 +33,11 @@ package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// `@Factory(key)` template) injects that factory; a `BindingKey<T>` injects that keyed binding;
     /// `T.self` injects the binding of type `T`.
     case injectsFromGraph
+    /// `@X` reinterprets its co-located peer annotation (`peer`): each peer use-site injects its argument
+    /// onto every proxy collating into `collatingInto`, not onto the annotated decl's own proxy. The one
+    /// fan-out input edge (WireMVC's `@WireMVCBootstrap` folding a global `@Middleware` onto every
+    /// route-contributor proxy). `collatingInto` is the key reference, read verbatim.
+    case injectsPeerFromGraphIntoAll(peer: String, collatingInto: String)
     /// `@X` / `@X(.role, …)` on a `@Factory` template supplies the role mapping for its assisted
     /// parameters; `roles` is the adapter's ordered vocabulary of canonical slot names (opaque to Wire).
     case mapsFactoryRoles(roles: [String])
@@ -125,6 +130,16 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
                 key: toArgument.expression.trimmedDescription,
                 proxyTypePrefix: prefix,
                 proxyScope: .singleton
+            )
+        }
+        if member.declName.baseName.text == "injectsPeerFromGraphIntoAll",
+            let peerArgument = call.arguments.first(where: { $0.label?.text == "peer" }),
+            let peer = peerArgument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue,
+            let collatingArgument = call.arguments.first(where: { $0.label?.text == "collatingInto" })
+        {
+            return .injectsPeerFromGraphIntoAll(
+                peer: peer,
+                collatingInto: collatingArgument.expression.trimmedDescription
             )
         }
         if member.declName.baseName.text == "mapsFactoryRoles",

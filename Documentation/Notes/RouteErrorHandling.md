@@ -19,16 +19,16 @@ request scope, has that error mapped to a response written on the sender the ter
 inline typed-parameter closure `{ (e: E) in … }`, read from the annotation syntax and folded directly
 into the generated `catch` — **pure codegen, no `.injectsFromGraph`, no new Core capability.** The
 order of consultation is: route pairs → controller pairs → the built-in
-`WireMVCBindingError`→status → a `Swift.Error` catch-all if one is declared → **rethrow**. An unmapped
-throw is re-thrown out of the middleware chain to the framework, which produces its default (500) —
-WireMVC never synthesises a 500 of its own.
+`WireMVCBindingError`→status → a `Swift.Error` catch-all if one is declared → **built-in 500 write**. An
+unmapped throw is written by the terminal as a `500` — WireMVC owns the 500, since the target servers
+*abort the connection* on an escaped throw rather than synthesising one (see
+[LinearSenderErrorModel.md](LinearSenderErrorModel.md)).
 
-> **Correction (M5.5):** the rethrow terminus assumed the framework produces a 500 on an escaped
-> throw. It does not — the target servers *abort the connection* (see
-> [LinearSenderErrorModel.md](LinearSenderErrorModel.md)). M5.5 replaces the final **rethrow** with a
-> built-in **500 write** at the terminal (which holds the sender), so an unmapped *handler* throw is a
-> clean 500 rather than a dropped connection. *Middleware* throws still abort — WireMVC never holds
-> their sender. The rest of the consultation order below is unchanged.
+> **M5.5 Phase 2 (shipped):** the terminal's outermost tier writes a built-in `500` instead of
+> re-throwing — the chain always ends in a non-optional terminal (a declared catch-all, or
+> `.status(.internalServerError)`), so an unmapped *handler* throw or a throwing request-scoped binding
+> is a clean 500, not a dropped connection. *Middleware* throws still abort (WireMVC never holds their
+> sender). Validated by a `WireMVCExample` route that throws an unmapped error → 500.
 
 ## Why terminal-scoped, not global middleware — the box forces it
 
@@ -113,15 +113,17 @@ most one per scope; a catch-all that is not the last error entry at its scope is
 ```
 route @ErrorResponse (source order)
   → controller @ErrorResponse (source order)
+  → global @ErrorResponse (@WireMVCBootstrap, M5.5 Phase 3 — the default tier)
   → built-in WireMVCBindingError → .status(bindingError.status)
   → Swift.Error catch-all, if declared
-  → throw wireMVCError   // rethrow out of the chain → framework default (500)
+  → built-in WireMVCOutcome.status(.internalServerError)   // terminal owns the 500 (never rethrow)
 ```
 
 Route entries override controller entries for the same error type (route is consulted first);
 two entries for the same error type *at the same scope* is a diagnostic. The chain is a `??` cascade of
-`wireMVCRespond(to:_:)` (typed, optional) / inline `is`-status / the built-in / `wireMVCRespondAny`
-(catch-all, non-optional); with no catch-all it terminates in `else { throw wireMVCError }`.
+`wireMVCRespond(to:_:)` (typed, optional) / inline `is`-status / the built-in, ending in a non-optional
+terminal: `wireMVCRespondAny` (a declared catch-all) or, absent one, `WireMVCOutcome.status(.internalServerError)`
+(the built-in 500). It never re-throws.
 
 ## Deferred: a named-function reference, and a graph-injected handler
 
@@ -208,8 +210,9 @@ the terminal the only sender-holder.
 
 - **Resolved (shipped):** terminal-scoped `@ErrorResponse` — the `(E.self, .status)` shorthand and the
   inline typed-parameter closure — at controller + route scope, `Swift.Error` catch-all, consultation
-  order ending in rethrow, scope-entry inside the `do`. Proven end-to-end in `WireMVCExample` (a thrown
-  `UserStore.NotFound` maps to a 404 JSON body, served on `NIOHTTPServer`) and by the `WireMVCCodegen`
+  order ending in the built-in 500 (M5.5 Phase 2), every typed terminal wrapping its body in the `do`.
+  Proven end-to-end in `WireMVCExample` (a thrown `UserStore.NotFound` maps to a 404 JSON body, and an
+  unmapped `Boom` → 500, served on `NIOHTTPServer`) and by the `WireMVCCodegen`
   golden/diagnostic tests. Pure adapter codegen; no swift-wire change.
 - **Deferred:**
   - **A named-function reference** (`@ErrorResponse(SomeType.map)`) — blocked for the self-reference case
