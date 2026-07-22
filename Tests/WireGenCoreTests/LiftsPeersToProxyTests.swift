@@ -94,7 +94,12 @@ struct LiftsPeersToProxyTests {
             genericParameterNames: ["Ctx", "Reader", "Sender"],
             genericParameterConstraints: [:],
             dependencies: [
-                DependencyParameter(name: "logger", type: "Logger", kind: .injectProperty, location: mockLocation("M.swift"))
+                DependencyParameter(
+                    name: "logger",
+                    type: "Logger",
+                    kind: .injectProperty,
+                    location: mockLocation("M.swift")
+                )
             ],
             location: mockLocation("M.swift"),
             originModule: testModule
@@ -128,6 +133,9 @@ struct LiftsPeersToProxyTests {
         #expect(proxy?.dependencies.contains { $0.type == "_WireFactory_Keys_factory" } == true)
         #expect(proxy?.dependencies.contains { $0.type == "AppBootstrap" } == true)
         #expect(proxy?.contributions.isEmpty == true)
-        #expect(binding(named: "AppBootstrap", in: bindings)?.dependencies.contains { $0.type.contains("_WireFactory") } == false)
+        #expect(
+            binding(named: "AppBootstrap", in: bindings)?.dependencies.contains { $0.type.contains("_WireFactory") }
+                == false
+        )
     }
 }
