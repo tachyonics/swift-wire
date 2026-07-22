@@ -23,7 +23,7 @@
 >   M5.4 routes middleware-produced / request-scoped values to handlers via **A-inject**
 >   (request-scope injection), not handler-parameter projection off the box. Lands when
 >   `@Configuration` forces it, or on a deliberate decision to buy the `@Principal`-style
->   typed-handler surface. See [../M5_PLAN.md](../M5_PLAN.md) (M5.4 decision) and
+>   typed-handler surface. See [../M5_PLAN.md](../Archive/M5_PLAN.md) (M5.4 decision) and
 >   [RouteErrorHandling.md](RouteErrorHandling.md).
 >
 > The mechanism sketch below is the *unifying* design (all of these are one transformer protocol);

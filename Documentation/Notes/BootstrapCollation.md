@@ -1,9 +1,14 @@
 # Bootstrap collation — design note (M5)
 
-> **Status:** captured during M4.2. A design space for the **Tier-2 composition-root
-> macro** (M5.2), not a committed plan. Records the "an adapter's contributions must be
-> applied, but nothing enforces it" problem and a mechanism for collating the apply
-> steps, so M5's Tier-2 work doesn't start from scratch.
+> **Status:** captured during M4.2; **partly superseded by what shipped.** A design space
+> for the **Tier-2 composition-root macro**, framed here around a Hummingbird-specific
+> `@WireHummingbird` bootstrap. That framing was retired: M5.5 shipped the proposal-native
+> **`@WireMVCBootstrap`** (a `@Singleton` root whose plugin generates `@main`) instead — a
+> `@WireHummingbird`/`@WireVapor` macro fights the grain in those ecosystems. The *problem
+> statement* below (contributions must be applied, nothing enforces it) and the
+> apply-collation mechanism remain accurate; the `@WireHummingbird` bootstrap sketch is
+> historical. See [ROADMAP.md](../../ROADMAP.md) M5.5 and the archived
+> [M5.5 plan](../Archive/M5_5_PLAN.md).
 
 ## The problem
 

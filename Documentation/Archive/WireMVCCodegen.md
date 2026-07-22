@@ -239,4 +239,4 @@ fold shows `LogRequests`, `AuditGate` (injected axis), and `RequireAPIKey` all l
   [21](../../../swift-wire-spikes/spike-21-wiremvc-transforming-rawroute/) (transforming middleware /
   raw route), [22](../../../swift-wire-spikes/spike-22-plugin-generated-proxy/) (plugin-generated proxy /
   injected axis), [23](../../../swift-wire-spikes/spike-23-two-tool-codegen/) (two-tool orchestration).
-- **Milestone context:** [M5_PLAN.md](../M5_PLAN.md), M5.3.
+- **Milestone context:** [M5_PLAN.md](M5_PLAN.md), M5.3.

@@ -82,7 +82,7 @@ confirmed the consequence directly: emitting `_WireExports.swift` from the contr
 plugin instead of hand-declaring it made the dependency **invisible** to the consumer's
 `sourceFiles` scan — the build succeeded but the dependency's bindings silently dropped
 out of the graph. So there is no plugin-generated export *file* a consumer can read
-(see *M6a* below); composition works by re-parsing committed sources for the data and
+(see *M7a* below); composition works by re-parsing committed sources for the data and
 referencing the dependency's public symbols **by derivable name** (compiler-linked) —
 which is exactly what the `@Factory` factory-lift does (`_WireFactory_<key>` is public
 in the template's module; the consumer emits a reference resolved at compile time).
@@ -93,7 +93,7 @@ hand-declared file — a contributor applies `WireContributorPlugin` only when i
 `@Factory` templates (a missing plugin is a loud, local compile error, `cannot find type
 '_WireFactory_<key>'`); a pure-`@Singleton` contributor declares nothing. The catch is
 that the marker currently also *bounds* what composes, so its removal is **coupled to
-reachability pruning (M6b)** — the prerequisite, not a nicety: without a bound, every
+reachability pruning (M7b)** — the prerequisite, not a nicety: without a bound, every
 direct Wire-dependency's bindings are pulled in and eagerly constructed, so an
 incidentally-scanned binding with a consumer-unresolvable dep would break; reachability
 strips the unreachable before resolution. That work's bulk lands with **M5.4
@@ -102,34 +102,34 @@ non-prunable exception (a public collection key can gain contributors outside th
 analysed graph, so it survives with no local consumer — the same rule as a public unused
 binding).
 
-## Deferred optimizations (M6a / M6b)
+## Deferred optimizations (M7a / M7b)
 
 Two perf optimizations are split out of M1; each keeps the surface
 contract unchanged and lands when its cost is felt:
 
-- **M6a — manifest-based discovery.** M1 re-parses dependency sources at
-  the consumer's build; M6a has each library emit a per-library
+- **M7a — manifest-based discovery.** M1 re-parses dependency sources at
+  the consumer's build; M7a has each library emit a per-library
   compile-time manifest of its bindings, which the consumer reads instead
   of re-parsing. The seam is the discovery-output model
-  (`[DiscoveredBinding]` + key lists): M1 produces it by parsing, M6a by
+  (`[DiscoveredBinding]` + key lists): M1 produces it by parsing, M7a by
   deserializing a manifest. Everything downstream (merge, graph, codegen,
   diagnostics) is unchanged — `originModule` is already per-binding and
   serializable, so it rides into the manifest exactly as stamped today.
   **Constraint (2026-07):** the manifest can't be a per-build *plugin
   output* — the consumer can't read another target's plugin outputs (see
-  *The marker is detection-only* above). So M6a's manifest is either a
+  *The marker is detection-only* above). So M7a's manifest is either a
   **committed** artifact the consumer re-reads, or the library exposes its
   contribution as **public symbols** the consumer references by name
   (compiler-linked) rather than a file it parses — the direction the
   `@Factory` factory-lift already takes. `_WireExports.swift` doesn't
   "become the manifest"; it's retired (detection moves to the Wire-product
   dependency).
-- **M6b — reachability pruning (bulk lands with M5.4).** M1 eager-
+- **M7b — reachability pruning (bulk lands with M5.4).** M1 eager-
   constructs *every* binding in the merged graph, including a library
   binding nothing reaches — so a large dependency costs all its singletons
   even when the consumer uses a few. Beyond the perf win, reachability is
   the **prerequisite for retiring the marker** (it's what bounds
-  auto-composition once opt-in is manifest-derived). M6b computes the
+  auto-composition once opt-in is manifest-derived). M7b computes the
   bindings reachable from the home package's roots
   and strips the rest before codegen. The hard part is defining roots:
   the plugin sees `@Inject` edges but not external `graph.x` accesses, so

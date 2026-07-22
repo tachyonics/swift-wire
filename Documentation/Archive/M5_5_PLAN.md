@@ -1,12 +1,14 @@
 # M5.5 — the WireMVC-native composition root (`@WireMVCBootstrap`)
 
-> **Status:** Phases 1–4 shipped; Phase 5 (global `@Middleware`, the front layer) built and validated in
-> the design spikes (24/25) + the swift-wire `LiftsPeersToProxy` tests; the wire-mvc codegen (the global
-> proxy's `wrap` method) and end-to-end example are gated on the swift-wire `.liftsPeersToProxy` merge.
+> **Status:** **Complete** — all phases (1–5) shipped. The global-`@Middleware` front layer (a single
+> `GlobalMiddlewareHandler` wrapping the finalized router in the generated `@main`), the `@WireMVCBootstrap`
+> `@main` generation, and the introspection mount (basic + route-scope-guarded) are implemented and
+> validated end-to-end (boot-probe + the swift-wire `LiftsPeersToProxy` tests). It rides swift-wire's
+> `.liftsPeersToProxy` capability (merged). Archived; the milestone summary is in the roadmap.
 > Iteration **M5.5** in [M5_PLAN.md](M5_PLAN.md); this file is the detailed plan (same relation
-> M5_4_PLAN.md has to M5.4). Rests on M5.1–M5.4E/M5.4R (shipped). Depends on the error model in
-> [Notes/LinearSenderErrorModel.md](Notes/LinearSenderErrorModel.md) and the `@ErrorResponse` surface in
-> [Notes/RouteErrorHandling.md](Notes/RouteErrorHandling.md).
+> M5_4_PLAN.md has to M5.4). Rested on M5.1–M5.4E/M5.4R. Depends on the error model in
+> [Notes/LinearSenderErrorModel.md](../Notes/LinearSenderErrorModel.md) and the `@ErrorResponse` surface in
+> [Notes/RouteErrorHandling.md](../Notes/RouteErrorHandling.md).
 
 ## Rescope
 
@@ -106,7 +108,7 @@ route @ErrorResponse → controller @ErrorResponse → global @ErrorResponse (Bo
 
 The terminus is a **500 write, not a rethrow** — because the target server *aborts* (drops the connection)
 on an escaped throw rather than producing a 500. See
-[LinearSenderErrorModel.md § Correction](Notes/LinearSenderErrorModel.md#correction-wiremvc-must-synthesise-its-own-terminal-500).
+[LinearSenderErrorModel.md § Correction](../Notes/LinearSenderErrorModel.md#correction-wiremvc-must-synthesise-its-own-terminal-500).
 This supersedes RouteErrorHandling.md's rethrow terminus for handler errors.
 
 ### Middleware tier — the front layer (Phase 5)
@@ -199,7 +201,7 @@ adapter (whose fallback stays framework-owned) is unaffected.
   `HTTPServerRequestHandler`, mirroring nginx `rewrite` / ASP.NET `UseRewriter` *before* `UseRouting`.
   **Deferred** until an example forces routing-affecting behavior (see Deferred).
 - **A middleware throw is not mapped — it aborts.** Deferred entirely to
-  [LinearSenderErrorModel.md](Notes/LinearSenderErrorModel.md): middleware express intentional responses by
+  [LinearSenderErrorModel.md](../Notes/LinearSenderErrorModel.md): middleware express intentional responses by
   *writing*; an escaped middleware throw drops the sender and the server aborts the connection. WireMVC owns
   the 500 only for the *handler* throw (terminal holds the sender).
 
@@ -281,12 +283,20 @@ Phased so each step ships and is validated independently; the example repo is th
   (all of `WireMVCExample`'s reusable middleware are factories).
 - **`wrapHandler` pre-router seam** — a Bootstrap method wrapping the router with a request-rewriting handler
   for routing-affecting work (path rewrite / normalization). Sketched above; surfaced when an example forces it.
-- **Introspection mount** — a Bootstrap method returning an optional path, its route guarded by a
-  `@Middleware`. Not yet implemented; lands with the introspection surface work.
+- **Introspection mount — implemented (basic + guarded).** A `func mountIntrospectionAt() -> String?` on the
+  Bootstrap makes the generated `@main` register the graph's wiring model (`introspect()` as JSON) at the
+  returned path — before `finalize()`, so the front layer wraps it (nil skips it). Recognised by method name,
+  as `createServer`/`createRouteBuilder` are. A `@Middleware` on the method guards **only** that route: its
+  factory is lifted onto the global-middleware proxy (the plugin reattributes method-level `@Middleware`
+  exactly as route-scope controller middleware — no new lifting), and `WireMVCRouteGen` emits
+  `registerIntrospection<Builder>` folding the guard chain around the introspection terminal, which the
+  `@main` calls (precomputing the model once) instead of `WireMVC.mountIntrospection`. Guard is factory-form
+  only (by-type diagnosed, as at global scope). Validated: `WireMVCBootstrapExample`'s guarded `/wiring` — the
+  CI boot-probe asserts the guard fires on `/wiring` only, the global access-log on every route.
 - **Transform-only middleware** (throw ⇒ 500 instead of abort) — the escape hatch in
-  [LinearSenderErrorModel.md § escape hatch](Notes/LinearSenderErrorModel.md#the-one-escape-hatch-deferred).
+  [LinearSenderErrorModel.md § escape hatch](../Notes/LinearSenderErrorModel.md#the-one-escape-hatch-deferred).
 - **Graph-injected `@ErrorResponse` handler** — the dependency-bearing error tier
-  ([RouteErrorHandling.md](Notes/RouteErrorHandling.md)); lands when an example forces injected deps in a mapping.
+  ([RouteErrorHandling.md](../Notes/RouteErrorHandling.md)); lands when an example forces injected deps in a mapping.
 
 ## Validation gate (overall)
 

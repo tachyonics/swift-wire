@@ -4,7 +4,7 @@
 > terminal-scoped, not global middleware" section of
 > [RouteErrorHandling.md](RouteErrorHandling.md) and the Model-B box in
 > [WireMVCMiddleware.md](WireMVCMiddleware.md). Referenced by the M5.5 composition-root
-> design ([../M5_5_PLAN.md](../M5_5_PLAN.md)) for the *"what happens when a middleware
+> design ([../M5_5_PLAN.md](../Archive/M5_5_PLAN.md)) for the *"what happens when a middleware
 > throws"* question, and **corrects** RouteErrorHandling.md's "unmapped throw → framework
 > 500" terminus (see [Correction](#correction-wiremvc-must-synthesise-its-own-terminal-500)).
 
@@ -156,7 +156,7 @@ Why each non-B option doesn't pay off:
 **What WireMVC buys back on top of B**, bounding the loss: A's error *scoping* (route→controller→global
 tiers, most-specific-wins) folded per-terminal instead of layered outer — same authoring UX, different
 placement; [terminal-owns-500](#correction-wiremvc-must-synthesise-its-own-terminal-500); the synthetic
-fallback route ([M5_5_PLAN.md](../M5_5_PLAN.md)); the transform-only escape hatch (a slice of D) if a
+fallback route ([M5_5_PLAN.md](../Archive/M5_5_PLAN.md)); the transform-only escape hatch (a slice of D) if a
 real need appears. The one irreducible loss versus A is mapping a genuine middleware *throw* —
 reserved, correctly, for unexpected failure.
 
@@ -215,7 +215,7 @@ route @ErrorResponse → controller @ErrorResponse → global @ErrorResponse
 
 The terminal holds the sender, so writing a minimal `500` there is always safe and gives the
 client a real HTTP error instead of a dropped connection. This is an **M5.5 change** (folded
-in with the global error tier — see [../M5_5_PLAN.md](../M5_5_PLAN.md)); it supersedes the
+in with the global error tier — see [../M5_5_PLAN.md](../Archive/M5_5_PLAN.md)); it supersedes the
 rethrow terminus for *handler* errors. **Middleware** throws are unaffected — WireMVC never
 holds their sender, so they still fall through to the server's abort floor, which is the
 correct outcome for an unexpected failure.

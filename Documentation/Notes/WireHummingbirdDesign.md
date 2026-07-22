@@ -158,7 +158,10 @@ composition root or a Tier-2 macro's `main`).
   WireHummingbird.apply(graph, to: router); return Application(router:, services:, …)`.
   Two idiomatic touch points.
 - **Tier 2 — `@main @WireHummingbird`.** A composition-root type the macro reads;
-  it generates `main` (bootstrap → build router → apply → construct → run).
+  it generates `main` (bootstrap → build router → apply → construct → run). *(Retired:
+  the Tier-2 macro shipped as the proposal-native `@WireMVCBootstrap` in M5.5, not a
+  Hummingbird-specific `@WireHummingbird` — see [ROADMAP.md](../../ROADMAP.md) M5.5. Tier 1
+  above stays the idiomatic Hummingbird path.)*
 
 `apply` returns one ordered `[any Service]`: collected services (`@Contributes` into
 `CollectedKey<any Service>`) plus the graph teardown modelled as a single `Service`

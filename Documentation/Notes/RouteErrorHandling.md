@@ -1,7 +1,7 @@
 # Route error handling — terminal-scoped `@ErrorResponse` (M5.4E design record)
 
 > **Status:** settled design, implementation in progress. Iteration **M5.4E** in
-> [../M5_PLAN.md](../M5_PLAN.md), interleaved with M5.4. Extends the middleware/box model in
+> [../M5_PLAN.md](../Archive/M5_PLAN.md), interleaved with M5.4. Extends the middleware/box model in
 > [WireMVCMiddleware.md](WireMVCMiddleware.md) and the M5.0 surface in
 > [WireMVCDesign.md](WireMVCDesign.md). Resolves the plan's "Response surface beyond
 > `@JSONResponse` — error→response mapping" open decision.
