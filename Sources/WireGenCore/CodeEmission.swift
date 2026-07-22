@@ -30,7 +30,7 @@
 /// refine this if generated-file noise becomes a real complaint.
 ///
 /// `bootstrap` is declared `async throws` regardless of whether the
-/// current set of bindings actually have async/throws inits. M6's
+/// current set of bindings actually have async/throws inits. M7's
 /// lifecycle work makes async/throws constructor injection a
 /// first-class option, and locking the signature in now means later
 /// migrations don't ripple through every consumer's `try await

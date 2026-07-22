@@ -33,7 +33,7 @@ reaches *parity* with Dagger rather than beating it, and on axis 2 alone the
 credit belongs to Swift, not to Wire.
 
 Axis 1 is settled below from primary sources. Axis 2 is asserted here and not
-measured — see *The unmeasured half* — and is deferred to the post-M6
+measured — see *The unmeasured half* — and is deferred to the post-M7
 performance round, which will benchmark against servers in other languages.
 
 ## Wire's shipped model, in one table
@@ -165,7 +165,7 @@ the target audience already has:
 Everything above is axis 1, settled from primary sources. Axis 2 — whether
 Swift's constructs set a higher ceiling than the JVM's for a dependency graph —
 is asserted in this note and **has not been measured**. It is deferred to the
-performance round after M6, which will benchmark against servers in other
+performance round after M7, which will benchmark against servers in other
 languages. Recording the shape of the question now so that round has a starting
 point rather than a blank page:
 

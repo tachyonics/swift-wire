@@ -4,7 +4,7 @@
 > declarative-routing adapter). Supersedes the older
 > [WireMVCAbstraction.md](WireMVCAbstraction.md) (built on the retired
 > `_wireRegister` model — its full rewrite is M5.6). The milestone sits in
-> [ROADMAP.md](../../ROADMAP.md); the iteration plan is [M5_PLAN.md](../M5_PLAN.md).
+> [ROADMAP.md](../../ROADMAP.md); the iteration plan is [M5_PLAN.md](../Archive/M5_PLAN.md).
 >
 > **Update — proposal-native pivot (reconciled below).** M5.0 originally standardised on
 > `some ServerTransport` (OpenAPIRuntime) as the core target, with the

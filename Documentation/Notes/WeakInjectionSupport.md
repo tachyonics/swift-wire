@@ -1,8 +1,10 @@
 # Weak-reference injection — design notes
 
-> **Status:** forward-looking design for iteration 4e (or later).
-> Captures the shape so the work is ready to start when the
-> iteration begins. Not yet implemented.
+> **Status:** **Implemented.** `weak`/`unowned` consumer-site injection shipped —
+> see [`OptionalMatchingAndCycles.md`](OptionalMatchingAndCycles.md) (*Ship now*).
+> This note captures the design. The one piece still deferred is graph-held
+> **non-owned bindings** (a binding the graph itself holds `weak`/`unowned`),
+> tracked in that note as a niche feature with no demonstrated demand.
 
 > **See also:** [`OptionalMatchingAndCycles.md`](OptionalMatchingAndCycles.md)
 > pins the cross-cutting model this note feeds into — the

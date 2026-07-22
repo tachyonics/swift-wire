@@ -2,7 +2,7 @@
 
 > **Status:** the settled design for M5.2 (the raw escape-hatch handler) and M5.3
 > (middleware). Extends [WireMVCDesign.md](WireMVCDesign.md) (the M5.0 record) and refines the
-> M5.2/M5.3 sections of [M5_PLAN.md](../M5_PLAN.md). Proven substrate:
+> M5.2/M5.3 sections of [M5_PLAN.md](../Archive/M5_PLAN.md). Proven substrate:
 > [spike-12](../../../swift-wire-spikes/spike-12-wiremvc-proposal-native/) (proposal-native
 > routing), [spike-13](../../../swift-wire-spikes/spike-13-wiremvc-servertransport-bridge/)
 > (the `ServerTransport` bridge), [spike-14](../../../swift-wire-spikes/spike-14-wiremvc-streaming/)
