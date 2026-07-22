@@ -28,6 +28,10 @@ package enum DiscoveredAdapterCapability: Sendable, Equatable {
     /// superseding the adapter macro's type emission; the domain witness body is filled by an adapter
     /// codegen tool via an `extension` in the same module. See `renderContributorProxyDeclaration`.
     case contributesProxy(key: String, proxyTypePrefix: String, proxyScope: DiscoveredProxyScope)
+    /// `@X` synthesises a contributor proxy that lifts the declaration's `.injectsFromGraph` peers onto
+    /// itself (like `.contributesProxy`) but contributes to no multibinding — a standalone, addressable
+    /// proxy the adapter's codegen reads directly (WireMVC's `@WireMVCBootstrap` global-middleware proxy).
+    case liftsPeersToProxy(proxyTypePrefix: String, proxyScope: DiscoveredProxyScope)
     /// `@X(argument)` makes the annotated binding depend on a graph value named by `argument`, lifted
     /// onto its contributor proxy — dispatched on the argument's kind: a `FactoryKey` (matches a
     /// `@Factory(key)` template) injects that factory; a `BindingKey<T>` injects that keyed binding;
@@ -126,6 +130,13 @@ func adapterCapability(from expression: ExprSyntax) -> DiscoveredAdapterCapabili
                 proxyTypePrefix: prefix,
                 proxyScope: .singleton
             )
+        }
+        if member.declName.baseName.text == "liftsPeersToProxy",
+            let prefixArgument = call.arguments.first(where: { $0.label?.text == "proxyTypePrefix" }),
+            let prefix = prefixArgument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
+        {
+            // `proxyScope:` has a single value (`.singleton`) today, read as that regardless of source.
+            return .liftsPeersToProxy(proxyTypePrefix: prefix, proxyScope: .singleton)
         }
         if member.declName.baseName.text == "mapsFactoryRoles",
             let rolesArgument = call.arguments.first(where: { $0.label?.text == "roles" }),

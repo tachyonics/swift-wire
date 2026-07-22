@@ -79,14 +79,21 @@ private func proxyPartition(_ proxyScope: DiscoveredProxyScope, subjectPartition
 private func contributorProxyDirectives(
     annotations: [DiscoveredAdapterAnnotation],
     useSites: [ContributionAliasUseSite]
-) -> [String: (key: String, prefix: String, proxyScope: DiscoveredProxyScope)] {
-    var proxyAnnotations: [String: (key: String, prefix: String, proxyScope: DiscoveredProxyScope)] = [:]
+) -> [String: (key: String?, prefix: String, proxyScope: DiscoveredProxyScope)] {
+    // `key == nil` is a `.liftsPeersToProxy` directive: synthesise + reattribute exactly like
+    // `.contributesProxy`, but contribute to no multibinding (a standalone, addressable proxy).
+    var proxyAnnotations: [String: (key: String?, prefix: String, proxyScope: DiscoveredProxyScope)] = [:]
     for annotation in annotations {
-        if case .contributesProxy(let key, let prefix, let proxyScope) = annotation.capability {
+        switch annotation.capability {
+        case .contributesProxy(let key, let prefix, let proxyScope):
             proxyAnnotations[annotation.annotationName] = (key, prefix, proxyScope)
+        case .liftsPeersToProxy(let prefix, let proxyScope):
+            proxyAnnotations[annotation.annotationName] = (nil, prefix, proxyScope)
+        default:
+            break
         }
     }
-    var directiveBySubject: [String: (key: String, prefix: String, proxyScope: DiscoveredProxyScope)] = [:]
+    var directiveBySubject: [String: (key: String?, prefix: String, proxyScope: DiscoveredProxyScope)] = [:]
     for site in useSites {
         if let directive = proxyAnnotations[site.annotationName] {
             directiveBySubject[site.targetIdentity] = directive  // first-seen wins
@@ -138,7 +145,7 @@ private func reattributingInputEdges(
 /// Either way the demanded factory dependencies are appended later by the factory-synthesis pass.
 func contributorProxyBinding(
     for subject: DiscoveredScopeBoundType,
-    key: String,
+    key: String?,
     prefix: String,
     proxyScope: DiscoveredProxyScope
 ) -> DiscoveredScopeBoundType {
@@ -183,7 +190,9 @@ func contributorProxyBinding(
         dependencies: [primaryDependency],
         location: subject.location,
         accessLevel: subject.accessLevel,
-        contributions: [Contribution(keyReference: key, location: subject.location)],
+        // A `.liftsPeersToProxy` proxy (key == nil) contributes to nothing — a standalone addressable
+        // binding the adapter's codegen reads directly.
+        contributions: key.map { [Contribution(keyReference: $0, location: subject.location)] } ?? [],
         originModule: subject.originModule
     )
 }
