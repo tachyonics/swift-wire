@@ -39,6 +39,15 @@ public enum WireAdapterCapability {
     /// against the subject's scope to pick hold vs bridge.
     case contributesProxy(to: Any, proxyTypePrefix: String, proxyScope: WireProxyScope)
 
+    /// `@X` synthesises a contributor proxy for the annotated declaration — exactly like
+    /// `.contributesProxy` (it lifts the declaration's `.injectsFromGraph` peers onto the proxy via
+    /// reattribution, leaving the declaration a plain, footgun-free binding) — but contributes it to **no**
+    /// multibinding. The proxy is a standalone, directly-addressable graph binding (`graph.<proxy>`); the
+    /// adapter's own codegen reads it and emits a method on it. WireMVC's `@WireMVCBootstrap` uses this so a
+    /// global `@Middleware` on the composition root synthesises its factories onto a proxy — folded by the
+    /// proxy's generated `wrap` method — without injecting them onto the root binding.
+    case liftsPeersToProxy(proxyTypePrefix: String, proxyScope: WireProxyScope)
+
     /// `@X(argument)` on a binding makes the binding depend on a graph value named by `argument` (an
     /// *input* edge), lifted onto the binding's contributor proxy. The **argument's kind** chooses what
     /// is injected:
