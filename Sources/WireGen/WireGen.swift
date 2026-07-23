@@ -72,20 +72,12 @@ struct WireGen {
             containerNames: Set(containerGraphs.map { $0.name }),
             resolvedBindingsByContainer: graphs.resolvedBindingsByContainer
         )
-        // Warnings surfaced during graph construction (ignored home-package
-        // `@Replaces`) flow out through each `GraphResult` — collect them across
-        // every graph so they print alongside the source-pattern warnings.
-        let graphWarnings =
-            defaultGraph.warnings
-            + containerGraphs.flatMap { $0.result.warnings }
-            + seedScopeOrchestrations.flatMap { $0.result.warnings }
-        let allDiagnostics = aggregate.warnings + crossFileDiagnostics + graphWarnings
-        printDiagnostics(allDiagnostics)
-        failIfAnyDiagnosticIsError(allDiagnostics)
-        failIfAnyGraphInvalid(
-            default: defaultGraph,
-            containers: containerGraphs,
-            seedScopes: seedScopeOrchestrations
+        reportDiagnosticsAndValidate(
+            aggregate: aggregate,
+            crossFileDiagnostics: crossFileDiagnostics,
+            defaultGraph: defaultGraph,
+            containerGraphs: containerGraphs,
+            seedScopeOrchestrations: seedScopeOrchestrations
         )
 
         let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
@@ -502,6 +494,34 @@ struct WireGen {
         return containerOrders
     }
 
+}
+
+/// Diagnostic reporting and fail-fast validation, run after every graph is built.
+extension WireGen {
+    /// Collect the run's warnings, print them, and abort on any error-severity
+    /// diagnostic or invalid graph. Graph-construction warnings (ignored home-package
+    /// `@Replaces`) flow out through each `GraphResult`, so they're gathered across
+    /// every graph and printed alongside the source-pattern warnings.
+    fileprivate static func reportDiagnosticsAndValidate(
+        aggregate: DiscoveryAggregate,
+        crossFileDiagnostics: [Diagnostic],
+        defaultGraph: GraphResult,
+        containerGraphs: [(name: String, result: GraphResult)],
+        seedScopeOrchestrations: [SeedScopeOrchestration]
+    ) {
+        let graphWarnings =
+            defaultGraph.warnings
+            + containerGraphs.flatMap { $0.result.warnings }
+            + seedScopeOrchestrations.flatMap { $0.result.warnings }
+        let allDiagnostics = aggregate.warnings + crossFileDiagnostics + graphWarnings
+        printDiagnostics(allDiagnostics)
+        failIfAnyDiagnosticIsError(allDiagnostics)
+        failIfAnyGraphInvalid(
+            default: defaultGraph,
+            containers: containerGraphs,
+            seedScopes: seedScopeOrchestrations
+        )
+    }
 }
 
 /// Ordering helpers: deterministic container iteration order and the
