@@ -193,6 +193,12 @@ package struct SeedScopeEmission: Sendable {
     /// the parent graph's aliases aren't in scope for the whole-scope façade, and
     /// the thunk's captured ones only exist if the bootstrap body itself promoted.
     package let existentialPromotions: [ExistentialPromotion]
+    /// The variant's `_<Key>Doubles` struct type, for a test-graph seed scope holding one or more
+    /// `@BindType`d (doubles-sourced) bindings. Non-nil threads a `doubles: <type>` parameter into the
+    /// scope's `bootstrap(seed:, <wireGraph>:, doubles:)` — matching the `doubles.<field>` access paths a
+    /// substituted binding resolves to. `nil` is a production scope (seed only), whose emission is
+    /// unchanged.
+    package let doublesType: String?
 
     package init(
         seedTypeExpression: String,
@@ -201,7 +207,8 @@ package struct SeedScopeEmission: Sendable {
         topologicalOrder: [DiscoveredBinding],
         borrowedBindingPropertyNames: Set<String>,
         edges: [BindingIdentity: [BindingIdentity]] = [:],
-        existentialPromotions: [ExistentialPromotion] = []
+        existentialPromotions: [ExistentialPromotion] = [],
+        doublesType: String? = nil
     ) {
         self.seedTypeExpression = seedTypeExpression
         self.identifierSuffix = identifierSuffix
@@ -210,6 +217,7 @@ package struct SeedScopeEmission: Sendable {
         self.borrowedBindingPropertyNames = borrowedBindingPropertyNames
         self.edges = edges
         self.existentialPromotions = existentialPromotions
+        self.doublesType = doublesType
     }
 }
 

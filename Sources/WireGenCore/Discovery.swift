@@ -730,6 +730,10 @@ package struct SourceFileDiscovery: Sendable {
     /// file. Aggregated across the module and emitted as
     /// `extension _WireGraph: <Protocol>`.
     package let graphConformances: [DiscoveredGraphConformance]
+    /// `TestingKey` declarations found in this file, each carrying the
+    /// `@BindType` substitutions stacked on it. A test target's variant graph
+    /// reads these to bind the named slots to their doubles.
+    package let testingKeys: [DiscoveredTestingKey]
 
     package init(
         allBindings: [Partition: [DiscoveredBinding]] = [:],
@@ -745,7 +749,8 @@ package struct SourceFileDiscovery: Sendable {
         aliasUseSites: [ContributionAliasUseSite] = [],
         factoryTemplates: [DiscoveredFactoryTemplate] = [],
         resultBuilders: [DiscoveredResultBuilder] = [],
-        graphConformances: [DiscoveredGraphConformance] = []
+        graphConformances: [DiscoveredGraphConformance] = [],
+        testingKeys: [DiscoveredTestingKey] = []
     ) {
         self.allBindings = allBindings
         self.imports = imports
@@ -761,6 +766,7 @@ package struct SourceFileDiscovery: Sendable {
         self.factoryTemplates = factoryTemplates
         self.resultBuilders = resultBuilders
         self.graphConformances = graphConformances
+        self.testingKeys = testingKeys
     }
 }
 
@@ -820,7 +826,8 @@ package func discover(
         aliasUseSites: visitor.aliasUseSites,
         factoryTemplates: visitor.factoryTemplates,
         resultBuilders: visitor.resultBuilders,
-        graphConformances: visitor.graphConformances
+        graphConformances: visitor.graphConformances,
+        testingKeys: visitor.testingKeys
     )
 }
 

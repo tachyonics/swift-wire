@@ -116,6 +116,9 @@ final class BindingDiscovery: SyntaxVisitor {
     /// Graph-conformance declarations (`WireGraphConformanceV1`) found in this
     /// file — an adapter asking Wire to emit a graph conformance to its protocol.
     var graphConformances: [DiscoveredGraphConformance] = []
+    /// `TestingKey` declarations found in this file, each carrying its
+    /// `@BindType` substitutions. A test target's variant graph reads these.
+    var testingKeys: [DiscoveredTestingKey] = []
     /// `@resultBuilder` types found in this file, with their fold result
     /// type — the producer-side result type a `BuilderKey` aggregate has.
     var resultBuilders: [DiscoveredResultBuilder] = []
@@ -418,6 +421,18 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         {
             bindingKeys.append(key)
+        }
+        if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
+            let key = testingKey(
+                from: node,
+                enclosingTypeNames: scopes.map(\.typeName),
+                enclosingAccessLevels: scopes.map(\.access),
+                sourcePath: sourcePath,
+                converter: converter,
+                module: module
+            )
+        {
+            testingKeys.append(key)
         }
         if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
             let definition = adapterAnnotation(

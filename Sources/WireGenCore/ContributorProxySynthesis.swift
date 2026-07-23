@@ -147,7 +147,8 @@ func contributorProxyBinding(
     for subject: DiscoveredScopeBoundType,
     key: String?,
     prefix: String,
-    proxyScope: DiscoveredProxyScope
+    proxyScope: DiscoveredProxyScope,
+    doubles: String? = nil
 ) -> DiscoveredScopeBoundType {
     let subjectDependencyType =
         subject.genericParameterNames.isEmpty
@@ -162,7 +163,9 @@ func contributorProxyBinding(
     if subjectIsNarrower, let seed = subject.scopeKey?.seed {
         primaryDependency = DependencyParameter(
             name: contributorProxyScopeEntryFieldName,  // labelled — stored/inited as `_wireEnterScope`
-            type: contributorScopeEntryThunkType(seed: seed, subject: subjectDependencyType),
+            // A test-graph variant threads its `_<Key>Doubles` in alongside the seed, so the thunk (and
+            // this field) takes `(Seed, Doubles)`; `doubles == nil` is the production proxy (seed only).
+            type: contributorScopeEntryThunkType(seed: seed, subject: subjectDependencyType, doubles: doubles),
             // Emission-only: emitted as the proxy's `_wireEnterScope` field/arg, but not graph-resolved
             // (synthesised inline as the capturing thunk). Ordering comes from `.scopeCapture` deps the
             // linking pass adds.

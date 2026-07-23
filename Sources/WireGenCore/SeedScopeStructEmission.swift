@@ -44,13 +44,22 @@ func appendSeedScopeStruct(
         parentGraphTypeReference: parentGraphTypeReference
     )
 
+    // A test-graph variant threads a `doubles` value in alongside the seed and wire graph: the scope
+    // holds one or more `@BindType`d bindings whose construction reads `doubles.<field>`, so the bootstrap
+    // grows a `doubles:` parameter (internal name `doubles`, matching those access paths). A production
+    // scope carries no doubles type, so the parameter and its forwarding are omitted — its emission is
+    // unchanged.
+    let doublesParameter = scope.doublesType.map { ", doubles: \($0)" } ?? ""
+    let doublesForward = scope.doublesType == nil ? "" : ", doubles: doubles"
+
     // The seed scope's bootstrap entry point on the `Wire` façade — keeps the
     // `(seed:, <parentGraph>:)` parameter shape (opaque-erased), forwarding to the private free function.
     entries.append(
         BootstrapEntry(
             signature:
-                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)) async throws -> \(lift.openStructReference)",
-            body: "try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal))"
+                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)\(doublesParameter)) async throws -> \(lift.openStructReference)",
+            body:
+                "try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal)\(doublesForward))"
         )
     )
 
@@ -94,7 +103,7 @@ func appendSeedScopeStruct(
 
     lines.append("")
     lines.append(
-        "private func \(bootstrapFunction)\(lift.genericClause)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(lift.parentGraphLifted)) async throws -> \(lift.openStructReference) {"
+        "private func \(bootstrapFunction)\(lift.genericClause)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(lift.parentGraphLifted)\(doublesParameter)) async throws -> \(lift.openStructReference) {"
     )
 
     if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {

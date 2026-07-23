@@ -64,7 +64,7 @@ package func linkingScopeEntryCaptures(
     return singletons.map { binding in
         guard case .scopeBound(let proxy) = binding,
             let thunk = proxy.dependencies.first(where: { $0.kind == .scopeEntryThunk }),
-            let (seed, _) = parsedContributorScopeEntryThunkType(thunk.type),
+            let (seed, _, _) = parsedContributorScopeEntryThunkType(thunk.type),
             let captures = capturesBySeed[seed], !captures.isEmpty
         else { return binding }
         return binding.appendingDependencies(captures)

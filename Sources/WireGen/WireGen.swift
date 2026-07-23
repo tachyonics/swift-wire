@@ -102,7 +102,17 @@ struct WireGen {
         // declares only its own-module factories; dependency-module factories are declared by
         // those modules' own plugin runs and referenced here via import. Construction/injection
         // (in `allBindings`) stays consumer-driven and spans every consumed factory.
-        let seedScopeOrders = collectSeedScopeOrders(seedScopeOrchestrations)
+        // Test-graph variants (M6a Phase 1) — one per `TestingKey`, emitted alongside the production
+        // graphs: the doubles-threaded variant seed scopes (`_<KeyRef>_<Seed>WireScope`, borrowing the
+        // production `_WireGraph`) and the variant's `_<Key>Doubles` struct. Built on the validated
+        // production bindings; a module with no `TestingKey` yields none, leaving the emitted output
+        // byte-for-byte unchanged.
+        let testingVariants = buildTestingVariants(in: aggregate)
+        failIfAnyTestingVariantInvalid(testingVariants)
+
+        let seedScopeOrders =
+            collectSeedScopeOrders(seedScopeOrchestrations)
+            + testingVariants.flatMap { $0.seedScopes }
         let generated = renderWireGraph(
             imports: imports,
             topologicalOrder: defaultOrder,
@@ -114,11 +124,12 @@ struct WireGen {
                 factories: preGraph.factories,
                 proxyIdentities: preGraph.proxyIdentities,
                 in: aggregate.allBindings
-            ),
-            // Rule 3 — the default graph's promotions plus every container's, so
+            ) + testingVariants.map { $0.doublesStruct },
+            // Rule 3 — the default graph's promotions plus every container's and every test variant's, so
             // each `appendStruct` finds the ones whose consumers it constructs.
             existentialPromotions: defaultGraph.existentialPromotions
                 + containerGraphs.flatMap { $0.result.existentialPromotions }
+                + testingVariants.flatMap { $0.existentialPromotions }
         )
         try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
         print("wrote \(graphOutputPath)")
@@ -188,6 +199,7 @@ struct WireGen {
             aggregate.factoryTemplates.append(contentsOf: result.factoryTemplates)
             aggregate.resultBuilders.append(contentsOf: result.resultBuilders)
             aggregate.graphConformances.append(contentsOf: result.graphConformances)
+            aggregate.testingKeys.append(contentsOf: result.testingKeys)
         }
         return aggregate
     }
@@ -524,6 +536,131 @@ extension WireGen {
     }
 }
 
+/// Test-graph variant construction — the executable half of the M6a Phase 1 primitives. Each
+/// `TestingKey` selects a graph variant: its `@BindType` substitutions rewrite the named slots into
+/// doubles-sourced bindings, and the variant is emitted alongside the production graphs as a
+/// container-shaped `_<KeyRef>WireGraph` + its seed scopes (threaded with the variant's `_<Key>Doubles`)
+/// + the doubles struct. The production graph is untouched — a module with no `TestingKey` emits exactly
+/// what it did before.
+extension WireGen {
+    /// One test-graph variant ready for emission: its `_<Key>Doubles` struct declaration, the
+    /// doubles-threaded variant seed scopes, the rule-3 promotions across them, and any scope that failed
+    /// validation (surfaced then aborted on).
+    fileprivate struct TestingVariant {
+        let doublesStruct: String
+        let seedScopes: [SeedScopeEmission]
+        let existentialPromotions: [ExistentialPromotion]
+        let validationFailures: [(name: String, errors: GraphResult.ValidationErrors)]
+    }
+
+    /// Build a variant per discovered `TestingKey` (deduped by reference). In Phase 1 (no cascade) a
+    /// `@BindType` substitutes a binding *inside a seed scope*, so the app graph is identical to
+    /// production: the variant reuses `_WireGraph` as its parent and emits only the affected seed scopes,
+    /// rewritten so each `@BindType`d slot resolves to `doubles.<field>` and disambiguated from the
+    /// production scope by the key (`_<KeyRef>_<Seed>WireScope`). Each such scope's bootstrap threads the
+    /// variant's `_<Key>Doubles` alongside the seed. (A distinct `_<Key>WireGraph` app graph becomes
+    /// meaningful in Phase 2, when `@Scopable` lifts app-scoped bindings and the app graph genuinely
+    /// diverges.)
+    fileprivate static func buildTestingVariants(in aggregate: DiscoveryAggregate) -> [TestingVariant] {
+        // Production default-graph singletons and the borrow set the variant scopes reuse — the variant
+        // borrows the production `_WireGraph`, substituting only inside the scope.
+        let defaultSingletons =
+            aggregate.allBindings
+            .filter { $0.key.container == nil && $0.key.scope == nil }
+            .flatMap { $0.value }
+        let borrows = syntheticSingletonBorrowBindings(from: defaultSingletons, inWireGraphOfType: "_WireGraph")
+        // Default-graph seed partitions, deterministically ordered by seed.
+        let seedPartitions =
+            aggregate.allBindings
+            .filter { $0.key.container == nil && $0.key.scope != nil }
+            .sorted { ($0.key.scope?.seed ?? "") < ($1.key.scope?.seed ?? "") }
+
+        var variants: [TestingVariant] = []
+        var seen: Set<String> = []
+        for key in aggregate.testingKeys {
+            guard seen.insert(key.keyReference).inserted else { continue }
+            let variantName = key.keyReference.split(separator: ".").map(String.init).joined(separator: "_")
+            let doublesType = doublesStructTypeName(forKeyReference: key.keyReference)
+
+            var doublesFields: [String: DoublesField] = [:]
+            var seedScopes: [SeedScopeEmission] = []
+            var promotions: [ExistentialPromotion] = []
+            var failures: [(name: String, errors: GraphResult.ValidationErrors)] = []
+
+            for (partition, bindings) in seedPartitions {
+                guard let seedKey = partition.scope else { continue }
+                let substituted = applyBindTypeSubstitutions(to: bindings, substitutions: key.substitutions)
+                // A scope the key doesn't touch needs no variant — production already covers it.
+                guard !substituted.doublesFields.isEmpty else { continue }
+                for field in substituted.doublesFields { doublesFields[field.name] = field }
+
+                let orchestration = orchestrateSeedScope(
+                    seedKey: seedKey,
+                    containerName: variantName,  // disambiguates the emitted names; the parent stays `_WireGraph`
+                    scopeBindings: substituted.bindings,
+                    borrowBindings: borrows,
+                    parentGraphType: "_WireGraph",
+                    typealiases: aggregate.typealiases,
+                    multibindingKeys: aggregate.multibindingKeys,
+                    resultBuilders: aggregate.resultBuilders,
+                    module: aggregate.module,
+                    homeModule: aggregate.module,
+                    externalModules: aggregate.externalModules
+                )
+                guard let order = orchestration.result.outcome.topologicalOrder else {
+                    if let errors = orchestration.result.outcome.validationErrors {
+                        failures.append(
+                            (name: "testing variant '\(key.keyReference)' scope '\(seedKey.seed)'", errors: errors)
+                        )
+                    }
+                    continue
+                }
+                promotions += orchestration.result.existentialPromotions
+                seedScopes.append(
+                    SeedScopeEmission(
+                        seedTypeExpression: orchestration.seedTypeExpression,
+                        identifierSuffix: orchestration.identifierSuffix,
+                        parentGraphType: orchestration.parentGraphType,
+                        topologicalOrder: order,
+                        borrowedBindingPropertyNames: orchestration.borrowedBindingPropertyNames,
+                        edges: orchestration.result.edges,
+                        existentialPromotions: orchestration.result.existentialPromotions,
+                        doublesType: doublesType
+                    )
+                )
+            }
+
+            guard !doublesFields.isEmpty || !failures.isEmpty else { continue }
+            variants.append(
+                TestingVariant(
+                    doublesStruct: renderDoublesStruct(
+                        typeName: doublesType,
+                        fields: doublesFields.values.sorted { $0.name < $1.name }
+                    ),
+                    seedScopes: seedScopes,
+                    existentialPromotions: promotions,
+                    validationFailures: failures
+                )
+            )
+        }
+        return variants
+    }
+
+    /// Write any test-graph variant's validation failures to stderr and `exit(1)` — same discipline as the
+    /// production graphs' `failIfAnyGraphInvalid`, so a broken variant fails the build rather than emitting
+    /// code that won't compile.
+    fileprivate static func failIfAnyTestingVariantInvalid(_ variants: [TestingVariant]) {
+        let failures = variants.flatMap { $0.validationFailures }
+        guard !failures.isEmpty else { return }
+        for failure in failures {
+            FileHandle.standardError.write(Data("\nin \(failure.name):\n".utf8))
+            FileHandle.standardError.write(Data(renderValidationErrors(failure.errors).utf8))
+            FileHandle.standardError.write(Data("\n".utf8))
+        }
+        exit(1)
+    }
+}
+
 /// Ordering helpers: deterministic container iteration order and the
 /// seed-scope flattening that feeds the emitter.
 extension WireGen {
@@ -663,6 +800,9 @@ private struct DiscoveryAggregate {
     var factoryTemplates: [DiscoveredFactoryTemplate] = []
     var resultBuilders: [DiscoveredResultBuilder] = []
     var graphConformances: [DiscoveredGraphConformance] = []
+    /// `TestingKey` declarations discovered across the module, each with its `@BindType` substitutions.
+    /// Each drives a test-graph variant emitted alongside the production graphs.
+    var testingKeys: [DiscoveredTestingKey] = []
 }
 
 /// The module-scope type declarations the graph consumer emits into its generated file: the consumed
