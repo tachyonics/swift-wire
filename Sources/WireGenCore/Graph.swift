@@ -25,17 +25,24 @@ package struct GraphResult: Sendable {
     /// satisfied a dependency, not which qualifier the consumer asked for.
     /// Empty for a failed graph.
     package let existentialPromotions: [ExistentialPromotion]
+    /// Warning-severity diagnostics surfaced during construction that don't fail
+    /// the build — currently the ignored home-package `@Replaces` warnings from
+    /// `resolveReplacements`. The build orchestration collects and prints these
+    /// alongside the other source-pattern warnings.
+    package let warnings: [Diagnostic]
 
     package init(
         outcome: Outcome,
         genericTemplates: [DiscoveredBinding],
         edges: [BindingIdentity: [BindingIdentity]] = [:],
-        existentialPromotions: [ExistentialPromotion] = []
+        existentialPromotions: [ExistentialPromotion] = [],
+        warnings: [Diagnostic] = []
     ) {
         self.outcome = outcome
         self.genericTemplates = genericTemplates
         self.edges = edges
         self.existentialPromotions = existentialPromotions
+        self.warnings = warnings
     }
 
     /// Either a valid topological order (the graph constructs cleanly)
@@ -58,19 +65,24 @@ package struct GraphResult: Sendable {
         package let duplicateBindings: [DuplicateBinding]
         package let identifierCollisions: [IdentifierCollision]
         package let invalidGenericSingletons: [InvalidGenericSingleton]
+        /// `@Replaces` misuses. Like duplicates, an invalid replacement
+        /// short-circuits the rest of validation — it's reported alone.
+        package let invalidReplacements: [InvalidReplacement]
 
         package init(
             cycles: [[DiscoveredBinding]],
             missingBindings: [MissingBinding],
             duplicateBindings: [DuplicateBinding],
             identifierCollisions: [IdentifierCollision] = [],
-            invalidGenericSingletons: [InvalidGenericSingleton] = []
+            invalidGenericSingletons: [InvalidGenericSingleton] = [],
+            invalidReplacements: [InvalidReplacement] = []
         ) {
             self.cycles = cycles
             self.missingBindings = missingBindings
             self.duplicateBindings = duplicateBindings
             self.identifierCollisions = identifierCollisions
             self.invalidGenericSingletons = invalidGenericSingletons
+            self.invalidReplacements = invalidReplacements
         }
     }
 }
@@ -411,11 +423,13 @@ private func parseGenericType(_ expression: String) -> (base: String, params: [S
 /// A pre-resolution validation failure (duplicate bindings,
 /// specialisation ambiguities, or identifier collisions) — each aborts
 /// before dependency resolution, so cycles/missing-bindings are empty.
-private func earlyValidationFailure(
+package func earlyValidationFailure(
     duplicateBindings: [DuplicateBinding] = [],
     identifierCollisions: [IdentifierCollision] = [],
     invalidGenericSingletons: [InvalidGenericSingleton] = [],
-    genericTemplates: [DiscoveredBinding]
+    invalidReplacements: [InvalidReplacement] = [],
+    genericTemplates: [DiscoveredBinding],
+    warnings: [Diagnostic] = []
 ) -> GraphResult {
     GraphResult(
         outcome: .validationFailed(
@@ -424,10 +438,12 @@ private func earlyValidationFailure(
                 missingBindings: [],
                 duplicateBindings: duplicateBindings,
                 identifierCollisions: identifierCollisions,
-                invalidGenericSingletons: invalidGenericSingletons
+                invalidGenericSingletons: invalidGenericSingletons,
+                invalidReplacements: invalidReplacements
             )
         ),
-        genericTemplates: genericTemplates
+        genericTemplates: genericTemplates,
+        warnings: warnings
     )
 }
 
@@ -435,7 +451,9 @@ package func buildDependencyGraph(
     from bindings: [DiscoveredBinding],
     typealiases: [DiscoveredTypealias] = [],
     multibindingKeys: [DiscoveredMultibindingKey] = [],
-    resultBuilders: [DiscoveredResultBuilder] = []
+    resultBuilders: [DiscoveredResultBuilder] = [],
+    homeModule: String? = nil,
+    externalModules: Set<String> = []
 ) -> GraphResult {
     // Fan-in: turn each declared multibinding key into a synthesised
     // aggregate binding (deps = its contributors). Aggregates then flow
@@ -457,11 +475,22 @@ package func buildDependencyGraph(
         )
     }
 
-    let (uniqueByIdentity, duplicates) = splitUniqueFromDuplicates(
-        partition.groupedByIdentity
-    )
-    if !duplicates.isEmpty {
-        return earlyValidationFailure(duplicateBindings: duplicates, genericTemplates: genericTemplates)
+    // `@Replaces` overrides then duplicate detection: a binding carrying `@Replaces`
+    // supersedes another binding for the slot it produces (typically one composed in
+    // from a dependency module), resolving the collision to the replacer instead of a
+    // duplicate error. Misuse (nothing to replace, two replacers, same-module) fails
+    // the build here, as does any residual duplicate.
+    let uniqueByIdentity: [BindingIdentity: DiscoveredBinding]
+    let replacementWarnings: [Diagnostic]
+    switch resolveReplacementsAndSplitDuplicates(
+        groupedByIdentity: partition.groupedByIdentity,
+        genericTemplates: genericTemplates,
+        homeModule: homeModule,
+        externalModules: externalModules
+    ) {
+    case .earlyExit(let result): return result
+    case .resolved(let unique, let warnings):
+        (uniqueByIdentity, replacementWarnings) = (unique, warnings)
     }
 
     // Generic specialisation: walk every binding's deps; for each
@@ -482,7 +511,8 @@ package func buildDependencyGraph(
     if !specialisationAmbiguities.isEmpty {
         return earlyValidationFailure(
             duplicateBindings: specialisationAmbiguities,
-            genericTemplates: genericTemplates
+            genericTemplates: genericTemplates,
+            warnings: replacementWarnings
         )
     }
 
@@ -490,7 +520,8 @@ package func buildDependencyGraph(
     if !identifierCollisions.isEmpty {
         return earlyValidationFailure(
             identifierCollisions: identifierCollisions,
-            genericTemplates: genericTemplates
+            genericTemplates: genericTemplates,
+            warnings: replacementWarnings
         )
     }
 
@@ -521,7 +552,8 @@ package func buildDependencyGraph(
         outcome: outcome,
         genericTemplates: genericTemplates,
         edges: dependencyEdges,
-        existentialPromotions: existentialPromotions
+        existentialPromotions: existentialPromotions,
+        warnings: replacementWarnings
     )
 }
 
@@ -568,7 +600,7 @@ private func partitionBindings(
 /// Split a grouped-by-identity map into uniquely-bound identities
 /// vs identities with multiple bindings. Iterates in sorted key
 /// order so the duplicates list is stable across runs.
-private func splitUniqueFromDuplicates(
+package func splitUniqueFromDuplicates(
     _ groupedByIdentity: [BindingIdentity: [DiscoveredBinding]]
 ) -> (
     unique: [BindingIdentity: DiscoveredBinding],

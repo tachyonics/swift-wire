@@ -42,7 +42,8 @@ package func enrichMissingBindingsWithCrossScopeHints(
                 identifierCollisions: errors.identifierCollisions
             )
         ),
-        genericTemplates: result.genericTemplates
+        genericTemplates: result.genericTemplates,
+        warnings: result.warnings
     )
 }
 

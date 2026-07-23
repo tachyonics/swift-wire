@@ -156,6 +156,15 @@ func setterAccessLevel(from modifiers: DeclModifierListSyntax) -> AccessLevel? {
 /// are the same scope, `Foo<Baz>` is a different scope. The build
 /// plugin's canonical-type-name whitespace normalisation kicks in
 /// during graph identity comparisons separately.
+/// The seed a `@Scoped(seed:)` namespace enum defines for its `@Provides`
+/// declarations — `nil` when the enum carries no `@Scoped`, or its seed can't
+/// be read. The scope-block sibling of `scopeMacroArguments`.
+func scopeBlockKey(in attributes: AttributeListSyntax) -> ScopeKey? {
+    attribute(in: attributes, named: "Scoped")
+        .flatMap { seedTypeExpression(from: $0) }
+        .map { ScopeKey(seed: $0) }
+}
+
 func seedTypeExpression(from attribute: AttributeSyntax) -> String? {
     guard case let .argumentList(args) = attribute.arguments else { return nil }
     guard let seedArg = args.first(where: { $0.label?.text == "seed" }) else { return nil }
@@ -178,6 +187,14 @@ func asTypeExpression(from attribute: AttributeSyntax) -> String? {
         let base = memberAccess.base
     else { return nil }
     return base.trimmedDescription
+}
+
+/// Whether the declaration carries a bare `@Replaces` marker. A `@Replaces`
+/// binding supersedes the slot it produces (its own `@Singleton(as:)` /
+/// `@Provides(key)` identity), so the marker takes no argument and this only
+/// records its presence — mirrors how the other marker attributes are detected.
+func hasReplacesMarker(in attributes: AttributeListSyntax) -> Bool {
+    hasAttribute(attributes, named: "Replaces")
 }
 
 /// The canonical key reference of a `@Factory(key)` template, or `nil` when the

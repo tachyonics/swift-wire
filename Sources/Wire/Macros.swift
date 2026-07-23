@@ -1,8 +1,8 @@
 // Public-facing macro declarations.
 //
 // The currently shipping surface is `@Singleton`, `@Scoped`,
-// `@Inject`, `@Provides`, `@Container`, `@Contributes`, and
-// `@Teardown`.
+// `@Inject`, `@Provides`, `@Container`, `@Contributes`,
+// `@Teardown`, and `@Replaces`.
 
 /// Declares a process-lifetime singleton. The macro generates:
 /// - A `static let key: BindingKey<Self>` for the auto-generated key.
@@ -299,3 +299,42 @@ public macro Teardown() = #externalMacro(module: "WireMacrosImpl", type: "Teardo
 @attached(peer)
 public macro Teardown<Value>(_ action: @Sendable (Value) async throws -> Void) =
     #externalMacro(module: "WireMacrosImpl", type: "TeardownMacro")
+
+/// Marks a binding as *superseding* the slot it already produces — the DI
+/// test-double / override primitive (the analog of Hilt's `@BindValue` /
+/// Spring's `@MockBean`). Attach it alongside a producer macro
+/// (`@Singleton(as:)` / `@Provides`); the slot it supersedes is the one that
+/// producer declares, so `@Replaces` takes no argument:
+///
+///     @Singleton(as: Repo.self)
+///     @Replaces
+///     struct FakeRepo: Repo { ... }
+///
+///     @Provides
+///     @Replaces
+///     static func fakeClient() -> SQSClient { ... }
+///
+/// A keyed producer supersedes its keyed slot for free — the key is part of
+/// the binding's own identity, so `@Provides(Repo.primary) @Replaces` targets
+/// the `Repo`/`primary` slot and `@Provides @Replaces` the unkeyed one; neither
+/// crosses into the other's slot:
+///
+///     @Provides(Repo.primary) @Replaces
+///     static let fakePrimary: Repo = FakeRepo()
+///
+/// When another binding — typically one composed in from a dependency
+/// module — also produces that slot, the `@Replaces` binding wins and the
+/// other is dropped from the graph, instead of the duplicate-binding error
+/// two ordinary bindings for one slot would raise. The motivating use case:
+/// a test target that composes an app's real bindings and substitutes a
+/// fake for one dependency.
+///
+/// `@Replaces` itself contributes no code — it's a marker the build plugin
+/// recognises during source scanning. There must be another binding for the
+/// slot to supersede, and at most one `@Replaces` may target a given slot per
+/// graph — the build plugin diagnoses each violation. The replaced binding
+/// must live in a different module: two same-module bindings for one slot are
+/// a plain duplicate, resolved directly rather than overridden.
+@attached(peer)
+public macro Replaces() =
+    #externalMacro(module: "WireMacrosImpl", type: "ReplacesMacro")

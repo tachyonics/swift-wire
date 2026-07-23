@@ -162,6 +162,58 @@ struct DiscoveryTests {
         #expect(result[0].allowUnused == true)
     }
 
+    @Test func singletonReplacesMarkerCaptured() {
+        let source = """
+            @Singleton(as: Repo.self)
+            @Replaces
+            struct FakeRepo: Repo {
+                @Inject init() {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "FakeRepo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].isReplacer)
+        #expect(DiscoveredBinding.scopeBound(result[0]).isReplacer)
+    }
+
+    @Test func providesKeyedReplacesMarkerCaptured() {
+        // A bare `@Replaces` on a keyed `@Provides(Client.primary)` producer is a
+        // replacer; the slot it supersedes is the binding's own keyed identity.
+        let source = """
+            @Provides(Client.primary)
+            @Replaces
+            func fakeClient() -> Client { Client() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "FakeKeyed.swift")
+        #expect(result.count == 1)
+        #expect(result[0].isReplacer)
+        #expect(result[0].keyIdentifier == "Client.primary")
+    }
+
+    @Test func singletonWithoutReplacesIsNotReplacer() {
+        let source = """
+            @Singleton(as: Repo.self)
+            struct RealRepo: Repo {
+                @Inject init() {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "RealRepo.swift")
+        #expect(result.count == 1)
+        #expect(!result[0].isReplacer)
+    }
+
+    @Test func providesReplacesMarkerCaptured() {
+        let source = """
+            @Provides
+            @Replaces
+            func fakeClient() -> Client { Client() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Fake.swift")
+        #expect(result.count == 1)
+        #expect(result[0].isReplacer)
+        #expect(DiscoveredBinding.provider(result[0]).isReplacer)
+    }
+
     @Test func singletonGenericParametersCaptured() {
         let source = """
             @Singleton

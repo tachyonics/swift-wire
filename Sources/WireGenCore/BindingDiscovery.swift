@@ -731,6 +731,7 @@ extension BindingDiscovery {
                     ),
                     allowUnused: allowUnused,
                     teardown: injectResult.teardown,
+                    isReplacer: hasReplacesMarker(in: attributes),
                     originModule: module
                 )
             )
@@ -895,6 +896,7 @@ extension BindingDiscovery {
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
                     teardown: teardown.action,
+                    isReplacer: hasReplacesMarker(in: node.attributes),
                     originModule: module
                 )
             )
@@ -983,17 +985,10 @@ extension BindingDiscovery {
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
                     teardown: teardown.action,
+                    isReplacer: hasReplacesMarker(in: node.attributes),
                     originModule: module
                 )
             )
         )
-    }
-
-    /// Seed a `@Scoped(seed:)` namespace enum defines for its `@Provides`
-    /// — `nil` when there's no `@Scoped` or its seed can't be read.
-    fileprivate func scopeBlockKey(in attributes: AttributeListSyntax) -> ScopeKey? {
-        attribute(in: attributes, named: "Scoped")
-            .flatMap { seedTypeExpression(from: $0) }
-            .map { ScopeKey(seed: $0) }
     }
 }

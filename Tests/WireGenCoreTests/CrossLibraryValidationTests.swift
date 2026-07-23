@@ -128,4 +128,49 @@ struct CrossLibraryValidationTests {
         #expect(rendered.contains("has multiple bindings"))
         #expect(!rendered.contains("module '"))
     }
+
+    /// Discover several `(module, source)` inputs, merge their default-graph
+    /// bindings, and build the graph — the `GraphResult` counterpart of
+    /// `validateMerged`, for asserting on the resolved order.
+    private func mergedGraph(_ modules: [(module: String, source: String)]) -> GraphResult {
+        var bindings: [DiscoveredBinding] = []
+        for (index, entry) in modules.enumerated() {
+            bindings +=
+                discover(
+                    in: entry.source,
+                    sourcePath: "\(entry.module)\(index).swift",
+                    module: entry.module
+                ).bindings
+        }
+        return buildDependencyGraph(from: bindings)
+    }
+
+    @Test func replacesSupersedesDependencyModuleBinding() throws {
+        // The spike-27 shape, end to end through discovery: module `AppServer`
+        // binds `some Repo` with `RealRepo`; the `AppTests` consumer binds a
+        // `FakeRepo` carrying a bare `@Replaces`. The merged graph resolves
+        // to Fake — RealRepo is dropped, no duplicate-binding error.
+        let appServer = """
+            @Singleton(as: Repo.self)
+            struct RealRepo: Repo {
+                @Inject init() {}
+            }
+            """
+        let appTests = """
+            @Singleton(as: Repo.self)
+            @Replaces
+            struct FakeRepo: Repo {
+                @Inject init() {}
+            }
+            """
+        let result = mergedGraph([("AppServer", appServer), ("AppTests", appTests)])
+        #expect(result.outcome.validationErrors == nil)
+        let order = try #require(result.outcome.topologicalOrder)
+        let names = order.compactMap { binding -> String? in
+            if case .scopeBound(let scopeBound) = binding { return scopeBound.typeName }
+            return nil
+        }
+        #expect(names == ["FakeRepo"])
+        #expect(!names.contains("RealRepo"))
+    }
 }

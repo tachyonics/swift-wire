@@ -223,4 +223,17 @@ extension DiscoveredBinding {
         case .aggregate: return nil
         }
     }
+
+    /// `true` when this binding carries a bare `@Replaces` marker — it supersedes
+    /// the slot it produces (its own identity). Read by the graph's
+    /// duplicate-binding resolution: a `@Replaces` binding wins over a same-slot
+    /// binding from another module instead of colliding with it. Aggregates are
+    /// never replacers.
+    package var isReplacer: Bool {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.isReplacer
+        case .provider(let provider): return provider.isReplacer
+        case .aggregate: return false
+        }
+    }
 }

@@ -12,5 +12,6 @@ struct WireMacrosPlugin: CompilerPlugin {
         ContainerMacro.self,
         ContributesMacro.self,
         TeardownMacro.self,
+        ReplacesMacro.self,
     ]
 }

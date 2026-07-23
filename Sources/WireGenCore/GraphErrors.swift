@@ -153,6 +153,41 @@ package struct DuplicateBinding: Sendable {
     }
 }
 
+/// A misuse of `@Replaces` caught during graph construction. The three
+/// reasons map to the three rules the override obeys: there must be a binding
+/// to replace, only one binding may replace a given slot, and the replaced
+/// binding must live in a *different* module (a same-module collision is a
+/// plain duplicate the user should resolve directly). Anchored at the
+/// offending `@Replaces` binding.
+package struct InvalidReplacement: Sendable {
+    package enum Reason: Sendable, Equatable {
+        /// No other binding produces the slot, so nothing is superseded — carries
+        /// the binding's own slot display (`some Repo`, `Client`, …).
+        case nothingToReplace(slot: String)
+        /// Two or more `@Replaces` bindings target the same key.
+        case multipleReplacers(key: String)
+        /// The replaced binding is in the replacer's own module.
+        case sameModule(module: String)
+    }
+    package let reason: Reason
+    /// The `@Replaces` binding at fault — the diagnostic's primary location.
+    package let replacer: DiscoveredBinding
+    /// Related bindings for `note:` lines — the other replacers
+    /// (`multipleReplacers`) or the same-module bindings (`sameModule`).
+    /// Empty for the two single-binding reasons.
+    package let relatedBindings: [DiscoveredBinding]
+
+    package init(
+        reason: Reason,
+        replacer: DiscoveredBinding,
+        relatedBindings: [DiscoveredBinding] = []
+    ) {
+        self.reason = reason
+        self.replacer = replacer
+        self.relatedBindings = relatedBindings
+    }
+}
+
 /// One source-pattern diagnostic surfaced by discovery or graph
 /// validation. Renders to stderr in the standard
 /// `file:line:col: <severity>: ...` format so build tools surface

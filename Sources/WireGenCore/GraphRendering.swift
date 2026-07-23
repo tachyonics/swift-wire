@@ -81,7 +81,39 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
     for invalid in errors.invalidGenericSingletons {
         lines.append(invalidGenericSingletonLine(invalid))
     }
+    for invalid in errors.invalidReplacements {
+        lines.append(contentsOf: replacementLines(invalid))
+    }
     return lines.joined(separator: "\n")
+}
+
+/// Render one `@Replaces` misuse: the primary `error:` at the offending
+/// binding, plus `note:` pointers at the related bindings where the reason
+/// names them (the other replacers, or the same-module bindings).
+private func replacementLines(_ invalid: InvalidReplacement) -> [String] {
+    let prefix = invalid.replacer.location.formattedPrefix
+    switch invalid.reason {
+    case .nothingToReplace(let slot):
+        return [
+            "\(prefix): error: @Replaces has nothing to supersede — no other binding produces '\(slot)'. Remove the @Replaces, or bind the type it should override."
+        ]
+    case .multipleReplacers(let key):
+        var lines = [
+            "\(prefix): error: '\(key)' has more than one @Replaces binding; at most one binding may supersede a given key"
+        ]
+        for other in invalid.relatedBindings {
+            lines.append("\(other.location.formattedPrefix): note: also replaces '\(key)' here")
+        }
+        return lines
+    case .sameModule(let module):
+        var lines = [
+            "\(prefix): error: @Replaces can't supersede a binding in the same module ('\(module)') — it overrides a binding composed from a dependency. Two same-module bindings for one key are a duplicate: remove one, or disambiguate with named keys."
+        ]
+        for other in invalid.relatedBindings {
+            lines.append("\(other.location.formattedPrefix): note: also bound here (module '\(module)')")
+        }
+        return lines
+    }
 }
 
 /// Render an invalid-generic-`@Singleton` error: a `@Singleton` can't be a single

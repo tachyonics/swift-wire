@@ -72,13 +72,12 @@ struct WireGen {
             containerNames: Set(containerGraphs.map { $0.name }),
             resolvedBindingsByContainer: graphs.resolvedBindingsByContainer
         )
-        let allDiagnostics = aggregate.warnings + crossFileDiagnostics
-        printDiagnostics(allDiagnostics)
-        failIfAnyDiagnosticIsError(allDiagnostics)
-        failIfAnyGraphInvalid(
-            default: defaultGraph,
-            containers: containerGraphs,
-            seedScopes: seedScopeOrchestrations
+        reportDiagnosticsAndValidate(
+            aggregate: aggregate,
+            crossFileDiagnostics: crossFileDiagnostics,
+            defaultGraph: defaultGraph,
+            containerGraphs: containerGraphs,
+            seedScopeOrchestrations: seedScopeOrchestrations
         )
 
         let defaultOrder = defaultGraph.outcome.topologicalOrder ?? []
@@ -269,7 +268,9 @@ struct WireGen {
                     typealiases: aggregate.typealiases,
                     multibindingKeys: aggregate.multibindingKeys,
                     resultBuilders: aggregate.resultBuilders,
-                    module: aggregate.module
+                    module: aggregate.module,
+                    homeModule: aggregate.module,
+                    externalModules: aggregate.externalModules
                 )
                 let enrichedResult = enrichMissingBindingsWithCrossScopeHints(
                     orchestration.result,
@@ -288,7 +289,9 @@ struct WireGen {
                 from: singletons,
                 typealiases: aggregate.typealiases,
                 multibindingKeys: aggregate.multibindingKeys,
-                resultBuilders: aggregate.resultBuilders
+                resultBuilders: aggregate.resultBuilders,
+                homeModule: aggregate.module,
+                externalModules: aggregate.externalModules
             )
             let graph = enrichMissingBindingsWithCrossScopeHints(
                 rawGraph,
@@ -491,6 +494,34 @@ struct WireGen {
         return containerOrders
     }
 
+}
+
+/// Diagnostic reporting and fail-fast validation, run after every graph is built.
+extension WireGen {
+    /// Collect the run's warnings, print them, and abort on any error-severity
+    /// diagnostic or invalid graph. Graph-construction warnings (ignored home-package
+    /// `@Replaces`) flow out through each `GraphResult`, so they're gathered across
+    /// every graph and printed alongside the source-pattern warnings.
+    fileprivate static func reportDiagnosticsAndValidate(
+        aggregate: DiscoveryAggregate,
+        crossFileDiagnostics: [Diagnostic],
+        defaultGraph: GraphResult,
+        containerGraphs: [(name: String, result: GraphResult)],
+        seedScopeOrchestrations: [SeedScopeOrchestration]
+    ) {
+        let graphWarnings =
+            defaultGraph.warnings
+            + containerGraphs.flatMap { $0.result.warnings }
+            + seedScopeOrchestrations.flatMap { $0.result.warnings }
+        let allDiagnostics = aggregate.warnings + crossFileDiagnostics + graphWarnings
+        printDiagnostics(allDiagnostics)
+        failIfAnyDiagnosticIsError(allDiagnostics)
+        failIfAnyGraphInvalid(
+            default: defaultGraph,
+            containers: containerGraphs,
+            seedScopes: seedScopeOrchestrations
+        )
+    }
 }
 
 /// Ordering helpers: deterministic container iteration order and the
