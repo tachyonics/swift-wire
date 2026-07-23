@@ -50,13 +50,6 @@ package func resolveReplacementsAndSplitDuplicates(
     return .resolved(uniqueByIdentity: uniqueByIdentity, warnings: replacementWarnings)
 }
 
-/// Whether a binding carries the bare `@Replaces` marker — the precondition for
-/// it to act as a replacer. The slot it supersedes is the one it produces (its
-/// own identity), so there's nothing further to match.
-private func isValidReplacer(_ binding: DiscoveredBinding) -> Bool {
-    binding.isReplacer
-}
-
 /// Apply `@Replaces` overrides to the identity-grouped bindings before
 /// duplicate detection. For each slot a binding supersedes, drop the bindings
 /// it replaces and keep the replacer alone — so a consumer's `@Replaces`
@@ -88,15 +81,13 @@ private func resolveReplacements(
     invalidReplacements: [InvalidReplacement],
     warnings: [Diagnostic]
 ) {
-    // A replacer's `@Replaces` is honoured only from the home module. When no
-    // home module is supplied (unit tests that don't model modules), honour all.
-    func isHonoured(_ binding: DiscoveredBinding) -> Bool {
+    // A replacer that actually supersedes: it carries `@Replaces`, and that
+    // `@Replaces` is honoured — only from the home module, or from any module when
+    // no home module is modelled (the framework-agnostic unit tests that don't).
+    func isActiveReplacer(_ binding: DiscoveredBinding) -> Bool {
+        guard binding.isReplacer else { return false }
         guard let homeModule else { return true }
         return binding.originModule == homeModule
-    }
-    // A honoured, well-formed replacer — the precondition to supersede a slot.
-    func isActiveReplacer(_ binding: DiscoveredBinding) -> Bool {
-        isHonoured(binding) && isValidReplacer(binding)
     }
 
     var invalid: [InvalidReplacement] = []
