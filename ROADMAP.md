@@ -30,8 +30,8 @@ expand on what lands when.
   - **M5.4 — request-scoped controllers.** A `@Scoped(seed:)` controller becomes an app-scoped proxy contributor whose *generated* registration embeds per-request scope entry (weak back-ref to the app graph + an injected scope-entry thunk), reusing the shared "adapter replaces the binding" primitive. Each is a **per-request reachability root** — its scope-entry constructs only its own transitive request-scoped subgraph (the M7b reachability concept at the request-construction layer, structural here, not deferrable). Sub-milestones: M5.4E `@ErrorResponse` (error→status tiers), M5.4R `@RawRoute(.role)`, M5.4.5 request-scope teardown, M5.4.6 per-root reachability. Detail in the archived [M5.4 plan](Documentation/Archive/M5_4_PLAN.md).
   - **M5.5 — `@WireMVCBootstrap` composition root.** The WireMVC-native Tier-2 macro: a `@Singleton` composition-root struct whose plugin generates the program entry point (`@main`) — no hand-written `main.swift`. It folds in the `@NotFound` fallback, `@ErrorResponse` global tiers, an optional `introspect()` mount (`mountIntrospectionAt()`, basic or route-scope-guarded), and **global `@Middleware`** as a front layer: a single `GlobalMiddlewareHandler` wraps the finalized router once in the `@main` — O(1) in route count, plain routes untouched, the miss endpoint covered for free (the wrapper sits above the router's 404). It rides swift-wire's `.liftsPeersToProxy` capability (a keyless `.contributesProxy` variant that reattributes the root's `@Middleware` factories onto a synthesized proxy). **Deliberately proposal-native, not a `@WireHummingbird`/`@WireVapor` macro** — a composition-root macro fights the grain in those frameworks' own ecosystems. Detail in the archived [M5.5 plan](Documentation/Archive/M5_5_PLAN.md).
   - **M5.6 — `WireMVCAbstraction.md` rewrite (doc debt, still open).** The one remaining M5 thread: fold the abstraction note's Tier-1/Tier-2 progressive-adoption content into [WireMVCDesign.md](Documentation/Notes/WireMVCDesign.md) and retire the `_wireRegister` model. Cheaper against the settled surface; slots into the M6-era doc pass.
-- **M6: surface completeness / DX.** The remaining pre-1.0 *surface* work — features that make idiomatic apps expressible and unblock the last examples, ahead of M7's invisible perf passes. The principle is *complete the surface before optimizing it*. Ordered by leverage × cost:
-  - **M6a — build-without-serve seam for `@WireMVCBootstrap`.** The generated `@main` serves directly, so a `@WireMVCBootstrap` app can't be exercised in a test without binding the real port. Factor a `buildApplication`-style entry (config-injectable host/port, `finalize()`-without-serve) so an ephemeral-port test drives the fully-wired app without serving. The concrete blocker to `SwiftHttpServerExample` adopting the composition root; small, extends M5.5. (This is the *build/test-seam* half of "test-only support"; the *fine-grained binding-override* half stays deferred as `@Replaces` / container hierarchies below — prod/test **container selection** already works today.)
+- **M6: surface completeness / DX.** The remaining pre-1.0 *surface* work — features that make idiomatic apps expressible and unblock the last examples, ahead of M7's invisible perf passes. The principle is *complete the surface before optimizing it*. Ordered so foundational, example-unblocking work leads:
+  - **M6a — testing (`@WireMVCBootstrap` seam + `@Replaces`).** Make a `@WireMVCBootstrap` app testable end-to-end. Three deliverables: (1) **seam codegen** — `@WireMVCBootstrap` generates a `withTestServer { client in … }` entry over a build-without-serve seam; the generated code owns serving, reading the bound port, and cancellation, so a test writes only assertions against a typed client (the `@main` stays generated in the executable). (2) **`@Replaces`** — a test target is *its own Wire consumer* (its own build plugin, depending on the app executable directly, so it regenerates the graph) and substitutes one binding via `@Replaces`: a consumer binding **superseding a sibling module's binding for the same key**, instead of the current duplicate-binding error. (3) a **`WireMVCTesting`** typed client (`post`/`get` → `.status`/`.json(T.self)`) plus a `SwiftHttpServerExample` migration demonstrating both an integration test (real backend) and a Docker-free `@Replaces` fake-dependency test. Validated by spikes **26** (the seam factors trivially — return the concrete unfrozen router, `finalize()` at the serve site; no graph-generic gymnastics) and **27** (a test target composes an executable dependency's bindings with no `@main` collision — the app needs a `_WireExports.swift` marker and `package`-access cross-module bindings; **no library restructure**). The port needs **no override machinery** — the harness owns it (the test creates the only client). This **promotes the former deferred `@Replaces`** (below) into M6a; it's the biggest M6 piece and leads because it unblocks the last example. Sequence: seam codegen → `@Replaces` → client + example.
   - **M6b — request-logger seam.** The request-scope witness currently collects but discards the request context. Thread it through so a per-request logger (request-id metadata into request-scoped controllers, cross-runtime) is a first-class convenience on top of the already-shipped request-scope injection — not a new primitive. Small; completes the request-scope observability story.
   - **M6c — `@Configuration` / WireConfiguration.** The swift-configuration adapter: `@Configuration(forKey:default:)` at `@Inject`/`@Provides` parameter sites, desugared to a synthesized `ConfigReader` binding — sugar over the graph machinery, riding the shared "adapter replaces the binding" primitive (already built for M5.4 request scope). The broadest DX win — every example hand-rolls config. Full design in the [WireConfiguration preview](#wireconfiguration-scheduled-as-m6c) below.
   - **M6d — advanced OpenAPI integration.** Bring WireMVC's request-scope + typed-param/response DX (`@JSONResponse`/`@JSONInput`-style ergonomics) onto OpenAPI operations, beyond today's spec-driven-handlers-only surface. Genuinely new (not a prior deferral, so it needs a design pass before build); the largest of the four and sequenced last.
@@ -82,6 +82,62 @@ it**, not on a fixed schedule — the *decision point* in each names the trigger
 Opaque-type support (once listed here) landed in iterations 9–10; the remaining
 candidates:
 
+### Shaping the graph: config vs `@Container` vs `@Replaces` (three tools, three intents)
+
+Three of the deferred features below (`@Configuration`/config, `@Container(includes:)`,
+`@Replaces`) all "make the graph different," which invites treating them as
+alternatives — especially when reaching for a **testing** story. They aren't
+alternatives; they sit at three points on a granularity axis and answer three
+different questions, and every mature DI system ships all three (Spring
+`@Profile` + `@MockBean` + `@ConfigurationProperties`; Dagger `@Module`/`@Component`
++ Hilt `@BindValue` + config):
+
+| Tool | Granularity | Intent | Prior-art twin |
+|---|---|---|---|
+| **config / `@Configuration`** | a *value* | 12-factor: same graph, different inputs (port, URL, pool size) | Spring `@ConfigurationProperties` / `@DynamicPropertySource` |
+| **`@Container` / `@Container(includes:)`** | a *coherent, named set of bindings* | select one of several **structural** variants wholesale | Spring `@Profile` / Dagger `@Module`+`@Component` |
+| **`@Replaces`** | a *single binding* | surgically swap one thing in an otherwise-intact graph | Spring `@MockBean` / Hilt `@BindValue` |
+
+Consequences for how these get built and sequenced:
+
+1. **Testing draws on two of them at different resolutions, and neither is "the
+   testing feature."** A **value** override (an ephemeral test port, a container's
+   mapped DB port) is config's job — no graph surgery (this is what the examples'
+   integration tests already do via env). A **surgical** override (swap one real
+   dependency for a fake, so a unit test needs no Docker) is `@Replaces`'s job. A
+   coarse **whole-"test-environment"** swap (an all-in-memory stack selected
+   wholesale) is a `@Container` use, à la `@ActiveProfiles("test")`. So the
+   build-without-serve seam (M6a) needs *none* of this machinery — the port is a
+   value; config handles it.
+
+2. **`@Container`'s enduring home is environments and modularity, not testing.**
+   Its non-test justifications: environments that differ *structurally* (dev binds
+   an in-memory repo + fake mailer; prod binds real DynamoDB + SES — a coherent set
+   of implementations, not values); reusable binding fragments composed into a graph
+   (`@Container(includes:)` = Dagger `@Module`); and multiple entry points in one
+   package each selecting a graph. **Caveat — its territory is narrower than classic
+   Spring suggests:** in a config-driven (12-factor) app, config absorbs the *value*
+   variation and `@Replaces` absorbs the *surgical-test* variation, leaving `@Container`
+   composition only the residue — "swap a coherent set of *implementations* as a named
+   unit." Real, but narrow. If no such structural-variation use case appears (the
+   examples' three runtimes are separate *packages*, not containers in one package;
+   task-cluster is a single deploy), container composition legitimately stays a
+   documented design space indefinitely. **So don't build `@Container(includes:)` for
+   testing reasons** — its trigger is a structural-environment or modularity case.
+
+3. **The bootstrap↔container plumbing has standing regardless.** A `@WireMVCBootstrap`'s
+   generated `@main` bootstraps the default graph (`Wire.bootstrap()`); associating a
+   bootstrap with a chosen container ("which environment does this app boot") and
+   letting an entry point run it against a selected container is a real gap — but it's
+   justified by *production environment selection*, not testing, and it's the seam any
+   `@Container`-based path (test or prod) would need.
+
+Each has its own forcing case (below): config/`@Configuration` is **M6c**; **`@Replaces`
+is now scheduled in M6a** (its surgical-test trigger arrived — the `SwiftHttpServerExample`
+fake-dependency test); `@Container(includes:)` stays deferred behind a structural-variation
+trigger that hasn't appeared. So M6a builds `@Replaces`, while the coarse container band
+stays a documented design space.
+
 ### `Resolver` protocol
 
 The README describes a public `Resolver` protocol surfacing in three places: `Provider<T>` lazily resolving into a request scope, runtime `introspect()` for ops/admin endpoints, and explicit escape-hatch resolution. None of these have a concrete iteration-1 use case, and the adapter-contract redesign (direct-injection `_wireRegister` parameters) removed adapters as a fourth user.
@@ -94,6 +150,8 @@ The protocol is therefore deferred. Iteration 1's bootstrap is a concrete struct
 If neither iteration ends up needing the protocol, it never lands. If one does, the resulting design is shaped by that real use case rather than M1-time speculation. The README's references to `Resolver` describe the *eventual* design and don't need to change at this point — they describe a target that will either be reached or revised once the use case clarifies.
 
 ### Library-binding override (`@Replaces`)
+
+> **Now scheduled as part of M6a (testing)** — the trigger arrived: the `SwiftHttpServerExample` fake-dependency test. The *surgical single-binding* band of [three tools, three intents](#shaping-the-graph-config-vs-container-vs-replaces-three-tools-three-intents) — the DI-idiomatic **test-double** primitive (Hilt `@BindValue`). Spike-27 pinned the exact mechanism: a consumer's binding must **supersede a sibling module's binding for the same key**, where today WireGen's graph generation raises a duplicate-binding diagnostic. The design sketch below (a `@Provides @Replaces(X.self)` in the consumer) is what M6a builds; the "when a use case forces it" framing is now satisfied.
 
 The README's "What's not in scope" section excludes fine-grained binding override across containers — when you select a `@Container`, it's the whole graph for that run, not an overlay on the default. That stance still holds, but a narrower form of override has surfaced as a concrete future use case worth capturing now: replacing a single library-provided `@Singleton` with a consumer-provided `@Provides`.
 
@@ -166,6 +224,8 @@ Why deferred:
 Decision point: when an adopter hits the same-name limit (wanting multiple unrelated types — not just multiple declarations of the same enum — to contribute to one logical container), that's the signal to build `ContainerKey`. Until then, document the design space here and move on.
 
 ### Container composition / hierarchies (`@Container(includes:)`)
+
+> The *coherent-set-of-bindings* band of [three tools, three intents](#shaping-the-graph-config-vs-container-vs-replaces-three-tools-three-intents) — for **structural** environment variation and modularity, **not** testing (config eats value-variation, `@Replaces` eats surgical-test). Trigger: an app that swaps a coherent set of *implementations* as a named unit in one package. Narrow; may never land if all environment differences are config values.
 
 A separate axis from `ContainerKey`: composition lets one container *build from* others by including their bindings, instead of multiple types *contributing to* a single container. The motivating use case is environment-specific configuration — a shared `BaseConfig` plus per-environment overlays:
 

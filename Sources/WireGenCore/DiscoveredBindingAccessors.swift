@@ -223,4 +223,17 @@ extension DiscoveredBinding {
         case .aggregate: return nil
         }
     }
+
+    /// The identity slot a `@Replaces` binding supersedes — the base type and
+    /// optional key from `@Replaces(T.self)` / `@Replaces(T.key)` on this
+    /// binding's producer, or `nil` for an ordinary binding. Read by the graph's
+    /// duplicate-binding resolution: a binding carrying this wins over a
+    /// same-slot binding from another module instead of colliding with it.
+    package var replacesTarget: ReplacesTarget? {
+        switch self {
+        case .scopeBound(let scopeBound): return scopeBound.replaces
+        case .provider(let provider): return provider.replaces
+        case .aggregate: return nil
+        }
+    }
 }

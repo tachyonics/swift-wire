@@ -25,17 +25,24 @@ package struct GraphResult: Sendable {
     /// satisfied a dependency, not which qualifier the consumer asked for.
     /// Empty for a failed graph.
     package let existentialPromotions: [ExistentialPromotion]
+    /// Warning-severity diagnostics surfaced during construction that don't fail
+    /// the build — currently the ignored home-package `@Replaces` warnings from
+    /// `resolveReplacements`. The build orchestration collects and prints these
+    /// alongside the other source-pattern warnings.
+    package let warnings: [Diagnostic]
 
     package init(
         outcome: Outcome,
         genericTemplates: [DiscoveredBinding],
         edges: [BindingIdentity: [BindingIdentity]] = [:],
-        existentialPromotions: [ExistentialPromotion] = []
+        existentialPromotions: [ExistentialPromotion] = [],
+        warnings: [Diagnostic] = []
     ) {
         self.outcome = outcome
         self.genericTemplates = genericTemplates
         self.edges = edges
         self.existentialPromotions = existentialPromotions
+        self.warnings = warnings
     }
 
     /// Either a valid topological order (the graph constructs cleanly)
@@ -58,19 +65,24 @@ package struct GraphResult: Sendable {
         package let duplicateBindings: [DuplicateBinding]
         package let identifierCollisions: [IdentifierCollision]
         package let invalidGenericSingletons: [InvalidGenericSingleton]
+        /// `@Replaces` misuses. Like duplicates, an invalid replacement
+        /// short-circuits the rest of validation — it's reported alone.
+        package let invalidReplacements: [InvalidReplacement]
 
         package init(
             cycles: [[DiscoveredBinding]],
             missingBindings: [MissingBinding],
             duplicateBindings: [DuplicateBinding],
             identifierCollisions: [IdentifierCollision] = [],
-            invalidGenericSingletons: [InvalidGenericSingleton] = []
+            invalidGenericSingletons: [InvalidGenericSingleton] = [],
+            invalidReplacements: [InvalidReplacement] = []
         ) {
             self.cycles = cycles
             self.missingBindings = missingBindings
             self.duplicateBindings = duplicateBindings
             self.identifierCollisions = identifierCollisions
             self.invalidGenericSingletons = invalidGenericSingletons
+            self.invalidReplacements = invalidReplacements
         }
     }
 }
@@ -415,7 +427,9 @@ private func earlyValidationFailure(
     duplicateBindings: [DuplicateBinding] = [],
     identifierCollisions: [IdentifierCollision] = [],
     invalidGenericSingletons: [InvalidGenericSingleton] = [],
-    genericTemplates: [DiscoveredBinding]
+    invalidReplacements: [InvalidReplacement] = [],
+    genericTemplates: [DiscoveredBinding],
+    warnings: [Diagnostic] = []
 ) -> GraphResult {
     GraphResult(
         outcome: .validationFailed(
@@ -424,10 +438,12 @@ private func earlyValidationFailure(
                 missingBindings: [],
                 duplicateBindings: duplicateBindings,
                 identifierCollisions: identifierCollisions,
-                invalidGenericSingletons: invalidGenericSingletons
+                invalidGenericSingletons: invalidGenericSingletons,
+                invalidReplacements: invalidReplacements
             )
         ),
-        genericTemplates: genericTemplates
+        genericTemplates: genericTemplates,
+        warnings: warnings
     )
 }
 
@@ -435,7 +451,9 @@ package func buildDependencyGraph(
     from bindings: [DiscoveredBinding],
     typealiases: [DiscoveredTypealias] = [],
     multibindingKeys: [DiscoveredMultibindingKey] = [],
-    resultBuilders: [DiscoveredResultBuilder] = []
+    resultBuilders: [DiscoveredResultBuilder] = [],
+    homeModule: String? = nil,
+    externalModules: Set<String> = []
 ) -> GraphResult {
     // Fan-in: turn each declared multibinding key into a synthesised
     // aggregate binding (deps = its contributors). Aggregates then flow
@@ -457,11 +475,33 @@ package func buildDependencyGraph(
         )
     }
 
+    // `@Replaces` overrides: a binding carrying `@Replaces(T)` supersedes another
+    // binding for key `T` (typically one composed in from a dependency module), so
+    // the collision resolves to the replacer instead of a duplicate error. Misuse
+    // (wrong key, nothing to replace, two replacers, same-module) fails the build here.
+    let replacement = resolveReplacements(
+        partition.groupedByIdentity,
+        homeModule: homeModule,
+        externalModules: externalModules
+    )
+    let replacementWarnings = replacement.warnings
+    if !replacement.invalidReplacements.isEmpty {
+        return earlyValidationFailure(
+            invalidReplacements: replacement.invalidReplacements,
+            genericTemplates: genericTemplates,
+            warnings: replacementWarnings
+        )
+    }
+
     let (uniqueByIdentity, duplicates) = splitUniqueFromDuplicates(
-        partition.groupedByIdentity
+        replacement.grouped
     )
     if !duplicates.isEmpty {
-        return earlyValidationFailure(duplicateBindings: duplicates, genericTemplates: genericTemplates)
+        return earlyValidationFailure(
+            duplicateBindings: duplicates,
+            genericTemplates: genericTemplates,
+            warnings: replacementWarnings
+        )
     }
 
     // Generic specialisation: walk every binding's deps; for each
@@ -482,7 +522,8 @@ package func buildDependencyGraph(
     if !specialisationAmbiguities.isEmpty {
         return earlyValidationFailure(
             duplicateBindings: specialisationAmbiguities,
-            genericTemplates: genericTemplates
+            genericTemplates: genericTemplates,
+            warnings: replacementWarnings
         )
     }
 
@@ -490,7 +531,8 @@ package func buildDependencyGraph(
     if !identifierCollisions.isEmpty {
         return earlyValidationFailure(
             identifierCollisions: identifierCollisions,
-            genericTemplates: genericTemplates
+            genericTemplates: genericTemplates,
+            warnings: replacementWarnings
         )
     }
 
@@ -521,7 +563,8 @@ package func buildDependencyGraph(
         outcome: outcome,
         genericTemplates: genericTemplates,
         edges: dependencyEdges,
-        existentialPromotions: existentialPromotions
+        existentialPromotions: existentialPromotions,
+        warnings: replacementWarnings
     )
 }
 
@@ -609,6 +652,175 @@ private func splitUniqueFromDuplicates(
         for identity in identities { unique[identity] = nil }
     }
     return (unique, duplicates)
+}
+
+/// Whether `target` — the slot named in `@Replaces(...)` — is the same graph slot
+/// the binding produces. `@Singleton(as: Repo.self)` binds `some Repo` while the
+/// user writes `@Replaces(Repo.self)`, so the leading `some`/`any` qualifier is
+/// folded away: base type and optionality must match. The key is part of the
+/// slot too — `@Replaces(Repo.self)` names the unkeyed `Repo`, `@Replaces(Repo.primary)`
+/// names `Repo`/`primary`, and neither crosses into the other's slot — so the
+/// target's key must equal the produced identity's key (both `nil`, or equal text).
+private func replacesTargetMatchesProducedKey(
+    _ target: ReplacesTarget,
+    _ produced: BindingIdentity
+) -> Bool {
+    let components = identityComponents(target.base)
+    return components.base == produced.base
+        && components.isOptional == produced.isOptional
+        && target.key == produced.key
+}
+
+/// Whether a binding carries a well-formed `@Replaces` naming the key it
+/// produces — the precondition for it to act as a replacer.
+private func isValidReplacer(_ binding: DiscoveredBinding) -> Bool {
+    guard let target = binding.replacesTarget else { return false }
+    return replacesTargetMatchesProducedKey(target, binding.identity)
+}
+
+/// Apply `@Replaces` overrides to the identity-grouped bindings before
+/// duplicate detection. For each slot a binding supersedes, drop the bindings
+/// it replaces and keep the replacer alone — so a consumer's `@Replaces`
+/// binding wins over a dependency module's binding for the same slot instead
+/// of colliding with it.
+///
+/// Honouring `@Replaces` is a privilege of the composition root's own module.
+/// `homeModule` is that module (the consumer target being built), `externalModules`
+/// the dependencies pulled from external packages. Three tiers per replacer:
+///   - `originModule == homeModule` → **honoured**, then the rules below apply;
+///   - a home-package module (non-external, but not the home module) → **ignored
+///     with a warning**: the override doesn't fire (a normal duplicate may then
+///     surface, or the bindings simply coexist);
+///   - an external-package module → **ignored silently**.
+/// `homeModule == nil` treats every `@Replaces` as honoured — the behaviour the
+/// framework-agnostic unit tests that don't model modules rely on.
+///
+/// Honoured replacers still obey the four rules, surfaced as validation errors:
+/// 1. a `@Replaces` whose declared target isn't the slot it produces;
+/// 2. a `@Replaces` with no sibling binding to supersede;
+/// 3. two `@Replaces` bindings targeting one slot; and
+/// 4. a `@Replaces` superseding a binding from its own module (a plain
+///    duplicate the user should resolve directly, not override).
+private func resolveReplacements(
+    _ groupedByIdentity: [BindingIdentity: [DiscoveredBinding]],
+    homeModule: String?,
+    externalModules: Set<String>
+) -> (
+    grouped: [BindingIdentity: [DiscoveredBinding]],
+    invalidReplacements: [InvalidReplacement],
+    warnings: [Diagnostic]
+) {
+    // A replacer's `@Replaces` is honoured only from the home module. When no
+    // home module is supplied (unit tests that don't model modules), honour all.
+    func isHonoured(_ binding: DiscoveredBinding) -> Bool {
+        guard let homeModule else { return true }
+        return binding.originModule == homeModule
+    }
+    // A honoured, well-formed replacer — the precondition to supersede a slot.
+    func isActiveReplacer(_ binding: DiscoveredBinding) -> Bool {
+        isHonoured(binding) && isValidReplacer(binding)
+    }
+
+    var invalid: [InvalidReplacement] = []
+    var warnings: [Diagnostic] = []
+    let orderedBindings = groupedByIdentity.keys.sorted().flatMap { groupedByIdentity[$0] ?? [] }
+
+    // A `@Replaces` in a home-package module (non-external, but not the home
+    // module) can't override — only the composition root's own module may. Warn
+    // so the ignored override isn't silently mistaken for taking effect. External
+    // modules are ignored silently (no warning).
+    if let homeModule {
+        for binding in orderedBindings {
+            guard let target = binding.replacesTarget,
+                binding.originModule != homeModule,
+                !externalModules.contains(binding.originModule)
+            else { continue }
+            warnings.append(
+                Diagnostic(
+                    location: binding.location,
+                    message:
+                        "@Replaces on '\(target.base)' in module '\(binding.originModule)' has no effect — only the composition root's own module ('\(homeModule)') may override a binding",
+                    severity: .warning
+                )
+            )
+        }
+    }
+
+    // (1) A honoured `@Replaces` binding whose declared target doesn't match the
+    // slot it produces names a slot it isn't in, so it could never supersede the
+    // right binding. Only honoured replacers are checked — an ignored one's
+    // `@Replaces` is inert, not an error.
+    for binding in orderedBindings {
+        guard let target = binding.replacesTarget, isHonoured(binding) else { continue }
+        if !replacesTargetMatchesProducedKey(target, binding.identity) {
+            invalid.append(
+                InvalidReplacement(
+                    reason: .producedKeyMismatch(
+                        declaredTarget: target,
+                        producedType: binding.boundType
+                    ),
+                    replacer: binding
+                )
+            )
+        }
+    }
+
+    var grouped = groupedByIdentity
+    for identity in groupedByIdentity.keys.sorted() {
+        let group = groupedByIdentity[identity] ?? []
+        let replacers = group.filter(isActiveReplacer)
+        guard !replacers.isEmpty else { continue }
+
+        // (3) At most one replacer per slot — two would each claim to win.
+        guard replacers.count == 1 else {
+            invalid.append(
+                InvalidReplacement(
+                    reason: .multipleReplacers(key: identity.displayType),
+                    replacer: replacers[0],
+                    relatedBindings: Array(replacers.dropFirst())
+                )
+            )
+            continue
+        }
+        let replacer = replacers[0]
+        // Everything the replacer supersedes — every binding in the slot that
+        // isn't the active replacer itself (including any ignored replacer, which
+        // coexists as an ordinary binding).
+        let replaced = group.filter { !isActiveReplacer($0) }
+
+        // (2) Nothing to supersede — a `@Replaces` with no sibling for its slot
+        // is a mistake or a stale override.
+        guard !replaced.isEmpty else {
+            invalid.append(
+                InvalidReplacement(
+                    reason: .nothingToReplace(
+                        declaredTarget: replacer.replacesTarget ?? ReplacesTarget(base: replacer.boundType, key: nil)
+                    ),
+                    replacer: replacer
+                )
+            )
+            continue
+        }
+
+        // (4) Replacing a binding in your own module is just a duplicate you
+        // should resolve directly (remove one, or key them apart) — `@Replaces`
+        // is for superseding a *dependency*'s binding.
+        let sameModule = replaced.filter { $0.originModule == replacer.originModule }
+        guard sameModule.isEmpty else {
+            invalid.append(
+                InvalidReplacement(
+                    reason: .sameModule(module: replacer.originModule),
+                    replacer: replacer,
+                    relatedBindings: sameModule
+                )
+            )
+            continue
+        }
+
+        // Valid override: the replacer is the sole binding for the slot.
+        grouped[identity] = [replacer]
+    }
+    return (grouped, invalid, warnings)
 }
 
 /// Group the resolved bindings by their generated accessor name and

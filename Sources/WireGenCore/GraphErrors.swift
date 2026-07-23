@@ -153,6 +153,44 @@ package struct DuplicateBinding: Sendable {
     }
 }
 
+/// A misuse of `@Replaces` caught during graph construction. The four
+/// reasons map to the four rules the override obeys: the binding must
+/// produce the key it claims to replace, there must be a binding to
+/// replace, only one binding may replace a given key, and the replaced
+/// binding must live in a *different* module (a same-module collision is a
+/// plain duplicate the user should resolve directly). Anchored at the
+/// offending `@Replaces` binding.
+package struct InvalidReplacement: Sendable {
+    package enum Reason: Sendable, Equatable {
+        /// The declared target (`@Replaces(T.self)` / `@Replaces(T.key)`) isn't the
+        /// slot the binding produces — carries the declared target and the produced type.
+        case producedKeyMismatch(declaredTarget: ReplacesTarget, producedType: String)
+        /// No other binding produces the slot, so nothing is superseded.
+        case nothingToReplace(declaredTarget: ReplacesTarget)
+        /// Two or more `@Replaces` bindings target the same key.
+        case multipleReplacers(key: String)
+        /// The replaced binding is in the replacer's own module.
+        case sameModule(module: String)
+    }
+    package let reason: Reason
+    /// The `@Replaces` binding at fault — the diagnostic's primary location.
+    package let replacer: DiscoveredBinding
+    /// Related bindings for `note:` lines — the other replacers
+    /// (`multipleReplacers`) or the same-module bindings (`sameModule`).
+    /// Empty for the two single-binding reasons.
+    package let relatedBindings: [DiscoveredBinding]
+
+    package init(
+        reason: Reason,
+        replacer: DiscoveredBinding,
+        relatedBindings: [DiscoveredBinding] = []
+    ) {
+        self.reason = reason
+        self.replacer = replacer
+        self.relatedBindings = relatedBindings
+    }
+}
+
 /// One source-pattern diagnostic surfaced by discovery or graph
 /// validation. Renders to stderr in the standard
 /// `file:line:col: <severity>: ...` format so build tools surface

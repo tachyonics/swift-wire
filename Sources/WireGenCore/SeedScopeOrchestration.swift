@@ -90,7 +90,9 @@ package func orchestrateSeedScope(
     typealiases: [DiscoveredTypealias],
     multibindingKeys: [DiscoveredMultibindingKey] = [],
     resultBuilders: [DiscoveredResultBuilder] = [],
-    module: String
+    module: String,
+    homeModule: String? = nil,
+    externalModules: Set<String> = []
 ) -> SeedScopeOrchestration {
     let seedSuffix = sanitizeIdentifier(seedKey.seed)
     let identifierSuffix: String
@@ -110,7 +112,9 @@ package func orchestrateSeedScope(
         from: combined,
         typealiases: typealiases,
         multibindingKeys: multibindingKeys,
-        resultBuilders: resultBuilders
+        resultBuilders: resultBuilders,
+        homeModule: homeModule,
+        externalModules: externalModules
     )
 
     var borrowedNames: Set<String> = []

@@ -162,6 +162,62 @@ struct DiscoveryTests {
         #expect(result[0].allowUnused == true)
     }
 
+    @Test func singletonReplacesTargetCaptured() {
+        let source = """
+            @Singleton(as: Repo.self)
+            @Replaces(Repo.self)
+            struct FakeRepo: Repo {
+                @Inject init() {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "FakeRepo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].replaces == ReplacesTarget(base: "Repo", key: nil))
+        #expect(
+            DiscoveredBinding.scopeBound(result[0]).replacesTarget == ReplacesTarget(base: "Repo", key: nil)
+        )
+    }
+
+    @Test func providesKeyedReplacesTargetCapturesKey() {
+        // The keyed `@Replaces(Client.primary)` form captures both the base type
+        // and the key, spelled exactly as the matching `@Provides(Client.primary)`.
+        let source = """
+            @Provides(Client.primary)
+            @Replaces(Client.primary)
+            func fakeClient() -> Client { Client() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "FakeKeyed.swift")
+        #expect(result.count == 1)
+        #expect(result[0].replaces == ReplacesTarget(base: "Client", key: "Client.primary"))
+        #expect(result[0].keyIdentifier == "Client.primary")
+    }
+
+    @Test func singletonWithoutReplacesHasNilTarget() {
+        let source = """
+            @Singleton(as: Repo.self)
+            struct RealRepo: Repo {
+                @Inject init() {}
+            }
+            """
+        let result = discoverSingletons(in: source, sourcePath: "RealRepo.swift")
+        #expect(result.count == 1)
+        #expect(result[0].replaces == nil)
+    }
+
+    @Test func providesReplacesTargetCaptured() {
+        let source = """
+            @Provides
+            @Replaces(Client.self)
+            func fakeClient() -> Client { Client() }
+            """
+        let result = discoverProviders(in: source, sourcePath: "Fake.swift")
+        #expect(result.count == 1)
+        #expect(result[0].replaces == ReplacesTarget(base: "Client", key: nil))
+        #expect(
+            DiscoveredBinding.provider(result[0]).replacesTarget == ReplacesTarget(base: "Client", key: nil)
+        )
+    }
+
     @Test func singletonGenericParametersCaptured() {
         let source = """
             @Singleton

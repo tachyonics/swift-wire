@@ -72,7 +72,14 @@ struct WireGen {
             containerNames: Set(containerGraphs.map { $0.name }),
             resolvedBindingsByContainer: graphs.resolvedBindingsByContainer
         )
-        let allDiagnostics = aggregate.warnings + crossFileDiagnostics
+        // Warnings surfaced during graph construction (ignored home-package
+        // `@Replaces`) flow out through each `GraphResult` — collect them across
+        // every graph so they print alongside the source-pattern warnings.
+        let graphWarnings =
+            defaultGraph.warnings
+            + containerGraphs.flatMap { $0.result.warnings }
+            + seedScopeOrchestrations.flatMap { $0.result.warnings }
+        let allDiagnostics = aggregate.warnings + crossFileDiagnostics + graphWarnings
         printDiagnostics(allDiagnostics)
         failIfAnyDiagnosticIsError(allDiagnostics)
         failIfAnyGraphInvalid(
@@ -269,7 +276,9 @@ struct WireGen {
                     typealiases: aggregate.typealiases,
                     multibindingKeys: aggregate.multibindingKeys,
                     resultBuilders: aggregate.resultBuilders,
-                    module: aggregate.module
+                    module: aggregate.module,
+                    homeModule: aggregate.module,
+                    externalModules: aggregate.externalModules
                 )
                 let enrichedResult = enrichMissingBindingsWithCrossScopeHints(
                     orchestration.result,
@@ -288,7 +297,9 @@ struct WireGen {
                 from: singletons,
                 typealiases: aggregate.typealiases,
                 multibindingKeys: aggregate.multibindingKeys,
-                resultBuilders: aggregate.resultBuilders
+                resultBuilders: aggregate.resultBuilders,
+                homeModule: aggregate.module,
+                externalModules: aggregate.externalModules
             )
             let graph = enrichMissingBindingsWithCrossScopeHints(
                 rawGraph,

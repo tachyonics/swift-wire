@@ -1,8 +1,8 @@
 // Public-facing macro declarations.
 //
 // The currently shipping surface is `@Singleton`, `@Scoped`,
-// `@Inject`, `@Provides`, `@Container`, `@Contributes`, and
-// `@Teardown`.
+// `@Inject`, `@Provides`, `@Container`, `@Contributes`,
+// `@Teardown`, and `@Replaces`.
 
 /// Declares a process-lifetime singleton. The macro generates:
 /// - A `static let key: BindingKey<Self>` for the auto-generated key.
@@ -299,3 +299,50 @@ public macro Teardown() = #externalMacro(module: "WireMacrosImpl", type: "Teardo
 @attached(peer)
 public macro Teardown<Value>(_ action: @Sendable (Value) async throws -> Void) =
     #externalMacro(module: "WireMacrosImpl", type: "TeardownMacro")
+
+/// Marks a binding as *superseding* another binding for the same key — the
+/// DI test-double / override primitive (the analog of Hilt's `@BindValue`
+/// / Spring's `@MockBean`). Attach it alongside a producer macro
+/// (`@Singleton(as:)` / `@Provides`) and name the key `T` this binding
+/// replaces:
+///
+///     @Singleton(as: Repo.self)
+///     @Replaces(Repo.self)
+///     struct FakeRepo: Repo { ... }
+///
+///     @Provides
+///     @Replaces(SQSClient.self)
+///     static func fakeClient() -> SQSClient { ... }
+///
+/// When another binding — typically one composed in from a dependency
+/// module — also produces the key `T`, the `@Replaces` binding wins and the
+/// other is dropped from the graph, instead of the duplicate-binding error
+/// two ordinary bindings for one key would raise. The motivating use case:
+/// a test target that composes an app's real bindings and substitutes a
+/// fake for one dependency.
+///
+/// `@Replaces` itself contributes no code — it's a marker the build plugin
+/// recognises during source scanning. The `T` it names must be the key the
+/// co-located producer actually binds (a `@Singleton(as: Repo.self)` names
+/// `Repo`), there must be another binding for `T` to supersede, and at most
+/// one `@Replaces` may target a given key per graph — the build plugin
+/// diagnoses each violation. The replaced binding must live in a different
+/// module: two same-module bindings for one key are a plain duplicate,
+/// resolved directly rather than overridden.
+@attached(peer)
+public macro Replaces<T>(_ replaced: T.Type) =
+    #externalMacro(module: "WireMacrosImpl", type: "ReplacesMacro")
+
+/// Pass a `BindingKey<T>` to supersede a *keyed* binding — the key is part of
+/// the slot, so `@Replaces(Repo.primary)` targets the `Repo`/`primary` binding
+/// and `@Replaces(Repo.self)` targets the unkeyed `Repo` binding; neither
+/// crosses into the other's slot:
+///
+///     @Provides(Repo.primary) @Replaces(Repo.primary)
+///     static let fakePrimary: Repo = FakeRepo()
+///
+/// Mirrors `@Provides`, which likewise takes both a metatype and a
+/// `BindingKey<Value>` form.
+@attached(peer)
+public macro Replaces<T>(_ key: BindingKey<T>) =
+    #externalMacro(module: "WireMacrosImpl", type: "ReplacesMacro")
