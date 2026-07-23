@@ -35,9 +35,24 @@ package struct BindTypeSubstitution: Sendable, Equatable {
     }
 }
 
+/// One `@Scopable(X.self)` marker read off a `TestingKey` static — an app-scoped
+/// binding the variant permits the cascade to lift into a seeded scope. The
+/// `typeName` is the marked type's name (`TodoController` for `TodoController.self`),
+/// matched against a lifted binding's type name during the cascade walk.
+package struct ScopableMarker: Sendable, Equatable {
+    package let typeName: String
+    package let location: SourceLocation
+
+    package init(typeName: String, location: SourceLocation) {
+        self.typeName = typeName
+        self.location = location
+    }
+}
+
 /// One `TestingKey` declaration found in source — a `static let` (or
 /// module-scope `let`) initialised with `TestingKey()` (or annotated
-/// `: TestingKey`), together with the `@BindType` substitutions stacked on it.
+/// `: TestingKey`), together with the `@BindType` substitutions and `@Scopable`
+/// markers stacked on it.
 package struct DiscoveredTestingKey: Sendable, Equatable {
     /// Canonical reference text — `MyTests.testSetup` for a `static let
     /// testSetup` on `MyTests`, or just `testSetup` for a module-scope key.
@@ -46,6 +61,9 @@ package struct DiscoveredTestingKey: Sendable, Equatable {
     /// The substitutions the variant applies, in source (top-to-bottom
     /// attribute) order.
     package let substitutions: [BindTypeSubstitution]
+    /// The app-scoped bindings this variant permits the cascade to lift into a
+    /// seeded scope, in source (top-to-bottom attribute) order.
+    package let scopables: [ScopableMarker]
     package let location: SourceLocation
     package let accessLevel: AccessLevel
     package let originModule: String
@@ -53,12 +71,14 @@ package struct DiscoveredTestingKey: Sendable, Equatable {
     package init(
         keyReference: String,
         substitutions: [BindTypeSubstitution],
+        scopables: [ScopableMarker] = [],
         location: SourceLocation,
         accessLevel: AccessLevel,
         originModule: String
     ) {
         self.keyReference = keyReference
         self.substitutions = substitutions
+        self.scopables = scopables
         self.location = location
         self.accessLevel = accessLevel
         self.originModule = originModule
@@ -97,9 +117,17 @@ func testingKey(
         return bindTypeSubstitution(from: attribute, sourcePath: sourcePath, converter: converter)
     }
 
+    let scopables = node.attributes.compactMap { element -> ScopableMarker? in
+        guard case .attribute(let attribute) = element,
+            attribute.attributeName.trimmedDescription == "Scopable"
+        else { return nil }
+        return scopableMarker(from: attribute, sourcePath: sourcePath, converter: converter)
+    }
+
     return DiscoveredTestingKey(
         keyReference: keyReference,
         substitutions: substitutions,
+        scopables: scopables,
         location: makeSourceLocation(of: pattern.identifier, sourcePath: sourcePath, converter: converter),
         accessLevel: effectiveAccess,
         originModule: module
@@ -146,6 +174,24 @@ private func bindTypeSubstitution(
         slotKey: slotExpression.trimmedDescription,
         mockType: mockType,
         location: location
+    )
+}
+
+/// Read one `@Scopable(X.self)` attribute into a marker — the single argument's
+/// metatype base names the app-scoped binding the variant permits to lift.
+/// Returns `nil` for a malformed attribute the macro's signature would already
+/// have rejected.
+private func scopableMarker(
+    from attribute: AttributeSyntax,
+    sourcePath: String,
+    converter: SourceLocationConverter
+) -> ScopableMarker? {
+    guard case let .argumentList(args) = attribute.arguments, args.count == 1,
+        let typeName = metatypeBase(of: args.first!.expression)
+    else { return nil }
+    return ScopableMarker(
+        typeName: typeName,
+        location: makeSourceLocation(of: attribute, sourcePath: sourcePath, converter: converter)
     )
 }
 

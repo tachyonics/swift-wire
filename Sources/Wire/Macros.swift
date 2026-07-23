@@ -372,3 +372,33 @@ public macro BindType<Slot, Mock>(_ slot: Slot.Type, _ mock: Mock.Type) =
 @attached(peer)
 public macro BindType<Slot, Mock>(_ key: BindingKey<Slot>, _ mock: Mock.Type) =
     #externalMacro(module: "WireMacrosImpl", type: "BindTypeMacro")
+
+/// Permits an app-scoped (`@Singleton`) binding to be reconstructed inside a
+/// seeded scope *under test*, so a per-scope-entry double reaches a singleton
+/// consumer of a `@BindType`d slot — including a dependency the consumer reads in
+/// its own `init`.
+///
+/// A `@BindType`d slot's double rides the seed, so it only exists per scope
+/// entry. A `@Singleton` consumer captures its dependencies once at bootstrap,
+/// with no scope active, so it would never see the double unless it is rebuilt
+/// per entry too. `@Scopable(Consumer.self)` is the explicit acknowledgment that
+/// the consumer may be lifted into the scope under test — necessary because
+/// making a singleton per-entry can break one that relies on being a singleton
+/// (a cache, a pool, cross-scope state).
+///
+/// Attach it to a `TestingKey` static alongside `@BindType`; WireGen walks the
+/// path from each `@BindType`d binding up to the seeded-scope root(s) and, for
+/// each unmarked app-scoped hop, errors with exactly which `@Scopable` to add:
+///
+///     enum MyTests {
+///         @BindType(BackendRepository.self, MockBackendRepository.self)
+///         @Scopable(TodoController.self)
+///         static let testSetup = TestingKey()
+///     }
+///
+/// Scope-agnostic — *which* seed is the caller's business (an adapter's). Like
+/// `@BindType`, it contributes no code; it's a marker the build plugin
+/// recognises during source scanning, and it lives only in the test graph.
+@attached(peer)
+public macro Scopable<T>(_ type: T.Type) =
+    #externalMacro(module: "WireMacrosImpl", type: "ScopableMacro")

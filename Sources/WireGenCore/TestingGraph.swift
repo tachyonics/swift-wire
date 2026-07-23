@@ -94,6 +94,175 @@ package func renderDoublesStruct(typeName: String, fields: [DoublesField]) -> St
     return lines.joined(separator: "\n")
 }
 
+// MARK: - Phase 2 — the `@Scopable` cascade
+
+/// One app-scoped hop on the path from a `@BindType`d binding up to a seeded-scope
+/// root that the variant hasn't marked `@Scopable` — the guided-diagnostic subject.
+/// The mocked binding is per-scope-entry under test, so a singleton consumer on the
+/// path must be lifted into the scope (rebuilt per entry) to see the double; the fix
+/// is `@Scopable(<hopTypeName>.self)`.
+package struct UnmarkedCascadeHop: Sendable, Equatable {
+    /// The mocked slot as written (`BackendRepository`) — the leaf that reaches the root through this hop.
+    package let slotDisplay: String
+    /// The app-scoped singleton on the path (`TodoController`) — the type the fix names.
+    package let hopTypeName: String
+    /// Where to point the diagnostic — the `@BindType` attribute whose slot this hop carries.
+    package let location: SourceLocation
+
+    package init(slotDisplay: String, hopTypeName: String, location: SourceLocation) {
+        self.slotDisplay = slotDisplay
+        self.hopTypeName = hopTypeName
+        self.location = location
+    }
+}
+
+/// The cascade for one seed scope under a variant: the app-singleton identities to lift into it, and any
+/// app-scoped hop on a lift path the key hasn't marked `@Scopable`.
+package struct CascadeResult: Sendable {
+    /// App-singleton identities to reconstruct inside the seed scope — the mocked leaf(s) plus every hop
+    /// on the path to a seed root. The caller moves these bindings from the app graph's borrow set into the
+    /// scope's own binding set, so a lifted singleton is rebuilt per scope entry (seeing the double at `init`).
+    package let liftedIdentities: Set<BindingIdentity>
+    /// Hops on a lift path the key hasn't marked `@Scopable` — a guided diagnostic each, then an aborted build.
+    package let unmarkedHops: [UnmarkedCascadeHop]
+
+    package init(liftedIdentities: Set<BindingIdentity>, unmarkedHops: [UnmarkedCascadeHop]) {
+        self.liftedIdentities = liftedIdentities
+        self.unmarkedHops = unmarkedHops
+    }
+}
+
+/// Compute the cascade for one seed scope: walk from each `@BindType`d app singleton up to the app
+/// singletons the seed's roots borrow, lifting every binding on the path into the scope so a per-scope-entry
+/// double reaches a singleton consumer (including at its `init`).
+///
+/// The mocked leaf is lifted unconditionally (`@BindType` is its acknowledgment); every *intermediate* hop
+/// must be `@Scopable`d — the same explicit acknowledgment, since making a singleton per-entry can break one
+/// that relies on being a singleton. An unmarked hop yields a guided diagnostic rather than a silent lift.
+///
+/// `appEdges` is the resolved app-graph adjacency (consumer identity → its dependency identities). The path
+/// is the intersection of two reachable sets: the app singletons reachable *downward* from the seed's
+/// borrow boundary, and the app singletons that can reach a mocked leaf (reachable *upward* from it). Every
+/// binding in the intersection lies on some path from a seed root to a mock, so it must be lifted.
+package func cascadeLift(
+    seedBindings: [DiscoveredBinding],
+    appSingletons: [DiscoveredBinding],
+    appEdges: [BindingIdentity: [BindingIdentity]],
+    substitutions: [BindTypeSubstitution],
+    scopableTypeNames: Set<String>
+) -> CascadeResult {
+    var appProducers: [BindingIdentity: DiscoveredBinding] = [:]
+    for binding in appSingletons { appProducers[binding.identity] = binding }
+
+    // The mocked app singletons — an identity → the slot text a substitution named it by (for messages).
+    var mockedSlotDisplay: [BindingIdentity: String] = [:]
+    for binding in appSingletons {
+        guard let match = substitutions.first(where: { substitutionMatches($0, binding) }) else { continue }
+        mockedSlotDisplay[binding.identity] = match.slotType ?? match.slotKey ?? binding.boundType
+    }
+    guard !mockedSlotDisplay.isEmpty else { return CascadeResult(liftedIdentities: [], unmarkedHops: []) }
+
+    // Reverse adjacency, so a mocked leaf can be walked toward its consumers.
+    var reverseEdges: [BindingIdentity: [BindingIdentity]] = [:]
+    for (consumer, dependencies) in appEdges {
+        for dependency in dependencies { reverseEdges[dependency, default: []].append(consumer) }
+    }
+    let mockReaching = reachable(from: Array(mockedSlotDisplay.keys), over: reverseEdges)
+
+    // The app singletons the seed's roots borrow directly — the boundary the lift path descends from.
+    var boundary: Set<BindingIdentity> = []
+    for binding in seedBindings {
+        for dependency in binding.dependencies {
+            let identity = bridgedDependencyIdentity(dependency, in: binding)
+            if case .resolved(let resolved) = matchProducer(for: identity, in: appProducers) {
+                boundary.insert(resolved)
+            }
+        }
+    }
+    let seedReachableApp = reachable(from: Array(boundary), over: appEdges)
+
+    let liftedIdentities = seedReachableApp.intersection(mockReaching)
+
+    // Every lifted binding that isn't a mocked leaf is an intermediate hop needing `@Scopable`.
+    var unmarkedHops: [UnmarkedCascadeHop] = []
+    for identity in liftedIdentities.sorted() where mockedSlotDisplay[identity] == nil {
+        guard let binding = appProducers[identity], !scopableTypeNames.contains(cascadeHopName(binding)) else {
+            continue
+        }
+        // Name a mocked leaf this hop reaches, and point the diagnostic at that leaf's `@BindType`.
+        let reachedMock = reachable(from: [identity], over: appEdges).first { mockedSlotDisplay[$0] != nil }
+        let slot = reachedMock.flatMap { mockedSlotDisplay[$0] } ?? mockedSlotDisplay.values.sorted().first ?? ""
+        let location =
+            substitutions.first(where: { ($0.slotType ?? $0.slotKey) == slot })?.location ?? binding.location
+        unmarkedHops.append(
+            UnmarkedCascadeHop(slotDisplay: slot, hopTypeName: cascadeHopName(binding), location: location)
+        )
+    }
+
+    return CascadeResult(liftedIdentities: liftedIdentities, unmarkedHops: unmarkedHops)
+}
+
+/// The transitive closure reachable from `roots` over `edges` (roots included). A plain BFS the cascade
+/// runs in both directions — downward over the app adjacency, upward over its reverse.
+private func reachable(
+    from roots: [BindingIdentity],
+    over edges: [BindingIdentity: [BindingIdentity]]
+) -> Set<BindingIdentity> {
+    var visited: Set<BindingIdentity> = []
+    var queue = roots
+    while let identity = queue.popLast() {
+        guard visited.insert(identity).inserted else { continue }
+        queue.append(contentsOf: edges[identity] ?? [])
+    }
+    return visited
+}
+
+/// The name a cascade hop is matched and messaged by — a `@Singleton`/`@Scoped` type's own name (what
+/// `@Scopable(X.self)` references), or a provider's stripped bound type as a fallback.
+private func cascadeHopName(_ binding: DiscoveredBinding) -> String {
+    if case .scopeBound(let scopeBound) = binding { return scopeBound.typeName }
+    return strippedSlotType(binding.boundType)
+}
+
+/// The substitutions whose slot matches no binding in `bindings` — a stale or mistyped `@BindType` the
+/// caller diagnoses. Distinct from `applyBindTypeSubstitutions`'s per-set `unmatched`: here the caller
+/// passes the whole production binding set (app singletons + every seed scope), so a slot that exists
+/// *somewhere* isn't reported even when a particular scope doesn't touch it.
+package func unmatchedSubstitutions(
+    _ substitutions: [BindTypeSubstitution],
+    against bindings: [DiscoveredBinding]
+) -> [BindTypeSubstitution] {
+    substitutions.filter { substitution in
+        !bindings.contains(where: { substitutionMatches(substitution, $0) })
+    }
+}
+
+/// The guided diagnostic for one unmarked cascade hop — names the mocked leaf, the singleton it reaches the
+/// root through, and the exact `@Scopable` to add.
+package func unmarkedCascadeHopDiagnostic(_ hop: UnmarkedCascadeHop) -> Diagnostic {
+    Diagnostic(
+        location: hop.location,
+        message:
+            "\(hop.slotDisplay) is bound per-scope-entry under test, but reaches the scope root through "
+            + "singleton '\(hop.hopTypeName)'. Add @Scopable(\(hop.hopTypeName).self) to allow it to be "
+            + "lifted into the scope under test.",
+        severity: .error
+    )
+}
+
+/// The diagnostic for a `@BindType` substitution whose slot no binding produces — a stale or mistyped
+/// substitution, surfaced rather than silently discarded.
+package func unmatchedBindTypeDiagnostic(_ substitution: BindTypeSubstitution) -> Diagnostic {
+    let slot = substitution.slotType ?? substitution.slotKey ?? "?"
+    return Diagnostic(
+        location: substitution.location,
+        message:
+            "@BindType(\(slot), \(substitution.mockType).self) substitutes a slot no binding under test "
+            + "produces — check the slot type or key.",
+        severity: .error
+    )
+}
+
 /// Whether a `@BindType` substitution names the slot `binding` produces. The
 /// type form matches an unkeyed binding whose bound type (opaque prefix
 /// stripped) equals the slot; the keyed form matches a binding carrying the
