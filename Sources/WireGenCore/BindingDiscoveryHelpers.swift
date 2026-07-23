@@ -30,6 +30,22 @@ func unannotatedExtensionProvidesCandidates(
     ]
 }
 
+/// Determine a `@Provides` property's bound type, taken from one of two
+/// places, in order:
+///   1. An explicit type annotation: `let x: Foo = ...`
+///   2. A `Foo(...)` constructor-call initialiser, when the annotation
+///      is omitted: `let x = Foo()`.
+/// Both are idiomatic Swift; preferring the annotation when present keeps
+/// the user's intent honest (they can write a wider type than the RHS
+/// produces, e.g. `let x: any Logger = AppLogger()`). Returns nil when
+/// neither source pins the type down — the property is then skipped.
+func providesPropertyBoundType(_ binding: PatternBindingSyntax) -> String? {
+    if let typeAnnotation = binding.typeAnnotation {
+        return typeAnnotation.type.trimmedDescription
+    }
+    return inferTypeFromConstructorCall(binding.initializer?.value)
+}
+
 /// `@Inject` on the members of a non-scope-annotated type is a silent
 /// no-op — there's no macro on the enclosing type to read it. Emit a
 /// warning per `@Inject`-marked init or stored property so the user

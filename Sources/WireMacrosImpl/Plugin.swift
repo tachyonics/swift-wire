@@ -13,5 +13,6 @@ struct WireMacrosPlugin: CompilerPlugin {
         ContributesMacro.self,
         TeardownMacro.self,
         ReplacesMacro.self,
+        BindTypeMacro.self,
     ]
 }

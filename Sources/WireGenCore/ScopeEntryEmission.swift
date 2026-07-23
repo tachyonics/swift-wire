@@ -50,7 +50,7 @@ private func scopeEntryThunkLines(
     thunkType: String,
     scopes: [String: SeedScopeEmission]
 ) -> [String]? {
-    guard let (seed, subject) = parsedContributorScopeEntryThunkType(thunkType),
+    guard let (seed, subject, doubles) = parsedContributorScopeEntryThunkType(thunkType),
         let scope = scopes[seed]
     else { return nil }
     let thunkLocal = identifierName(forType: thunkType, key: nil)
@@ -78,7 +78,13 @@ private func scopeEntryThunkLines(
         constructedHere: scope.topologicalOrder.filter { reachable?.contains($0.identity) ?? true }
     )
 
-    var lines: [String] = ["    let \(thunkLocal) = { @Sendable (\(seedLocal): \(seed)) async throws in"]
+    // A test-graph variant threads a `doubles` value in alongside the seed; a `@BindType`d binding in the
+    // scope resolves to a field on it (its construction line is `let <field> = doubles.<field>`, emitted by
+    // the ordinary per-binding path since the binding is a `doubles.<field>` provider). The parameter's
+    // local name is the fixed `doubles`, matching those providers' access paths. `nil` is the production
+    // thunk (seed only). The `doubles` type rides the thunk type, so it survives the `liftSpecialised`.
+    let parameterList = doubles.map { "\(seedLocal): \(seed), doubles: \($0)" } ?? "\(seedLocal): \(seed)"
+    var lines: [String] = ["    let \(thunkLocal) = { @Sendable (\(parameterList)) async throws in"]
     for alias in aliases.upFront {
         lines.append(contentsOf: existentialAliasLines(alias, boundTo: alias.producerLocalName, indent: "        "))
     }

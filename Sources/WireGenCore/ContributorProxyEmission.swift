@@ -42,24 +42,57 @@ package let scopeEntryTeardownType = "@Sendable () async -> [any Error]"
 /// down (M5.4.5, consistent with the graph's `teardown()`). One builder shared by the synthesis (which
 /// types the `_wireEnterScope` dependency) and the emission (which types the emitted closure and finds its
 /// target scope), so the seed/subject contract lives in one place.
-package func contributorScopeEntryThunkType(seed: String, subject: String) -> String {
-    "@Sendable (\(seed)) async throws -> (\(subject), \(scopeEntryTeardownType))"
+///
+/// A test-graph variant threads a `doubles` value in alongside the seed: the thunk's parameter list grows
+/// to `(Seed, Doubles)` and a `@BindType`d binding resolves to a field on it. `doubles` names the variant's
+/// `_<Key>Doubles` struct; `nil` is the production thunk (seed only).
+package func contributorScopeEntryThunkType(seed: String, subject: String, doubles: String? = nil) -> String {
+    let parameters = doubles.map { "\(seed), \($0)" } ?? seed
+    return "@Sendable (\(parameters)) async throws -> (\(subject), \(scopeEntryTeardownType))"
 }
 
-/// Recover `(seed, subject)` from a thunk type built by `contributorScopeEntryThunkType` — the inverse
-/// the emission uses to locate the target seed scope and name the subject it returns. The subject is the
-/// tuple's first element; the teardown-closure suffix is a fixed string stripped verbatim (so a subject
-/// with its own generic-argument commas is recovered intact). `nil` for a string not in that shape.
-package func parsedContributorScopeEntryThunkType(_ type: String) -> (seed: String, subject: String)? {
+/// Recover `(seed, subject, doubles?)` from a thunk type built by `contributorScopeEntryThunkType` — the
+/// inverse the emission uses to locate the target seed scope, name the subject it returns, and (for a test
+/// variant) name the `doubles` parameter. The subject is the tuple's first element; the teardown-closure
+/// suffix is a fixed string stripped verbatim (so a subject with its own generic-argument commas is
+/// recovered intact). The parameter list is `Seed` or `Seed, Doubles`; the seed/doubles split is the single
+/// top-level comma (`doubles` is a bare `_<Key>Doubles` name, so a generic seed's own commas stay nested).
+/// `nil` for a string not in that shape.
+package func parsedContributorScopeEntryThunkType(
+    _ type: String
+) -> (seed: String, subject: String, doubles: String?)? {
     let opening = "@Sendable ("
     let middle = ") async throws -> ("
     let closing = ", \(scopeEntryTeardownType))"
     guard type.hasPrefix(opening), type.hasSuffix(closing), let middleRange = type.firstRange(of: middle)
     else { return nil }
-    let seed = String(type[type.index(type.startIndex, offsetBy: opening.count)..<middleRange.lowerBound])
+    let parameters = String(
+        type[type.index(type.startIndex, offsetBy: opening.count)..<middleRange.lowerBound]
+    )
     let subject = String(type[middleRange.upperBound..<type.index(type.endIndex, offsetBy: -closing.count)])
-    guard !seed.isEmpty, !subject.isEmpty else { return nil }
-    return (seed, subject)
+    guard !parameters.isEmpty, !subject.isEmpty else { return nil }
+    let (seed, doubles) = splitSeedAndDoubles(parameters)
+    guard !seed.isEmpty else { return nil }
+    return (seed, subject, doubles)
+}
+
+/// Split a thunk parameter list into `(seed, doubles?)` at its single top-level comma. Commas nested inside
+/// a generic seed's `<…>` stay with the seed (depth-aware); a bare list is seed-only.
+private func splitSeedAndDoubles(_ parameters: String) -> (seed: String, doubles: String?) {
+    var depth = 0
+    for index in parameters.indices {
+        switch parameters[index] {
+        case "<", "(", "[": depth += 1
+        case ">", ")", "]": depth -= 1
+        case "," where depth == 0:
+            let seed = String(parameters[parameters.startIndex..<index])
+            let doubles = String(parameters[parameters.index(after: index)...])
+                .drop(while: { $0 == " " })
+            return (seed, doubles.isEmpty ? nil : String(doubles))
+        default: break
+        }
+    }
+    return (parameters, nil)
 }
 
 /// Render the structural declaration for one contributor-proxy binding — the `struct` with its stored

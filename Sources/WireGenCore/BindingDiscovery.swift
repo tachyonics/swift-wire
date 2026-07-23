@@ -116,6 +116,9 @@ final class BindingDiscovery: SyntaxVisitor {
     /// Graph-conformance declarations (`WireGraphConformanceV1`) found in this
     /// file — an adapter asking Wire to emit a graph conformance to its protocol.
     var graphConformances: [DiscoveredGraphConformance] = []
+    /// `TestingKey` declarations found in this file, each carrying its
+    /// `@BindType` substitutions. A test target's variant graph reads these.
+    var testingKeys: [DiscoveredTestingKey] = []
     /// `@resultBuilder` types found in this file, with their fold result
     /// type — the producer-side result type a `BuilderKey` aggregate has.
     var resultBuilders: [DiscoveredResultBuilder] = []
@@ -418,6 +421,18 @@ final class BindingDiscovery: SyntaxVisitor {
             )
         {
             bindingKeys.append(key)
+        }
+        if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
+            let key = testingKey(
+                from: node,
+                enclosingTypeNames: scopes.map(\.typeName),
+                enclosingAccessLevels: scopes.map(\.access),
+                sourcePath: sourcePath,
+                converter: converter,
+                module: module
+            )
+        {
+            testingKeys.append(key)
         }
         if isAtRecognisedProvidesPosition(modifiers: node.modifiers),
             let definition = adapterAnnotation(
@@ -828,19 +843,7 @@ extension BindingDiscovery {
         guard node.bindings.count == 1, let binding = node.bindings.first else { return }
         guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { return }
 
-        // The bound type is taken from one of two places, in order:
-        //   1. An explicit type annotation: `let x: Foo = ...`
-        //   2. A `Foo(...)` constructor-call initialiser, when the
-        //      annotation is omitted: `let x = Foo()`.
-        // Both are idiomatic Swift; preferring annotation when present
-        // keeps the user's intent honest (they can write a wider type
-        // than the RHS produces, e.g. `let x: any Logger = AppLogger()`).
-        let boundType: String
-        if let typeAnnotation = binding.typeAnnotation {
-            boundType = typeAnnotation.type.trimmedDescription
-        } else if let inferred = inferTypeFromConstructorCall(binding.initializer?.value) {
-            boundType = inferred
-        } else {
+        guard let boundType = providesPropertyBoundType(binding) else {
             // Can't determine the bound type without running type
             // inference. Skip silently — same posture as `@Inject`
             // properties without annotations.

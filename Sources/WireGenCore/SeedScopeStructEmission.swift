@@ -44,32 +44,26 @@ func appendSeedScopeStruct(
         parentGraphTypeReference: parentGraphTypeReference
     )
 
+    // A test-graph variant threads a `doubles` value in alongside the seed and wire graph: the scope
+    // holds one or more `@BindType`d bindings whose construction reads `doubles.<field>`, so the bootstrap
+    // grows a `doubles:` parameter (internal name `doubles`, matching those access paths). A production
+    // scope carries no doubles type, so the parameter and its forwarding are omitted — its emission is
+    // unchanged.
+    let doublesParameter = scope.doublesType.map { ", doubles: \($0)" } ?? ""
+    let doublesForward = scope.doublesType == nil ? "" : ", doubles: doubles"
+
     // The seed scope's bootstrap entry point on the `Wire` façade — keeps the
     // `(seed:, <parentGraph>:)` parameter shape (opaque-erased), forwarding to the private free function.
     entries.append(
         BootstrapEntry(
             signature:
-                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)) async throws -> \(lift.openStructReference)",
-            body: "try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal))"
+                "bootstrap\(scope.identifierSuffix)Scope(seed: \(scope.seedTypeExpression), \(wireGraphExternal): \(parentGraphTypeReference)\(doublesParameter)) async throws -> \(lift.openStructReference)",
+            body:
+                "try await \(bootstrapFunction)(seed: seed, \(wireGraphExternal): \(wireGraphExternal)\(doublesForward))"
         )
     )
 
-    // Borrowed-singleton bindings get inlined at their consumers' arg
-    // sites rather than declared as locals — every consumer in the
-    // topo order resolves a borrow dep directly to the wire-graph
-    // expression (`_WireGraph.logger`). The map's keys are borrow
-    // property names; values are the substitution expressions read
-    // straight off each borrow's `accessPath`. Unused borrows produce
-    // no output: their let-lines are skipped and no consumer refers
-    // to them, so they vanish from the emitted bootstrap.
-    var borrowAccessPaths: [String: String] = [:]
-    for binding in scope.topologicalOrder {
-        let name = propertyName(for: binding)
-        guard scope.borrowedBindingPropertyNames.contains(name),
-            case .provider(let provider) = binding
-        else { continue }
-        borrowAccessPaths[name] = provider.accessPath
-    }
+    let borrowAccessPaths = borrowedAccessPaths(in: scope)
     let resolveBorrow: (String) -> String? = { borrowAccessPaths[$0] }
 
     lines.append("")
@@ -94,7 +88,7 @@ func appendSeedScopeStruct(
 
     lines.append("")
     lines.append(
-        "private func \(bootstrapFunction)\(lift.genericClause)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(lift.parentGraphLifted)) async throws -> \(lift.openStructReference) {"
+        "private func \(bootstrapFunction)\(lift.genericClause)(seed \(seedLocal): \(scope.seedTypeExpression), \(wireGraphExternal) \(wireGraphInternal): \(lift.parentGraphLifted)\(doublesParameter)) async throws -> \(lift.openStructReference) {"
     )
 
     if scope.topologicalOrder.isEmpty && storedBindings.isEmpty {
@@ -153,6 +147,23 @@ func appendSeedScopeStruct(
     }.joined(separator: ", ")
     lines.append("    return \(structName)(\(returnArgs))")
     lines.append("}")
+}
+
+/// Borrowed-singleton bindings get inlined at their consumers' arg sites rather than declared as locals —
+/// every consumer in the topo order resolves a borrow dep directly to the wire-graph expression
+/// (`_WireGraph.logger`). The returned map's keys are borrow property names; values are the substitution
+/// expressions read straight off each borrow's `accessPath`. Unused borrows produce no output: their
+/// let-lines are skipped and no consumer refers to them, so they vanish from the emitted bootstrap.
+private func borrowedAccessPaths(in scope: SeedScopeEmission) -> [String: String] {
+    var borrowAccessPaths: [String: String] = [:]
+    for binding in scope.topologicalOrder {
+        let name = propertyName(for: binding)
+        guard scope.borrowedBindingPropertyNames.contains(name),
+            case .provider(let provider) = binding
+        else { continue }
+        borrowAccessPaths[name] = provider.accessPath
+    }
+    return borrowAccessPaths
 }
 
 /// The opaque-lift of a seed scope — mirrors `_WireGraph<T0>`. A *generic* scoped binding stores
