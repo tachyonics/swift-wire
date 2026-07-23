@@ -199,11 +199,11 @@ package struct DiscoveredScopeBoundType: Sendable {
     /// in M1 but inert — code emission ignores it; M4 emits the call in
     /// reverse dependency order. See `TeardownAction`.
     package let teardown: TeardownAction?
-    /// The identity slot this binding supersedes — the base type and optional
-    /// key from `@Replaces(T.self)` / `@Replaces(T.key)` on the declaration, or
-    /// `nil` for an ordinary binding. Read by the graph's duplicate-binding
-    /// resolution to keep this binding and drop the same-slot binding it replaces.
-    package let replaces: ReplacesTarget?
+    /// `true` when the declaration carries a bare `@Replaces` marker — the
+    /// binding supersedes the slot it produces (its own identity). Read by the
+    /// graph's duplicate-binding resolution to keep this binding and drop the
+    /// same-slot binding it replaces.
+    package let isReplacer: Bool
     /// The module this binding was discovered in (the consumer target
     /// name, or a dependency's name under composition). See
     /// `DiscoveredBinding.originModule`.
@@ -229,7 +229,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         contributions: [Contribution] = [],
         allowUnused: Bool = false,
         teardown: TeardownAction? = nil,
-        replaces: ReplacesTarget? = nil,
+        isReplacer: Bool = false,
         originModule: String
     ) {
         self.typeName = typeName
@@ -252,7 +252,7 @@ package struct DiscoveredScopeBoundType: Sendable {
         self.contributions = contributions
         self.allowUnused = allowUnused
         self.teardown = teardown
-        self.replaces = replaces
+        self.isReplacer = isReplacer
         self.originModule = originModule
     }
 }
@@ -419,11 +419,11 @@ package struct DiscoveredProvider: Sendable {
     /// but inert — code emission ignores it; M4 applies it to the
     /// produced value at scope teardown. See `TeardownAction`.
     package let teardown: TeardownAction?
-    /// The identity slot this binding supersedes — the base type and optional
-    /// key from `@Replaces(T.self)` / `@Replaces(T.key)` on the declaration, or
-    /// `nil` for an ordinary binding. Read by the graph's duplicate-binding
-    /// resolution to keep this binding and drop the same-slot binding it replaces.
-    package let replaces: ReplacesTarget?
+    /// `true` when the declaration carries a bare `@Replaces` marker — the
+    /// binding supersedes the slot it produces (its own identity). Read by the
+    /// graph's duplicate-binding resolution to keep this binding and drop the
+    /// same-slot binding it replaces.
+    package let isReplacer: Bool
     /// The module this binding was discovered in (the consumer target
     /// name, or a dependency's name under composition). See
     /// `DiscoveredBinding.originModule`.
@@ -447,7 +447,7 @@ package struct DiscoveredProvider: Sendable {
         contributions: [Contribution] = [],
         allowUnused: Bool = false,
         teardown: TeardownAction? = nil,
-        replaces: ReplacesTarget? = nil,
+        isReplacer: Bool = false,
         originModule: String
     ) {
         self.boundType = boundType
@@ -465,7 +465,7 @@ package struct DiscoveredProvider: Sendable {
         self.contributions = contributions
         self.allowUnused = allowUnused
         self.teardown = teardown
-        self.replaces = replaces
+        self.isReplacer = isReplacer
         self.originModule = originModule
     }
 

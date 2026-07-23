@@ -475,10 +475,10 @@ package func buildDependencyGraph(
         )
     }
 
-    // `@Replaces` overrides: a binding carrying `@Replaces(T)` supersedes another
-    // binding for key `T` (typically one composed in from a dependency module), so
-    // the collision resolves to the replacer instead of a duplicate error. Misuse
-    // (wrong key, nothing to replace, two replacers, same-module) fails the build here.
+    // `@Replaces` overrides: a binding carrying `@Replaces` supersedes another
+    // binding for the slot it produces (typically one composed in from a dependency
+    // module), so the collision resolves to the replacer instead of a duplicate
+    // error. Misuse (nothing to replace, two replacers, same-module) fails the build here.
     let replacement = resolveReplacements(
         partition.groupedByIdentity,
         homeModule: homeModule,
@@ -654,28 +654,11 @@ private func splitUniqueFromDuplicates(
     return (unique, duplicates)
 }
 
-/// Whether `target` — the slot named in `@Replaces(...)` — is the same graph slot
-/// the binding produces. `@Singleton(as: Repo.self)` binds `some Repo` while the
-/// user writes `@Replaces(Repo.self)`, so the leading `some`/`any` qualifier is
-/// folded away: base type and optionality must match. The key is part of the
-/// slot too — `@Replaces(Repo.self)` names the unkeyed `Repo`, `@Replaces(Repo.primary)`
-/// names `Repo`/`primary`, and neither crosses into the other's slot — so the
-/// target's key must equal the produced identity's key (both `nil`, or equal text).
-private func replacesTargetMatchesProducedKey(
-    _ target: ReplacesTarget,
-    _ produced: BindingIdentity
-) -> Bool {
-    let components = identityComponents(target.base)
-    return components.base == produced.base
-        && components.isOptional == produced.isOptional
-        && target.key == produced.key
-}
-
-/// Whether a binding carries a well-formed `@Replaces` naming the key it
-/// produces — the precondition for it to act as a replacer.
+/// Whether a binding carries the bare `@Replaces` marker — the precondition for
+/// it to act as a replacer. The slot it supersedes is the one it produces (its
+/// own identity), so there's nothing further to match.
 private func isValidReplacer(_ binding: DiscoveredBinding) -> Bool {
-    guard let target = binding.replacesTarget else { return false }
-    return replacesTargetMatchesProducedKey(target, binding.identity)
+    binding.isReplacer
 }
 
 /// Apply `@Replaces` overrides to the identity-grouped bindings before
@@ -695,11 +678,10 @@ private func isValidReplacer(_ binding: DiscoveredBinding) -> Bool {
 /// `homeModule == nil` treats every `@Replaces` as honoured — the behaviour the
 /// framework-agnostic unit tests that don't model modules rely on.
 ///
-/// Honoured replacers still obey the four rules, surfaced as validation errors:
-/// 1. a `@Replaces` whose declared target isn't the slot it produces;
-/// 2. a `@Replaces` with no sibling binding to supersede;
-/// 3. two `@Replaces` bindings targeting one slot; and
-/// 4. a `@Replaces` superseding a binding from its own module (a plain
+/// Honoured replacers still obey three rules, surfaced as validation errors:
+/// 1. a `@Replaces` with no sibling binding to supersede;
+/// 2. two `@Replaces` bindings targeting one slot; and
+/// 3. a `@Replaces` superseding a binding from its own module (a plain
 ///    duplicate the user should resolve directly, not override).
 private func resolveReplacements(
     _ groupedByIdentity: [BindingIdentity: [DiscoveredBinding]],
@@ -731,7 +713,7 @@ private func resolveReplacements(
     // modules are ignored silently (no warning).
     if let homeModule {
         for binding in orderedBindings {
-            guard let target = binding.replacesTarget,
+            guard binding.isReplacer,
                 binding.originModule != homeModule,
                 !externalModules.contains(binding.originModule)
             else { continue }
@@ -739,27 +721,8 @@ private func resolveReplacements(
                 Diagnostic(
                     location: binding.location,
                     message:
-                        "@Replaces on '\(target.base)' in module '\(binding.originModule)' has no effect — only the composition root's own module ('\(homeModule)') may override a binding",
+                        "@Replaces on '\(binding.identity.displayType)' in module '\(binding.originModule)' has no effect — only the composition root's own module ('\(homeModule)') may override a binding",
                     severity: .warning
-                )
-            )
-        }
-    }
-
-    // (1) A honoured `@Replaces` binding whose declared target doesn't match the
-    // slot it produces names a slot it isn't in, so it could never supersede the
-    // right binding. Only honoured replacers are checked — an ignored one's
-    // `@Replaces` is inert, not an error.
-    for binding in orderedBindings {
-        guard let target = binding.replacesTarget, isHonoured(binding) else { continue }
-        if !replacesTargetMatchesProducedKey(target, binding.identity) {
-            invalid.append(
-                InvalidReplacement(
-                    reason: .producedKeyMismatch(
-                        declaredTarget: target,
-                        producedType: binding.boundType
-                    ),
-                    replacer: binding
                 )
             )
         }
@@ -771,7 +734,7 @@ private func resolveReplacements(
         let replacers = group.filter(isActiveReplacer)
         guard !replacers.isEmpty else { continue }
 
-        // (3) At most one replacer per slot — two would each claim to win.
+        // (2) At most one replacer per slot — two would each claim to win.
         guard replacers.count == 1 else {
             invalid.append(
                 InvalidReplacement(
@@ -788,21 +751,19 @@ private func resolveReplacements(
         // coexists as an ordinary binding).
         let replaced = group.filter { !isActiveReplacer($0) }
 
-        // (2) Nothing to supersede — a `@Replaces` with no sibling for its slot
+        // (1) Nothing to supersede — a `@Replaces` with no sibling for its slot
         // is a mistake or a stale override.
         guard !replaced.isEmpty else {
             invalid.append(
                 InvalidReplacement(
-                    reason: .nothingToReplace(
-                        declaredTarget: replacer.replacesTarget ?? ReplacesTarget(base: replacer.boundType, key: nil)
-                    ),
+                    reason: .nothingToReplace(slot: replacer.identity.displayType),
                     replacer: replacer
                 )
             )
             continue
         }
 
-        // (4) Replacing a binding in your own module is just a duplicate you
+        // (3) Replacing a binding in your own module is just a duplicate you
         // should resolve directly (remove one, or key them apart) — `@Replaces`
         // is for superseding a *dependency*'s binding.
         let sameModule = replaced.filter { $0.originModule == replacer.originModule }

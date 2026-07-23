@@ -189,49 +189,12 @@ func asTypeExpression(from attribute: AttributeSyntax) -> String? {
     return base.trimmedDescription
 }
 
-/// The full identity slot a `@Replaces` marker names — the base type it targets
-/// and, for the keyed form, the key it selects. `@Replaces` matches base +
-/// optionality + key, so both halves are captured here; the key is `nil` for the
-/// unkeyed `.self` form.
-package struct ReplacesTarget: Sendable, Equatable {
-    /// The base type the target names — `Repo` for both `@Replaces(Repo.self)`
-    /// and `@Replaces(Repo.primary)`. Read from the member-access base.
-    package let base: String
-    /// The canonical key reference for the keyed `@Replaces(Repo.primary)` form,
-    /// spelled exactly as a `@Provides(Repo.primary)` key would be (`"Repo.primary"`),
-    /// or `nil` for the unkeyed `@Replaces(Repo.self)` form.
-    package let key: String?
-
-    package init(base: String, key: String?) {
-        self.base = base
-        self.key = key
-    }
-}
-
-/// The identity slot named in a `@Replaces(...)` marker, or `nil` when the
-/// declaration carries no `@Replaces`. Two forms, distinguished by the
-/// member-access member name:
-///   - `@Replaces(Repo.self)` — the `.self` metatype names the UNKEYED `Repo`
-///     slot; `key` is `nil`. `@Replaces(Repo.self)` → `(base: "Repo", key: nil)`.
-///   - `@Replaces(Repo.primary)` — a `BindingKey` reference names the
-///     `Repo`/`primary` slot; the whole expression is the key, read and
-///     normalised exactly as `@Provides(Repo.primary)`'s key is.
-///     `@Replaces(Repo.primary)` → `(base: "Repo", key: "Repo.primary")`.
-/// `nil` for a malformed form the macro's signature already rejects (no
-/// argument, or a non-member-access expression).
-func replacesTargetExpression(in attributes: AttributeListSyntax) -> ReplacesTarget? {
-    guard let replacesAttribute = attribute(in: attributes, named: "Replaces") else { return nil }
-    guard case let .argumentList(args) = replacesAttribute.arguments else { return nil }
-    guard let firstArgument = args.first, firstArgument.label == nil else { return nil }
-    guard let memberAccess = firstArgument.expression.as(MemberAccessExprSyntax.self),
-        let base = memberAccess.base
-    else { return nil }
-    if memberAccess.declName.baseName.text == "self" {
-        return ReplacesTarget(base: base.trimmedDescription, key: nil)
-    }
-    // A `BindingKey` reference (`Repo.primary`) — the whole expression is the
-    // key, spelled the same way `keyIdentifier(from:)` reads a `@Provides` key.
-    return ReplacesTarget(base: base.trimmedDescription, key: firstArgument.expression.trimmedDescription)
+/// Whether the declaration carries a bare `@Replaces` marker. A `@Replaces`
+/// binding supersedes the slot it produces (its own `@Singleton(as:)` /
+/// `@Provides(key)` identity), so the marker takes no argument and this only
+/// records its presence — mirrors how the other marker attributes are detected.
+func hasReplacesMarker(in attributes: AttributeListSyntax) -> Bool {
+    hasAttribute(attributes, named: "Replaces")
 }
 
 /// The canonical key reference of a `@Factory(key)` template, or `nil` when the

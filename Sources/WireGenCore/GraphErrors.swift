@@ -153,20 +153,17 @@ package struct DuplicateBinding: Sendable {
     }
 }
 
-/// A misuse of `@Replaces` caught during graph construction. The four
-/// reasons map to the four rules the override obeys: the binding must
-/// produce the key it claims to replace, there must be a binding to
-/// replace, only one binding may replace a given key, and the replaced
+/// A misuse of `@Replaces` caught during graph construction. The three
+/// reasons map to the three rules the override obeys: there must be a binding
+/// to replace, only one binding may replace a given slot, and the replaced
 /// binding must live in a *different* module (a same-module collision is a
 /// plain duplicate the user should resolve directly). Anchored at the
 /// offending `@Replaces` binding.
 package struct InvalidReplacement: Sendable {
     package enum Reason: Sendable, Equatable {
-        /// The declared target (`@Replaces(T.self)` / `@Replaces(T.key)`) isn't the
-        /// slot the binding produces — carries the declared target and the produced type.
-        case producedKeyMismatch(declaredTarget: ReplacesTarget, producedType: String)
-        /// No other binding produces the slot, so nothing is superseded.
-        case nothingToReplace(declaredTarget: ReplacesTarget)
+        /// No other binding produces the slot, so nothing is superseded — carries
+        /// the binding's own slot display (`some Repo`, `Client`, …).
+        case nothingToReplace(slot: String)
         /// Two or more `@Replaces` bindings target the same key.
         case multipleReplacers(key: String)
         /// The replaced binding is in the replacer's own module.

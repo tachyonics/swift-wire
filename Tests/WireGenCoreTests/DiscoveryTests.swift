@@ -162,37 +162,35 @@ struct DiscoveryTests {
         #expect(result[0].allowUnused == true)
     }
 
-    @Test func singletonReplacesTargetCaptured() {
+    @Test func singletonReplacesMarkerCaptured() {
         let source = """
             @Singleton(as: Repo.self)
-            @Replaces(Repo.self)
+            @Replaces
             struct FakeRepo: Repo {
                 @Inject init() {}
             }
             """
         let result = discoverSingletons(in: source, sourcePath: "FakeRepo.swift")
         #expect(result.count == 1)
-        #expect(result[0].replaces == ReplacesTarget(base: "Repo", key: nil))
-        #expect(
-            DiscoveredBinding.scopeBound(result[0]).replacesTarget == ReplacesTarget(base: "Repo", key: nil)
-        )
+        #expect(result[0].isReplacer)
+        #expect(DiscoveredBinding.scopeBound(result[0]).isReplacer)
     }
 
-    @Test func providesKeyedReplacesTargetCapturesKey() {
-        // The keyed `@Replaces(Client.primary)` form captures both the base type
-        // and the key, spelled exactly as the matching `@Provides(Client.primary)`.
+    @Test func providesKeyedReplacesMarkerCaptured() {
+        // A bare `@Replaces` on a keyed `@Provides(Client.primary)` producer is a
+        // replacer; the slot it supersedes is the binding's own keyed identity.
         let source = """
             @Provides(Client.primary)
-            @Replaces(Client.primary)
+            @Replaces
             func fakeClient() -> Client { Client() }
             """
         let result = discoverProviders(in: source, sourcePath: "FakeKeyed.swift")
         #expect(result.count == 1)
-        #expect(result[0].replaces == ReplacesTarget(base: "Client", key: "Client.primary"))
+        #expect(result[0].isReplacer)
         #expect(result[0].keyIdentifier == "Client.primary")
     }
 
-    @Test func singletonWithoutReplacesHasNilTarget() {
+    @Test func singletonWithoutReplacesIsNotReplacer() {
         let source = """
             @Singleton(as: Repo.self)
             struct RealRepo: Repo {
@@ -201,21 +199,19 @@ struct DiscoveryTests {
             """
         let result = discoverSingletons(in: source, sourcePath: "RealRepo.swift")
         #expect(result.count == 1)
-        #expect(result[0].replaces == nil)
+        #expect(!result[0].isReplacer)
     }
 
-    @Test func providesReplacesTargetCaptured() {
+    @Test func providesReplacesMarkerCaptured() {
         let source = """
             @Provides
-            @Replaces(Client.self)
+            @Replaces
             func fakeClient() -> Client { Client() }
             """
         let result = discoverProviders(in: source, sourcePath: "Fake.swift")
         #expect(result.count == 1)
-        #expect(result[0].replaces == ReplacesTarget(base: "Client", key: nil))
-        #expect(
-            DiscoveredBinding.provider(result[0]).replacesTarget == ReplacesTarget(base: "Client", key: nil)
-        )
+        #expect(result[0].isReplacer)
+        #expect(DiscoveredBinding.provider(result[0]).isReplacer)
     }
 
     @Test func singletonGenericParametersCaptured() {

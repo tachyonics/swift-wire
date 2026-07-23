@@ -731,7 +731,7 @@ extension BindingDiscovery {
                     ),
                     allowUnused: allowUnused,
                     teardown: injectResult.teardown,
-                    replaces: replacesTargetExpression(in: attributes),
+                    isReplacer: hasReplacesMarker(in: attributes),
                     originModule: module
                 )
             )
@@ -896,7 +896,7 @@ extension BindingDiscovery {
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
                     teardown: teardown.action,
-                    replaces: replacesTargetExpression(in: node.attributes),
+                    isReplacer: hasReplacesMarker(in: node.attributes),
                     originModule: module
                 )
             )
@@ -985,7 +985,7 @@ extension BindingDiscovery {
                     ),
                     allowUnused: providesAttribute.map { allowUnusedFlag(from: $0) } ?? false,
                     teardown: teardown.action,
-                    replaces: replacesTargetExpression(in: node.attributes),
+                    isReplacer: hasReplacesMarker(in: node.attributes),
                     originModule: module
                 )
             )

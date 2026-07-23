@@ -1,11 +1,11 @@
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// `@Replaces(T.self)` is a marker peer macro. It generates no code on its
+/// `@Replaces` is a bare marker peer macro. It generates no code on its
 /// own — its purpose is to be recognised by the build plugin's source scan,
-/// which records the key `T` the co-located binding supersedes so the graph's
-/// duplicate-binding resolution keeps this binding and drops the one it
-/// replaces (see `WireGenCore/Graph.swift`'s `resolveReplacements`).
+/// which records that the co-located binding supersedes the slot it produces
+/// so the graph's duplicate-binding resolution keeps this binding and drops
+/// the one it replaces (see `WireGenCore/Graph.swift`'s `resolveReplacements`).
 ///
 /// Like `@Teardown`, `@Container`, and `@Provides`, the work happens in the
 /// plugin's parse, not in expansion.

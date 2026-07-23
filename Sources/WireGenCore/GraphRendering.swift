@@ -93,15 +93,9 @@ package func renderValidationErrors(_ errors: GraphResult.ValidationErrors) -> S
 private func replacementLines(_ invalid: InvalidReplacement) -> [String] {
     let prefix = invalid.replacer.location.formattedPrefix
     switch invalid.reason {
-    case .producedKeyMismatch(let declaredTarget, let producedType):
-        let spelling = declaredTarget.key ?? "\(declaredTarget.base).self"
+    case .nothingToReplace(let slot):
         return [
-            "\(prefix): error: @Replaces(\(spelling)) doesn't match this binding's key — it produces '\(producedType)', not '\(declaredTarget.base)'. Name the type this binding actually binds."
-        ]
-    case .nothingToReplace(let declaredTarget):
-        let spelling = declaredTarget.key ?? "\(declaredTarget.base).self"
-        return [
-            "\(prefix): error: @Replaces(\(spelling)) has nothing to supersede — no other binding produces '\(declaredTarget.key ?? declaredTarget.base)'. Remove the @Replaces, or bind the type it should override."
+            "\(prefix): error: @Replaces has nothing to supersede — no other binding produces '\(slot)'. Remove the @Replaces, or bind the type it should override."
         ]
     case .multipleReplacers(let key):
         var lines = [

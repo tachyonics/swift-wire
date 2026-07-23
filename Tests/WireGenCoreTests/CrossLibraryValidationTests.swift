@@ -148,7 +148,7 @@ struct CrossLibraryValidationTests {
     @Test func replacesSupersedesDependencyModuleBinding() throws {
         // The spike-27 shape, end to end through discovery: module `AppServer`
         // binds `some Repo` with `RealRepo`; the `AppTests` consumer binds a
-        // `FakeRepo` carrying `@Replaces(Repo.self)`. The merged graph resolves
+        // `FakeRepo` carrying a bare `@Replaces`. The merged graph resolves
         // to Fake — RealRepo is dropped, no duplicate-binding error.
         let appServer = """
             @Singleton(as: Repo.self)
@@ -158,7 +158,7 @@ struct CrossLibraryValidationTests {
             """
         let appTests = """
             @Singleton(as: Repo.self)
-            @Replaces(Repo.self)
+            @Replaces
             struct FakeRepo: Repo {
                 @Inject init() {}
             }

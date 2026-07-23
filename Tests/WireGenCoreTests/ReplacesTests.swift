@@ -3,30 +3,22 @@ import Testing
 @testable import WireGenCore
 
 /// `@Replaces` — the binding-override / test-double primitive. A binding
-/// carrying `@Replaces(T.self)` supersedes another binding for key `T`
-/// (typically one composed in from a dependency module) instead of colliding
-/// with it. These exercise the supersede at the graph-construction seam
-/// (`resolveReplacements`) and each validation rule it enforces.
+/// carrying the bare `@Replaces` marker supersedes another binding for the slot
+/// it produces (typically one composed in from a dependency module) instead of
+/// colliding with it. These exercise the supersede at the graph-construction
+/// seam (`resolveReplacements`) and each validation rule it enforces.
 @Suite("Replaces")
 struct ReplacesTests {
     // MARK: - Helpers
 
-    /// Build a `ReplacesTarget` from a base-type string and optional key, or
-    /// `nil` when the base is absent — the shape discovery produces from a
-    /// `@Replaces(T.self)` / `@Replaces(T.key)` marker.
-    private func target(_ base: String?, key: String? = nil) -> ReplacesTarget? {
-        base.map { ReplacesTarget(base: $0, key: key) }
-    }
-
     /// An `@Singleton(as: identity.self)` lift node in `module`, optionally
-    /// carrying `@Replaces(replaces.self)`. Mirrors spike-27's shape: both the
+    /// carrying the bare `@Replaces` marker. Mirrors spike-27's shape: both the
     /// real and fake repos bind `some Repo`, so they share graph identity.
     private func opaqueSingleton(
         _ name: String,
         identity: String,
         module: String,
-        replaces: String? = nil,
-        replacesKey: String? = nil
+        replaces: Bool = false
     ) -> DiscoveredBinding {
         .scopeBound(
             DiscoveredScopeBoundType(
@@ -37,7 +29,7 @@ struct ReplacesTests {
                 dependencies: [],
                 location: mockLocation("\(name).swift"),
                 accessLevel: .package,
-                replaces: target(replaces, key: replacesKey),
+                isReplacer: replaces,
                 originModule: module
             )
         )
@@ -66,14 +58,14 @@ struct ReplacesTests {
     }
 
     /// A `@Provides func` binding in `module`, optionally keyed and/or
-    /// `@Replaces`-marked.
+    /// `@Replaces`-marked. The keyed vs unkeyed slot is expressed purely by the
+    /// binding's own `key:` — the bare marker supersedes whichever slot that is.
     private func providerFunction(
         _ accessPath: String,
         boundType: String,
         module: String,
         key: String? = nil,
-        replaces: String? = nil,
-        replacesKey: String? = nil
+        replaces: Bool = false
     ) -> DiscoveredBinding {
         .provider(
             DiscoveredProvider(
@@ -85,7 +77,7 @@ struct ReplacesTests {
                 location: mockLocation("\(accessPath).swift"),
                 keyIdentifier: key,
                 accessLevel: .package,
-                replaces: target(replaces, key: replacesKey),
+                isReplacer: replaces,
                 originModule: module
             )
         )
@@ -105,7 +97,7 @@ struct ReplacesTests {
         // real binding for `some Repo`. The graph resolves to Fake, no error.
         let result = buildDependencyGraph(from: [
             opaqueSingleton("RealRepo", identity: "Repo", module: "AppServer"),
-            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppTests", replaces: "Repo"),
+            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppTests", replaces: true),
         ])
         #expect(result.outcome.validationErrors == nil)
         let order = try #require(result.outcome.topologicalOrder)
@@ -117,7 +109,7 @@ struct ReplacesTests {
         // consumer's fake wins over the dependency's real `Client`.
         let result = buildDependencyGraph(from: [
             providerProperty("realClient", boundType: "Client", module: "Lib"),
-            providerFunction("fakeClient", boundType: "Client", module: "App", replaces: "Client"),
+            providerFunction("fakeClient", boundType: "Client", module: "App", replaces: true),
         ])
         #expect(result.outcome.validationErrors == nil)
         let order = try #require(result.outcome.topologicalOrder)
@@ -138,70 +130,26 @@ struct ReplacesTests {
         #expect(errors.invalidReplacements.isEmpty)
     }
 
-    // MARK: - Validation (1): produced key must equal the declared target
-
-    @Test func replacesTargetMustMatchProducedKey() throws {
-        // Produces `some Repo` but claims to replace `Widget` — you can't claim
-        // to replace one type while producing another.
-        let result = buildDependencyGraph(from: [
-            opaqueSingleton("RealRepo", identity: "Repo", module: "AppServer"),
-            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppTests", replaces: "Widget"),
-        ])
-        let errors = try #require(result.outcome.validationErrors)
-        #expect(errors.invalidReplacements.count == 1)
-        #expect(
-            errors.invalidReplacements[0].reason
-                == .producedKeyMismatch(declaredTarget: ReplacesTarget(base: "Widget", key: nil), producedType: "some Repo")
-        )
-        #expect(renderValidationErrors(errors).contains("doesn't match this binding's key"))
-    }
-
-    // MARK: - Validation (2): there must be a binding to replace
+    // MARK: - Validation (1): there must be a binding to replace
 
     @Test func replacesWithNothingToSupersedeDiagnosed() throws {
-        // A `@Replaces` whose key no other binding produces is a mistake / stale.
+        // A `@Replaces` whose slot no other binding produces is a mistake / stale.
         let result = buildDependencyGraph(from: [
-            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppTests", replaces: "Repo")
+            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppTests", replaces: true)
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.invalidReplacements.count == 1)
-        #expect(errors.invalidReplacements[0].reason == .nothingToReplace(declaredTarget: ReplacesTarget(base: "Repo", key: nil)))
+        #expect(errors.invalidReplacements[0].reason == .nothingToReplace(slot: "someRepo"))
         #expect(renderValidationErrors(errors).contains("nothing to supersede"))
     }
 
-    @Test func keyedReplacesMisuseSpellsTheKeyedForm() throws {
-        // A keyed `@Replaces(Repo.primary)` that hits a misuse path must render the
-        // keyed spelling in the diagnostic, not the `.self` form.
-        let result = buildDependencyGraph(
-            from: [
-                providerFunction(
-                    "fakePrimary",
-                    boundType: "Repo",
-                    module: "App",
-                    key: "Repo.primary",
-                    replaces: "Repo",
-                    replacesKey: "Repo.primary"
-                )
-            ],
-            homeModule: "App"
-        )
-        let errors = try #require(result.outcome.validationErrors)
-        #expect(
-            errors.invalidReplacements[0].reason
-                == .nothingToReplace(declaredTarget: ReplacesTarget(base: "Repo", key: "Repo.primary"))
-        )
-        let rendered = renderValidationErrors(errors)
-        #expect(rendered.contains("@Replaces(Repo.primary)"))
-        #expect(!rendered.contains("@Replaces(Repo.self)"))
-    }
-
-    // MARK: - Validation (3): at most one replacer per key
+    // MARK: - Validation (2): at most one replacer per key
 
     @Test func twoReplacersForOneKeyDiagnosed() throws {
         let result = buildDependencyGraph(from: [
             opaqueSingleton("RealRepo", identity: "Repo", module: "AppServer"),
-            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppTests", replaces: "Repo"),
-            opaqueSingleton("OtherFake", identity: "Repo", module: "AppTests", replaces: "Repo"),
+            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppTests", replaces: true),
+            opaqueSingleton("OtherFake", identity: "Repo", module: "AppTests", replaces: true),
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.invalidReplacements.count == 1)
@@ -210,14 +158,14 @@ struct ReplacesTests {
         #expect(renderValidationErrors(errors).contains("more than one @Replaces"))
     }
 
-    // MARK: - Validation (4): the replaced binding must be in another module
+    // MARK: - Validation (3): the replaced binding must be in another module
 
     @Test func replacingSameModuleBindingDiagnosed() throws {
         // Overriding your own module's binding is just a duplicate to resolve
         // directly — `@Replaces` is for superseding a dependency's binding.
         let result = buildDependencyGraph(from: [
             opaqueSingleton("RealRepo", identity: "Repo", module: "AppServer"),
-            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppServer", replaces: "Repo"),
+            opaqueSingleton("FakeRepo", identity: "Repo", module: "AppServer", replaces: true),
         ])
         let errors = try #require(result.outcome.validationErrors)
         #expect(errors.invalidReplacements.count == 1)
@@ -226,11 +174,12 @@ struct ReplacesTests {
         #expect(renderValidationErrors(errors).contains("same module"))
     }
 
-    // MARK: - Full-slot key matching (Refinement 1)
+    // MARK: - Full-slot key matching
 
     @Test func keyedReplaceSupersedesSameKeyedBinding() throws {
-        // `@Replaces(Repo.primary)` supersedes the `Repo`/`primary` binding from
-        // a dependency module — the key is part of the slot the override targets.
+        // A bare `@Replaces` on a `@Provides(Repo.primary)` producer supersedes
+        // the `Repo`/`primary` binding from a dependency module — the key is part
+        // of the binding's own identity, so the slot it overrides is the keyed one.
         let result = buildDependencyGraph(
             from: [
                 providerProperty("realPrimary", boundType: "Repo", module: "Lib", key: "Repo.primary"),
@@ -239,8 +188,7 @@ struct ReplacesTests {
                     boundType: "Repo",
                     module: "App",
                     key: "Repo.primary",
-                    replaces: "Repo",
-                    replacesKey: "Repo.primary"
+                    replaces: true
                 ),
             ],
             homeModule: "App"
@@ -252,13 +200,14 @@ struct ReplacesTests {
     }
 
     @Test func unkeyedReplacesDoesNotCrossIntoKeyedSlot() throws {
-        // `@Replaces(Repo.self)` targets the UNKEYED `Repo` slot only: it
-        // supersedes the unkeyed `RealRepo`, and the keyed `Repo`/`primary`
-        // binding survives untouched — a slot the unkeyed override can't reach.
+        // A bare `@Replaces` on the unkeyed `Repo` binding supersedes only the
+        // unkeyed slot: it drops the unkeyed `RealRepo`, and the keyed
+        // `Repo`/`primary` binding survives untouched — a different slot the
+        // unkeyed override can't reach.
         let result = buildDependencyGraph(
             from: [
                 opaqueSingleton("RealRepo", identity: "Repo", module: "Lib"),
-                opaqueSingleton("FakeRepo", identity: "Repo", module: "App", replaces: "Repo"),
+                opaqueSingleton("FakeRepo", identity: "Repo", module: "App", replaces: true),
                 providerProperty("realPrimary", boundType: "Repo", module: "Lib", key: "Repo.primary"),
             ],
             homeModule: "App"
@@ -274,30 +223,6 @@ struct ReplacesTests {
         #expect(keyed)
     }
 
-    @Test func replacesSelfOnKeyedProducerIsSlotMismatch() throws {
-        // Refinement 1's bug fix: a binding that PRODUCES `Repo`/`primary` but
-        // declares `@Replaces(Repo.self)` names a slot it isn't in — the key is
-        // part of the identity, so this is a produced-key mismatch, not a match.
-        let result = buildDependencyGraph(
-            from: [
-                providerFunction(
-                    "fake",
-                    boundType: "Repo",
-                    module: "App",
-                    key: "Repo.primary",
-                    replaces: "Repo"
-                )
-            ],
-            homeModule: "App"
-        )
-        let errors = try #require(result.outcome.validationErrors)
-        #expect(errors.invalidReplacements.count == 1)
-        #expect(
-            errors.invalidReplacements[0].reason
-                == .producedKeyMismatch(declaredTarget: ReplacesTarget(base: "Repo", key: nil), producedType: "Repo")
-        )
-    }
-
     // MARK: - Home-module privilege (Refinement 2)
 
     @Test func homeModuleReplacesIsHonoured() throws {
@@ -306,7 +231,7 @@ struct ReplacesTests {
         let result = buildDependencyGraph(
             from: [
                 opaqueSingleton("RealRepo", identity: "Repo", module: "Lib"),
-                opaqueSingleton("FakeRepo", identity: "Repo", module: "App", replaces: "Repo"),
+                opaqueSingleton("FakeRepo", identity: "Repo", module: "App", replaces: true),
             ],
             homeModule: "App"
         )
@@ -323,7 +248,7 @@ struct ReplacesTests {
         let result = buildDependencyGraph(
             from: [
                 opaqueSingleton("RealRepo", identity: "Repo", module: "AppServer"),
-                opaqueSingleton("FakeRepo", identity: "Repo", module: "HelperLib", replaces: "Repo"),
+                opaqueSingleton("FakeRepo", identity: "Repo", module: "HelperLib", replaces: true),
             ],
             homeModule: "App"
         )
@@ -345,7 +270,7 @@ struct ReplacesTests {
         let result = buildDependencyGraph(
             from: [
                 opaqueSingleton("RealRepo", identity: "Repo", module: "App"),
-                opaqueSingleton("FakeRepo", identity: "Repo", module: "ExternalPkg", replaces: "Repo"),
+                opaqueSingleton("FakeRepo", identity: "Repo", module: "ExternalPkg", replaces: true),
             ],
             homeModule: "App",
             externalModules: ["ExternalPkg"]
@@ -361,7 +286,7 @@ struct ReplacesTests {
         // `@Replaces` is honoured — the behaviour the plain unit tests rely on.
         let result = buildDependencyGraph(from: [
             opaqueSingleton("RealRepo", identity: "Repo", module: "Lib"),
-            opaqueSingleton("FakeRepo", identity: "Repo", module: "AnyOther", replaces: "Repo"),
+            opaqueSingleton("FakeRepo", identity: "Repo", module: "AnyOther", replaces: true),
         ])
         #expect(result.outcome.validationErrors == nil)
         #expect(result.warnings.isEmpty)
