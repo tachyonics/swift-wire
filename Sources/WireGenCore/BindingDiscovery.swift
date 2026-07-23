@@ -843,19 +843,7 @@ extension BindingDiscovery {
         guard node.bindings.count == 1, let binding = node.bindings.first else { return }
         guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { return }
 
-        // The bound type is taken from one of two places, in order:
-        //   1. An explicit type annotation: `let x: Foo = ...`
-        //   2. A `Foo(...)` constructor-call initialiser, when the
-        //      annotation is omitted: `let x = Foo()`.
-        // Both are idiomatic Swift; preferring annotation when present
-        // keeps the user's intent honest (they can write a wider type
-        // than the RHS produces, e.g. `let x: any Logger = AppLogger()`).
-        let boundType: String
-        if let typeAnnotation = binding.typeAnnotation {
-            boundType = typeAnnotation.type.trimmedDescription
-        } else if let inferred = inferTypeFromConstructorCall(binding.initializer?.value) {
-            boundType = inferred
-        } else {
+        guard let boundType = providesPropertyBoundType(binding) else {
             // Can't determine the bound type without running type
             // inference. Skip silently — same posture as `@Inject`
             // properties without annotations.

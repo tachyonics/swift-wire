@@ -63,22 +63,7 @@ func appendSeedScopeStruct(
         )
     )
 
-    // Borrowed-singleton bindings get inlined at their consumers' arg
-    // sites rather than declared as locals — every consumer in the
-    // topo order resolves a borrow dep directly to the wire-graph
-    // expression (`_WireGraph.logger`). The map's keys are borrow
-    // property names; values are the substitution expressions read
-    // straight off each borrow's `accessPath`. Unused borrows produce
-    // no output: their let-lines are skipped and no consumer refers
-    // to them, so they vanish from the emitted bootstrap.
-    var borrowAccessPaths: [String: String] = [:]
-    for binding in scope.topologicalOrder {
-        let name = propertyName(for: binding)
-        guard scope.borrowedBindingPropertyNames.contains(name),
-            case .provider(let provider) = binding
-        else { continue }
-        borrowAccessPaths[name] = provider.accessPath
-    }
+    let borrowAccessPaths = borrowedAccessPaths(in: scope)
     let resolveBorrow: (String) -> String? = { borrowAccessPaths[$0] }
 
     lines.append("")
@@ -162,6 +147,23 @@ func appendSeedScopeStruct(
     }.joined(separator: ", ")
     lines.append("    return \(structName)(\(returnArgs))")
     lines.append("}")
+}
+
+/// Borrowed-singleton bindings get inlined at their consumers' arg sites rather than declared as locals —
+/// every consumer in the topo order resolves a borrow dep directly to the wire-graph expression
+/// (`_WireGraph.logger`). The returned map's keys are borrow property names; values are the substitution
+/// expressions read straight off each borrow's `accessPath`. Unused borrows produce no output: their
+/// let-lines are skipped and no consumer refers to them, so they vanish from the emitted bootstrap.
+private func borrowedAccessPaths(in scope: SeedScopeEmission) -> [String: String] {
+    var borrowAccessPaths: [String: String] = [:]
+    for binding in scope.topologicalOrder {
+        let name = propertyName(for: binding)
+        guard scope.borrowedBindingPropertyNames.contains(name),
+            case .provider(let provider) = binding
+        else { continue }
+        borrowAccessPaths[name] = provider.accessPath
+    }
+    return borrowAccessPaths
 }
 
 /// The opaque-lift of a seed scope — mirrors `_WireGraph<T0>`. A *generic* scoped binding stores

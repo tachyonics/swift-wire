@@ -13,7 +13,12 @@ struct TestingGraphTests {
         dependencies: [(name: String?, type: String)]
     ) -> DiscoveredBinding {
         let deps = dependencies.map {
-            DependencyParameter(name: $0.name, type: $0.type, kind: .injectInitParameter, location: mockLocation("\(name).swift"))
+            DependencyParameter(
+                name: $0.name,
+                type: $0.type,
+                kind: .injectInitParameter,
+                location: mockLocation("\(name).swift")
+            )
         }
         return .scopeBound(
             DiscoveredScopeBoundType(
@@ -99,7 +104,10 @@ struct TestingGraphTests {
 
         // The repo binding is now a doubles-sourced provider, same identity + scope, no dependencies.
         let rewritten = try #require(result.bindings.first)
-        guard case .provider(let provider) = rewritten else { Issue.record("expected provider"); return }
+        guard case .provider(let provider) = rewritten else {
+            Issue.record("expected provider")
+            return
+        }
         #expect(provider.boundType == "BackendRepository")
         #expect(provider.accessPath == "doubles.backendRepository")
         #expect(provider.form == .property)
@@ -139,7 +147,8 @@ struct TestingGraphTests {
         )
         #expect(result.doublesFields == [DoublesField(name: "backendRepository", mockType: "MockBackendRepository")])
         guard case .provider(let provider) = try #require(result.bindings.first) else {
-            Issue.record("expected provider"); return
+            Issue.record("expected provider")
+            return
         }
         #expect(provider.boundType == "some BackendRepository")
         #expect(provider.accessPath == "doubles.backendRepository")
@@ -159,7 +168,8 @@ struct TestingGraphTests {
             ]
         )
         guard case .provider(let provider) = try #require(result.bindings.first) else {
-            Issue.record("expected provider"); return
+            Issue.record("expected provider")
+            return
         }
         #expect(provider.keyIdentifier == "Repo.primary")
         #expect(provider.accessPath == "doubles.backendRepositoryKeyedRepoPrimary")

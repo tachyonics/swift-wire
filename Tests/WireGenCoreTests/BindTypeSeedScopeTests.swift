@@ -50,7 +50,12 @@ struct BindTypeSeedScopeTests {
             typeKind: "struct",
             genericParameterNames: [],
             dependencies: [
-                DependencyParameter(name: "repo", type: "BackendRepository", kind: .injectInitParameter, location: mockLocation("T.swift"))
+                DependencyParameter(
+                    name: "repo",
+                    type: "BackendRepository",
+                    kind: .injectInitParameter,
+                    location: mockLocation("T.swift")
+                )
             ],
             location: mockLocation("T.swift"),
             scopeKey: ScopeKey(seed: "RequestSeed"),
@@ -149,7 +154,12 @@ struct BindTypeSeedScopeTests {
             typeKind: "struct",
             genericParameterNames: [],
             dependencies: [
-                DependencyParameter(name: "repo", type: "BackendRepository", kind: .injectInitParameter, location: mockLocation("App.swift"))
+                DependencyParameter(
+                    name: "repo",
+                    type: "BackendRepository",
+                    kind: .injectInitParameter,
+                    location: mockLocation("App.swift")
+                )
             ],
             location: mockLocation("App.swift"),
             scopeKey: ScopeKey(seed: "RequestSeed"),

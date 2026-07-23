@@ -102,50 +102,27 @@ struct WireGen {
         // declares only its own-module factories; dependency-module factories are declared by
         // those modules' own plugin runs and referenced here via import. Construction/injection
         // (in `allBindings`) stays consumer-driven and spans every consumed factory.
-        // Test-graph variants (M6a Phase 1) — one per `TestingKey`, emitted alongside the production
-        // graphs: the doubles-threaded variant seed scopes (`_<KeyRef>_<Seed>WireScope`, borrowing the
-        // production `_WireGraph`) and the variant's `_<Key>Doubles` struct. Built on the validated
-        // production bindings; a module with no `TestingKey` yields none, leaving the emitted output
-        // byte-for-byte unchanged.
-        let testingVariants = buildTestingVariants(in: aggregate)
-        failIfAnyTestingVariantInvalid(testingVariants)
-
-        let seedScopeOrders =
-            collectSeedScopeOrders(seedScopeOrchestrations)
-            + testingVariants.flatMap { $0.seedScopes }
-        let generated = renderWireGraph(
-            imports: imports,
-            topologicalOrder: defaultOrder,
-            containerTopologicalOrders: containerOrders,
-            seedScopeOrders: seedScopeOrders,
-            graphConformances: aggregate.graphConformances,
-            multibindingKeys: aggregate.multibindingKeys,
-            syntheticTypeDeclarations: consumerSyntheticTypes(
+        try renderGraphFile(
+            GraphFileInputs(
+                imports: imports,
+                defaultOrder: defaultOrder,
+                containerOrders: containerOrders,
+                aggregate: aggregate,
                 factories: preGraph.factories,
                 proxyIdentities: preGraph.proxyIdentities,
-                in: aggregate.allBindings
-            ) + testingVariants.map { $0.doublesStruct },
-            // Rule 3 — the default graph's promotions plus every container's and every test variant's, so
-            // each `appendStruct` finds the ones whose consumers it constructs.
-            existentialPromotions: defaultGraph.existentialPromotions
-                + containerGraphs.flatMap { $0.result.existentialPromotions }
-                + testingVariants.flatMap { $0.existentialPromotions }
+                defaultGraph: defaultGraph,
+                containerGraphs: containerGraphs,
+                seedScopeOrchestrations: seedScopeOrchestrations
+            ),
+            outputPath: graphOutputPath
         )
-        try generated.write(toFile: graphOutputPath, atomically: true, encoding: .utf8)
-        print("wrote \(graphOutputPath)")
 
-        // Key checks: every binding across every partition is fair game
-        // for a keyed annotation, and the emitted file is independent
-        // of the graph's topological ordering — it's pure type
-        // assertion scaffolding the Swift compiler runs through when
-        // building the consumer.
-        let keyChecks = renderWireKeyChecks(
+        try renderKeyChecksFile(
             imports: imports,
             allBindings: allBindingsFlat,
-            multibindingKeyReferences: Set(aggregate.multibindingKeys.map(\.keyReference))
+            multibindingKeys: aggregate.multibindingKeys,
+            outputPath: keyChecksOutputPath
         )
-        try keyChecks.write(toFile: keyChecksOutputPath, atomically: true, encoding: .utf8)
-        print("wrote \(keyChecksOutputPath)")
     }
 
     // MARK: - Helpers
@@ -533,6 +510,72 @@ extension WireGen {
             containers: containerGraphs,
             seedScopes: seedScopeOrchestrations
         )
+    }
+
+    /// The inputs folded into the emitted `_WireGraph.swift`: the composed imports, the topological
+    /// orders, the discovery aggregate, the pre-graph synthesis outputs, and every built graph.
+    fileprivate struct GraphFileInputs {
+        let imports: [String]
+        let defaultOrder: [DiscoveredBinding]
+        let containerOrders: [String: [DiscoveredBinding]]
+        let aggregate: DiscoveryAggregate
+        let factories: [SynthesizedFactory]
+        let proxyIdentities: Set<String>
+        let defaultGraph: GraphResult
+        let containerGraphs: [(name: String, result: GraphResult)]
+        let seedScopeOrchestrations: [SeedScopeOrchestration]
+    }
+
+    /// Render and write the graph file. Test-graph variants (M6a Phase 1) — one per `TestingKey`, emitted
+    /// alongside the production graphs: the doubles-threaded variant seed scopes (`_<KeyRef>_<Seed>WireScope`,
+    /// borrowing the production `_WireGraph`) and the variant's `_<Key>Doubles` struct. Built on the
+    /// validated production bindings; a module with no `TestingKey` yields none, leaving the emitted output
+    /// byte-for-byte unchanged.
+    fileprivate static func renderGraphFile(_ inputs: GraphFileInputs, outputPath: String) throws {
+        let testingVariants = buildTestingVariants(in: inputs.aggregate)
+        failIfAnyTestingVariantInvalid(testingVariants)
+
+        let seedScopeOrders =
+            collectSeedScopeOrders(inputs.seedScopeOrchestrations)
+            + testingVariants.flatMap { $0.seedScopes }
+        let generated = renderWireGraph(
+            imports: inputs.imports,
+            topologicalOrder: inputs.defaultOrder,
+            containerTopologicalOrders: inputs.containerOrders,
+            seedScopeOrders: seedScopeOrders,
+            graphConformances: inputs.aggregate.graphConformances,
+            multibindingKeys: inputs.aggregate.multibindingKeys,
+            syntheticTypeDeclarations: consumerSyntheticTypes(
+                factories: inputs.factories,
+                proxyIdentities: inputs.proxyIdentities,
+                in: inputs.aggregate.allBindings
+            ) + testingVariants.map { $0.doublesStruct },
+            // Rule 3 — the default graph's promotions plus every container's and every test variant's, so
+            // each `appendStruct` finds the ones whose consumers it constructs.
+            existentialPromotions: inputs.defaultGraph.existentialPromotions
+                + inputs.containerGraphs.flatMap { $0.result.existentialPromotions }
+                + testingVariants.flatMap { $0.existentialPromotions }
+        )
+        try generated.write(toFile: outputPath, atomically: true, encoding: .utf8)
+        print("wrote \(outputPath)")
+    }
+
+    /// Emit the key-checks file: compile-time type assertions for every keyed binding across every
+    /// partition. The file is independent of the graphs' topological ordering — it's pure type-assertion
+    /// scaffolding the Swift compiler runs through when building the consumer.
+    fileprivate static func renderKeyChecksFile(
+        imports: [String],
+        allBindings: [DiscoveredBinding],
+        multibindingKeys: [DiscoveredMultibindingKey],
+        outputPath: String
+    ) throws {
+        let keyChecks = renderWireKeyChecks(
+            imports: imports,
+            allBindings: allBindings,
+            multibindingKeyReferences: Set(multibindingKeys.map(\.keyReference))
+        )
+        try keyChecks.write(toFile: outputPath, atomically: true, encoding: .utf8)
+        print("wrote \(outputPath)")
     }
 }
 
